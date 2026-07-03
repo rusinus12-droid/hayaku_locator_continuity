@@ -15,7 +15,7 @@
  * HAYAKU · Locator Continuity Plugin
  *
  * Design contract:
- * - beforeRequest-only continuity plugin.
+ * - beforeRequest-only continuity plugin......
  * - No direct LLM/API call.
  * - No embedding provider or vector DB.
  * - Response model never receives locator URIs, _locator, _retrieval, store keys, or internal IDs.
