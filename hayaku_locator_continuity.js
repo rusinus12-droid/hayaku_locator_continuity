@@ -1,8 +1,8 @@
 //@name hayaku_locator_continuity
-//@display-name HAYAKU · Locator Continuity v1.0.13
+//@display-name HAYAKU · Locator Continuity v1.0.12
 //@author rusinus12@gmail.com
 //@api 3.0
-//@version 1.0.13
+//@version 1.0.12
 //@update-url https://raw.githubusercontent.com/rusinus12-droid/hayaku_locator_continuity/refs/heads/main/hayaku_locator_continuity.js
 //@arg hayaku_enabled string true|false
 //@arg hayaku_mode string auto|balanced|fast|deep
