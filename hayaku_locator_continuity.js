@@ -3,7 +3,7 @@
 //@author rusinus12@gmail.com
 //@api 3.0
 //@version 1.0.13
-//@link https://raw.githubusercontent.com/rusinus12-droid/hayaku_locator_continuity/main/hayaku_locator_continuity.js
+//@link https://raw.githubusercontent.com/rusinus12-droid/hayaku_locator_continuity/refs/heads/main/hayaku_locator_continuity.js
 //@arg hayaku_enabled string true|false
 //@arg hayaku_mode string auto|balanced|fast|deep
 //@arg hayaku_prompt_mode string auto|balanced|full
