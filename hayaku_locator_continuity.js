@@ -1,8 +1,8 @@
 //@name hayaku_locator_continuity
-//@display-name HAYAKU · Locator Continuity v1.0.12
+//@display-name HAYAKU · Locator Continuity v1.0.13
 //@author rusinus12@gmail.com
 //@api 3.0
-//@version 1.0.12
+//@version 1.0.13
 //@update-url https://raw.githubusercontent.com/rusinus12-droid/hayaku_locator_continuity/main/hayaku_locator_continuity.js
 //@arg hayaku_enabled string true|false
 //@arg hayaku_mode string auto|balanced|fast|deep
@@ -53,7 +53,7 @@
 
   const PLUGIN_ID = 'hayaku.locator.continuity';
   const PLUGIN_NAME = 'HAYAKU';
-  const PLUGIN_VERSION = '1.0.12';
+  const PLUGIN_VERSION = '1.0.13';
   const KEY_PREFIX = 'hayaku.v1';
   const STORE_KEY = `${KEY_PREFIX}.store`;
   const SETTINGS_CACHE_KEY = `${KEY_PREFIX}.settings.cache`;
@@ -1193,15 +1193,230 @@ const MODE_PROFILES = Object.freeze({
     normalizedPerformanceMode(settings?.effectiveMode || settings?.mode || DEFAULT_SETTINGS.mode, 'balanced')
   );
   const hasOwnProperty = (obj, key) => Boolean(obj && Object.prototype.hasOwnProperty.call(obj, key));
-  const payloadHasText = value => value != null && text(value).trim() !== '';
-  const dataPayloadText = data => {
+  const roleFromUserFlag = value => {
+    if (value?.is_user === true || value?.isUser === true) return 'user';
+    if (value?.is_user === false || value?.isUser === false) return 'assistant';
+    return '';
+  };
+  const roleHintOf = value => text(value?.role).trim() || roleFromUserFlag(value);
+  const payloadRoleOf = value => {
+    const role = text(roleHintOf(value)).trim().toLowerCase();
+    return /^(?:char|character|ai|bot)$/.test(role) ? 'assistant' : role;
+  };
+  const nestedPayloadMessageAllowed = (message = {}, options = {}) => {
+    const role = payloadRoleOf(message);
+    if (!role) return options.requireRole !== true;
+    const ownerRole = payloadRoleOf({ role: options.ownerRole || '' });
+    if (/user|human/i.test(ownerRole)) return /user|human/i.test(role);
+    if (/system/i.test(ownerRole)) return /system/i.test(role);
+    return /^(?:assistant|model)$/i.test(role);
+  };
+  const PAYLOAD_TEXT_KEYS = ['content', 'text', 'message', 'parts', 'messages', 'output', 'output_text', 'outputText', 'choices', 'delta'];
+  const payloadWrapperNameIsTypeHint = value => (
+    value && typeof value === 'object' && !Array.isArray(value)
+    && !payloadRoleOf(value)
+    && PAYLOAD_TEXT_KEYS.some(key => hasOwnProperty(value, key))
+  );
+  const payloadTypeHints = value => [
+    value?.type,
+    value?.kind,
+    value?.object,
+    value?.category,
+    payloadWrapperNameIsTypeHint(value) ? value?.name : ''
+  ].map(item => text(item).trim()).filter(Boolean);
+  const PROVENANCE_HINT_KEYS = [
+    'source', 'source_type', 'sourceType', 'source_name', 'sourceName',
+    'origin', 'origin_type', 'originType', 'subtype', 'channel', 'recipient', 'target',
+    'event', 'event_type', 'eventType', 'response_type', 'responseType',
+    'tool_name', 'toolName', 'tool', 'provider', 'label'
+  ];
+  const PROVENANCE_DESCRIPTOR_KEYS = [
+    'type', 'kind', 'object', 'category', 'name', 'label', 'metadata',
+    ...PROVENANCE_HINT_KEYS
+  ];
+  const provenanceHintValues = (value, depth = 0) => {
+    if (value == null) return [];
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return [value];
+    if (depth >= 3 || typeof value !== 'object') return [];
+    if (Array.isArray(value)) return value.flatMap(item => provenanceHintValues(item, depth + 1));
+    return PROVENANCE_DESCRIPTOR_KEYS.flatMap(key => provenanceHintValues(value[key], depth + 1));
+  };
+  const payloadProvenanceHints = value => [
+    ...PROVENANCE_HINT_KEYS.flatMap(key => provenanceHintValues(value?.[key])),
+    ...provenanceHintValues(value?.metadata)
+  ].map(item => text(item).trim()).filter(Boolean);
+  const outputPayloadType = value => payloadTypeHints(value)[0] || '';
+  const normalizedPayloadType = value => text(value).trim().toLowerCase();
+  const PAYLOAD_TOOL_CALL_KEYS = [
+    'tool_call_id', 'toolCallId', 'tool_callId',
+    'function_call_id', 'functionCallId', 'function_callId',
+    'tool_use_id', 'toolUseId', 'tool_useId',
+    'call_id', 'callId', 'invocation_id', 'invocationId',
+    'tool_calls', 'toolCalls', 'tool_outputs', 'toolOutputs',
+    'function_call', 'functionCall', 'function_calls', 'functionCalls',
+    'function_result', 'functionResult'
+  ];
+  const payloadHasToolCallKey = value => (
+    value && typeof value === 'object' && !Array.isArray(value)
+    && PAYLOAD_TOOL_CALL_KEYS.some(key => hasOwnProperty(value, key) || hasOwnProperty(value?.metadata, key))
+  );
+  const payloadTypeTokens = value => text(value)
+    .trim()
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+  const neutralPayloadType = value => {
+    if (/^(?:text|input_text|output_text|message|content|part|parts|segment|segments|delta)$/.test(normalizedPayloadType(value))) return true;
+    const tokenPhrase = payloadTypeTokens(value).join('_');
+    return /^(?:input_text|output_text|message_content|content_part|text_segment|delta_text)$/.test(tokenPhrase);
+  };
+  const blockedPayloadType = value => {
+    const tokens = payloadTypeTokens(value);
+    if (tokens.some(token => /^(?:tool|tools|toolcall|toolcalls|function|functions|functioncall|functioncalls|call|calls|reasoning)$/.test(token))) return true;
+    if (tokens.length === 1 && /^(?:citation|citations|annotation|annotations)$/.test(tokens[0])) return true;
+    if (tokens.length === 2 && /^(?:url|uri|link|file|web|webpage|search|document|documents|page|pages|browser|tool|mcp|computer|filesystem|fs)$/.test(tokens[0]) && /^(?:citation|citations|annotation|annotations)$/.test(tokens[1])) return true;
+    if (tokens.length === 3 && /^(?:web|file)$/.test(tokens[0]) && tokens[1] === 'search' && /^(?:citation|citations|annotation|annotations)$/.test(tokens[2])) return true;
+    if (tokens.length === 2 && tokens[0] === 'search' && /^(?:result|results|output|outputs|response|responses)$/.test(tokens[1])) return true;
+    if (tokens.length === 2 && tokens[0] === 'search' && /^(?:payload|payloads|content|contents|text|texts)$/.test(tokens[1])) return true;
+    if (tokens.length === 3 && tokens[0] === 'search' && tokens[1] === 'result' && /^(?:payload|payloads|content|contents|text|texts)$/.test(tokens[2])) return true;
+    if (tokens.length === 3 && tokens[0] === 'search' && tokens[1] === 'result' && /^(?:item|items)$/.test(tokens[2])) return true;
+    if (tokens.length === 3 && tokens[0] === 'search' && tokens[1] === 'result' && /^(?:entry|entries|record|records)$/.test(tokens[2])) return true;
+    if (tokens.length === 2 && tokens[0] === 'search' && /^(?:hit|hits|snippet|snippets|record|records)$/.test(tokens[1])) return true;
+    if (tokens.length === 2 && tokens[0] === 'search' && /^(?:entry|entries|item|items|source|sources|document|documents)$/.test(tokens[1])) return true;
+    if (tokens.length === 3 && tokens[0] === 'search' && /^(?:hit|hits|snippet|snippets|record|records)$/.test(tokens[1]) && /^(?:item|items)$/.test(tokens[2])) return true;
+    if (tokens.length === 4 && tokens[0] === 'search' && tokens[1] === 'result' && /^(?:entry|entries|record|records)$/.test(tokens[2]) && /^(?:item|items)$/.test(tokens[3])) return true;
+    const tokenPhrase = ` ${tokens.join(' ')} `;
+    const hasToolDomain = / (?:web search|webpage|file search|file system|filesystem|fs|code interpreter|computer|mcp|browser) /.test(tokenPhrase);
+    const hasToolAction = tokens.some(token => /^(?:result|results|output|outputs|response|responses|use|uses|used|call|calls|called|payload|payloads|content|contents|text|texts|body|bodies|page|pages|document|documents|snippet|snippets|citation|citations|annotation|annotations)$/.test(token));
+    return hasToolDomain && hasToolAction;
+  };
+  const blockedPayloadProvenanceType = value => {
+    if (blockedPayloadType(value)) return true;
+    const tokens = payloadTypeTokens(value);
+    const tokenPhrase = ` ${tokens.join(' ')} `;
+    return / (?:web search|webpage|file search|file system|filesystem|fs|code interpreter|computer|mcp|browser) /.test(tokenPhrase);
+  };
+  const semanticPayloadType = value => {
+    const hints = payloadTypeHints(value);
+    return hints.some(hint => !neutralPayloadType(hint) && !blockedPayloadType(hint));
+  };
+  const blockedPayloadWrapperType = value => {
+    if (payloadTypeHints(value).some(blockedPayloadType)) return true;
+    if (semanticPayloadType(value)) return false;
+    return payloadHasToolCallKey(value) || payloadProvenanceHints(value).some(blockedPayloadProvenanceType);
+  };
+  const outputPayloadItemAllowed = value => {
+    if (value == null || typeof value !== 'object' || Array.isArray(value)) return true;
+    const type = normalizedPayloadType(outputPayloadType(value));
+    if (blockedPayloadWrapperType(value)) return false;
+    if (payloadRoleOf(value)) return true;
+    return /^(?:message|output_text|text|input_text)$/.test(type);
+  };
+  const choicePayloadFinishReason = value => text(value?.finish_reason || value?.finishReason || '').trim().toLowerCase();
+  const choicePayloadIndexAllowed = value => {
+    if (!hasOwnProperty(value, 'index')) return true;
+    const raw = text(value?.index).trim();
+    if (!raw) return true;
+    const index = Number(raw);
+    return Number.isFinite(index) ? index === 0 : raw === '0';
+  };
+  const choicePayloadItemAllowed = value => {
+    if (value == null || typeof value !== 'object' || Array.isArray(value)) return true;
+    if (blockedPayloadType(choicePayloadFinishReason(value))) return false;
+    if (!choicePayloadIndexAllowed(value)) return false;
+    const nested = hasOwnProperty(value, 'message')
+      ? value.message
+      : hasOwnProperty(value, 'delta') ? value.delta : null;
+    if (nested && typeof nested === 'object') {
+      return /^(?:assistant|model)$/i.test(payloadRoleOf(nested));
+    }
+    const role = payloadRoleOf(value);
+    if (role) return /^(?:assistant|model)$/i.test(role);
+    return hasOwnProperty(value, 'text');
+  };
+  const payloadTextParts = (value, seen = new WeakSet(), options = {}) => {
+    if (value == null) return [];
+    if (typeof value === 'string') return [value];
+    if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') return [String(value)];
+    if (typeof value !== 'object') return [];
+    if (seen.has(value)) return [];
+    seen.add(value);
+    if (blockedPayloadWrapperType(value)) {
+      seen.delete(value);
+      return [];
+    }
+    const selfRole = payloadRoleOf(value);
+    if (options.filterSelfRole && (selfRole || options.requireRole) && !nestedPayloadMessageAllowed(value, options)) {
+      seen.delete(value);
+      return [];
+    }
+    const out = [];
+    const pushPayloadChild = (child, childOptions = {}) => {
+      const childRole = child && typeof child === 'object' ? payloadRoleOf(child) : '';
+      const mergedOptions = { ...options, ...childOptions };
+      if (blockedPayloadWrapperType(child)) return;
+      if (mergedOptions.outputPayload && !outputPayloadItemAllowed(child)) return;
+      if (mergedOptions.choicePayload && !choicePayloadItemAllowed(child)) return;
+      if ((childRole || mergedOptions.requireRole) && !nestedPayloadMessageAllowed(child, mergedOptions)) return;
+      out.push(...payloadTextParts(child, seen, {
+        ...mergedOptions,
+        ownerRole: childRole || mergedOptions.ownerRole,
+        filterSelfRole: false,
+        requireRole: false
+      }));
+    };
+    if (Array.isArray(value)) {
+      for (const item of value) pushPayloadChild(item);
+      seen.delete(value);
+      return out;
+    }
+    for (const key of PAYLOAD_TEXT_KEYS) {
+      if (!hasOwnProperty(value, key)) continue;
+      if (key === 'messages') {
+        for (const item of ensureArray(value[key])) {
+          pushPayloadChild(item, { requireRole: true });
+        }
+        continue;
+      }
+      if (key === 'choices') {
+        for (const item of ensureArray(value[key])) {
+          pushPayloadChild(item, { choicePayload: true });
+        }
+        continue;
+      }
+      if (key === 'output') {
+        for (const item of ensureArray(value[key])) {
+          pushPayloadChild(item, { outputPayload: true });
+        }
+        continue;
+      }
+      pushPayloadChild(value[key]);
+    }
+    seen.delete(value);
+    return out;
+  };
+  const payloadText = (value, options = {}) => payloadTextParts(value, new WeakSet(), { ...options, filterSelfRole: true }).join('\n');
+  const payloadHasText = (value, options = {}) => value != null && payloadText(value, options).trim() !== '';
+  const dataPayloadText = (data, options = {}) => {
     if (typeof data === 'string') return data;
     if (!data || typeof data !== 'object') return '';
-    return [data.content, data.text, data.message].find(payloadHasText) ?? '';
+    return payloadText(data, options);
   };
   const rawMessagePayloadCandidates = msg => {
     if (!msg || typeof msg !== 'object') return [];
-    return uniq([msg.content, msg.text, msg.message, dataPayloadText(msg.data)].filter(payloadHasText), 8);
+    const ownerRole = payloadRoleOf(msg);
+    return uniq([
+      payloadText(msg.content, { ownerRole }),
+      payloadText(msg.text, { ownerRole }),
+      payloadText(msg.message, { ownerRole }),
+      payloadText(msg.output, { ownerRole, outputPayload: true }),
+      payloadText(msg.output_text, { ownerRole }),
+      payloadText(msg.outputText, { ownerRole }),
+      payloadText(msg.choices, { ownerRole, choicePayload: true }),
+      dataPayloadText(msg.data, { ownerRole })
+    ].filter(value => payloadHasText(value)), 8);
   };
   const rawMessagePayload = msg => {
     const candidates = rawMessagePayloadCandidates(msg);
@@ -2653,6 +2868,7 @@ const MODE_PROFILES = Object.freeze({
   const RequestKindCore = (() => {
     const MAIN_TYPES = new Set(['model']);
     const AMBIENT_HELPER_TYPES = new Set(['otherax', 'other-ax', 'other_ax', 'submodel', 'sub-model', 'sub_model', 'translate', 'translation']);
+    const PROTECTED_AUXILIARY_TYPES = new Set(['submodel', 'sub-model', 'sub_model', 'memory', 'emotion', 'otherax', 'other-ax', 'other_ax', 'translate', 'translation']);
     const GIGATRANS_AMBIENT_GRACE_MS = 8000;
     let lastGigaTransHelperAt = 0;
     const moduleMarkerPattern = /(?:<\s*\/?\s*(?:lb-[a-z0-9-]+|lightboard-[a-z0-9-]+)\b|\blb-(?:rerolling|pending|lazy|reroll|interaction-identifier|xnai)\b|<GT-(?:CTRL|SEP)\b|GigaTrans|기가트랜스|재생성\s*중)/i;
@@ -2760,7 +2976,8 @@ const MODE_PROFILES = Object.freeze({
       const mainTypeSet = options.mainTypes
         ? new Set(ensureArray(options.mainTypes).map(s => text(s).trim().toLowerCase()).filter(Boolean))
         : MAIN_TYPES;
-      const mainType = mainTypeSet.has(typeKey);
+      const protectedAuxiliaryType = PROTECTED_AUXILIARY_TYPES.has(typeKey);
+      const mainType = mainTypeSet.has(typeKey) && !protectedAuxiliaryType;
       if (!mainType) reasons.push(typeKey ? `requestType:${typeKey}` : 'requestType:empty');
       const gigaTransHelper = !mainType && isGigaTransHelperPrompt(body);
       const hardAuxiliary = !mainType && (hardAuxiliaryMarkerPattern.test(body)
@@ -2791,11 +3008,11 @@ const MODE_PROFILES = Object.freeze({
 
   const messageContent = msg => text(rawMessagePayload(msg));
   const normalizeMessageRole = role => {
-    const value = text(role).toLowerCase();
-    if (/^(?:char|character)$/.test(value)) return 'assistant';
+    const value = text(role).trim().toLowerCase();
+    if (/^(?:char|character|ai|bot)$/.test(value)) return 'assistant';
     return value;
   };
-  const roleOf = msg => normalizeMessageRole(msg?.role || (msg?.is_user === true ? 'user' : msg?.isUser === true ? 'user' : msg?.is_user === false || msg?.isUser === false ? 'assistant' : ''));
+  const roleOf = msg => normalizeMessageRole(roleHintOf(msg));
   const currentInputFrom = value => {
     const body = stripHayakuBlocks(value);
     const match = body.match(/<Current Input>\s*```?([\s\S]*?)```?\s*<\/Current Input>/i)
@@ -2858,11 +3075,70 @@ const MODE_PROFILES = Object.freeze({
     const fallback = stripHayakuBlocks(messageContent(list[list.length - 1] || '')).trim();
     return isBackstageUserPayload(fallback) ? '' : fallback;
   };
-  const stripHayakuBlocks = value => text(value)
-    .replace(new RegExp(`<!--\\s*${PACKET_START}\\s*([\\s\\S]*?)\\s*${PACKET_END}\\s*-->`, 'gi'), ' ')
-    .replace(new RegExp(`<<<\\s*${PACKET_START}\\s*>>>\\s*([\\s\\S]*?)\\s*<<<\\s*${PACKET_END}\\s*>>>`, 'gi'), ' ')
-    .replace(new RegExp(`\\[HAYAKU CONTINUITY CONTEXT\\][\\s\\S]*?\\[/HAYAKU CONTINUITY CONTEXT\\]`, 'gi'), ' ')
-    .trim();
+  const stripHayakuBlocks = (value, options = {}) => {
+    let stripped = text(value)
+      .replace(new RegExp(`<!--\\s*${PACKET_START}\\s*([\\s\\S]*?)\\s*${PACKET_END}\\s*-->`, 'gi'), ' ')
+      .replace(new RegExp(`<<<\\s*${PACKET_START}\\s*>>>\\s*([\\s\\S]*?)\\s*<<<\\s*${PACKET_END}\\s*>>>`, 'gi'), ' ');
+    if (options.looseMarkers) {
+      stripped = stripped.replace(new RegExp(`(?:<!--\\s*)?${PACKET_START}\\s*([\\s\\S]*?)\\s*${PACKET_END}\\s*(?:-->)?`, 'gi'), ' ');
+    }
+    stripped = stripped
+      .replace(new RegExp(`\\[HAYAKU CONTINUITY CONTEXT\\][\\s\\S]*?\\[/HAYAKU CONTINUITY CONTEXT\\]`, 'gi'), ' ');
+    return options.preserveWhitespace ? stripped : stripped.trim();
+  };
+  const stripHayakuTextPayload = (value, options = {}) => {
+    if (typeof value !== 'string') return { value, changed: false, removed: 0 };
+    const clean = stripHayakuBlocks(value, { preserveWhitespace: true, looseMarkers: options.looseMarkers !== false });
+    return {
+      value: clean,
+      changed: clean !== value,
+      removed: Math.max(0, value.length - clean.length)
+    };
+  };
+  const hayakuPayloadNeedsStrip = (value, options = {}, seen = new WeakSet()) => {
+    if (typeof value === 'string') return stripHayakuTextPayload(value, options).changed;
+    if (value == null || typeof value !== 'object') return false;
+    if (seen.has(value)) return false;
+    seen.add(value);
+    for (const key of Object.keys(value)) {
+      if (hayakuPayloadNeedsStrip(value[key], options, seen)) {
+        seen.delete(value);
+        return true;
+      }
+    }
+    seen.delete(value);
+    return false;
+  };
+  const cloneStrippedHayakuPayloadValue = (value, options = {}, memo = new WeakMap(), stats = { removed: 0 }) => {
+    if (typeof value === 'string') {
+      const result = stripHayakuTextPayload(value, options);
+      stats.removed += result.removed;
+      return result.value;
+    }
+    if (value == null || typeof value !== 'object') return value;
+    if (memo.has(value)) return memo.get(value);
+    const out = Array.isArray(value) ? value.slice() : { ...value };
+    memo.set(value, out);
+    for (const key of Object.keys(value)) {
+      out[key] = cloneStrippedHayakuPayloadValue(value[key], options, memo, stats);
+    }
+    return out;
+  };
+  const stripHayakuPayloadValue = (value, options = {}) => {
+    if (typeof value === 'string') return stripHayakuTextPayload(value, options);
+    if (value == null || typeof value !== 'object') return { value, changed: false, removed: 0 };
+    if (!hayakuPayloadNeedsStrip(value, options)) return { value, changed: false, removed: 0 };
+    const stats = { removed: 0 };
+    return { value: cloneStrippedHayakuPayloadValue(value, options, new WeakMap(), stats), changed: true, removed: stats.removed };
+  };
+  const stripHayakuDataPayload = (data, options = {}) => {
+    return stripHayakuPayloadValue(data, options);
+  };
+  const stripHayakuFromMessagePayloads = (msg = {}, options = {}) => {
+    if (!msg || typeof msg !== 'object') return { message: msg, changed: false, removed: 0 };
+    const result = stripHayakuPayloadValue(msg, options);
+    return { message: result.value, changed: result.changed, removed: result.removed };
+  };
   const stripNarrativeTags = value => text(value)
     .replace(/<\/?Narration>/gi, '')
     .replace(/<([A-Za-z_][A-Za-z0-9_.-]*)>/g, '')
@@ -6700,12 +6976,13 @@ const MODE_PROFILES = Object.freeze({
 
   const injectPrompt = (messages = [], block = '', tail = buildSideWriteTailReminder()) => {
     const sourceMessages = ensureArray(messages);
-    const preferDataPayload = sourceMessages.some(msg => hasOwnProperty(msg, 'data') && payloadHasText(dataPayloadText(msg.data)));
+    const stripOutgoingMessage = msg => stripHayakuFromMessagePayloads(msg, { looseMarkers: /^(assistant|model)$/i.test(roleOf(msg)) }).message;
     const clean = sourceMessages
       .filter(msg => !shouldDropOutgoingMessage(msg))
-      .map(msg => withMessagePayload(msg, stripHayakuBlocks(messageContent(msg))))
+      .map(stripOutgoingMessage)
       .filter(msg => messageContent(msg).trim() && !messageContent(msg).includes(INJECTION_HEADER));
     if (!block) return clean;
+    const preferDataPayload = clean.some(msg => hasOwnProperty(msg, 'data') && payloadHasText(dataPayloadText(msg.data, { ownerRole: roleOf(msg) })));
     const insertAt = (() => {
       const currentRange = latestCurrentInputRange(clean);
       if (currentRange) return currentRange.start;
@@ -6858,6 +7135,459 @@ const MODE_PROFILES = Object.freeze({
       const clean = stripHayakuBlocks(auxiliaryStripPacket);
       return requestClass.auxiliary === true && !/HAYAKU_STATE_PACKET_START|HAYAKU_STATE_PACKET_END/.test(clean) && /visible text/.test(clean);
     }));
+    const configuredAuxiliaryMainClass = RequestKindCore.classify('otherAX', [{ role: 'assistant', content: auxiliaryStripPacket }], '', { mainTypes: ['model', 'otherax'] });
+    check('configured_main_types_cannot_promote_protected_auxiliary_requests', configuredAuxiliaryMainClass.auxiliary === true && /requestType:otherax/.test(configuredAuxiliaryMainClass.reason));
+    const auxiliaryRawMarkerPacket = `visible text\n${PACKET_START} {"meta":{"schema":"hayaku_packet_v1"}} ${PACKET_END}`;
+    const auxiliaryUnclosedCommentPacket = `visible text\n<!-- ${PACKET_START} {"meta":{"schema":"hayaku_packet_v1"}} ${PACKET_END}`;
+    check('auxiliary_strip_cleans_raw_marker_packets',
+      !/HAYAKU_STATE_PACKET_START|HAYAKU_STATE_PACKET_END/.test(stripHayakuBlocks(auxiliaryRawMarkerPacket, { looseMarkers: true }))
+      && !/HAYAKU_STATE_PACKET_START|HAYAKU_STATE_PACKET_END/.test(stripHayakuBlocks(auxiliaryUnclosedCommentPacket, { looseMarkers: true })));
+    check('default_strip_preserves_raw_marker_text',
+      /HAYAKU_STATE_PACKET_START|HAYAKU_STATE_PACKET_END/.test(stripHayakuBlocks(auxiliaryRawMarkerPacket)));
+    const rawMarkerUserPrompt = injectPrompt([{ role: 'user', content: `debug ${PACKET_START} hello ${PACKET_END}` }], '');
+    const rawMarkerAssistantPrompt = injectPrompt([{ role: 'assistant', content: auxiliaryRawMarkerPacket }], '');
+    check('main_prompt_preserves_user_raw_marker_text',
+      /HAYAKU_STATE_PACKET_START hello HAYAKU_STATE_PACKET_END/.test(messageContent(rawMarkerUserPrompt[0] || {})));
+    check('main_prompt_strips_assistant_loose_marker_packets',
+      !/HAYAKU_STATE_PACKET_START|HAYAKU_STATE_PACKET_END/.test(messageContent(rawMarkerAssistantPrompt[0] || {}))
+      && /visible text/.test(messageContent(rawMarkerAssistantPrompt[0] || {})));
+    const structuredAssistantPrompt = injectPrompt([{ role: 'assistant', data: { content: [{ type: 'text', text: auxiliaryRawMarkerPacket }], keep: 'meta' } }], '');
+    check('main_prompt_preserves_structured_assistant_data_payloads',
+      Array.isArray(structuredAssistantPrompt[0]?.data?.content)
+      && structuredAssistantPrompt[0].data.keep === 'meta'
+      && !/HAYAKU_STATE_PACKET_START|HAYAKU_STATE_PACKET_END/.test(JSON.stringify(structuredAssistantPrompt[0].data)));
+    const structuredPacketOnlyPrompt = injectPrompt([{ role: 'assistant', data: { content: [{ type: 'text', text: `<!-- ${PACKET_START} {"meta":{"schema":"hayaku_packet_v1"}} ${PACKET_END} -->` }], keep: 'meta' } }], '');
+    check('main_prompt_drops_structured_packet_only_messages', structuredPacketOnlyPrompt.length === 0);
+    const structuredPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', text: auxiliaryStripPacket }] } }]);
+    const spacedRolePacketExtraction = extractPackets([{ role: ' assistant ', content: auxiliaryStripPacket }]);
+    const blankRoleAssistantFlagPacketExtraction = extractPackets([{ role: ' ', is_user: false, content: auxiliaryStripPacket }]);
+    const blankRoleUserFlagPacketExtraction = extractPackets([{ role: ' ', is_user: true, content: auxiliaryStripPacket }]);
+    const structuredOutputPacketExtraction = extractPackets([{ role: 'assistant', data: { output: [{ type: 'message', content: [{ type: 'output_text', text: auxiliaryStripPacket }] }] } }]);
+    const structuredOutputTextItemPacketExtraction = extractPackets([{ role: 'assistant', data: { output: [{ type: 'output_text', text: auxiliaryStripPacket }] } }]);
+    const structuredOutputToolPacketExtraction = extractPackets([{ role: 'assistant', data: { output: [{ type: 'tool_result', content: [{ type: 'text', text: auxiliaryStripPacket }] }] } }]);
+    const structuredOutputFunctionPacketExtraction = extractPackets([{ role: 'assistant', data: { output: [{ type: 'function_call_output', content: auxiliaryStripPacket }] } }]);
+    const structuredContentRecallPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'recall', text: auxiliaryStripPacket }] } }]);
+    const structuredContentRecallTextPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ kind: 'recall_text', text: auxiliaryStripPacket }] } }]);
+    const structuredContentRecallCamelPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'recallText', text: auxiliaryStripPacket }] } }]);
+    const structuredContentRecallResultPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'recall_result', text: auxiliaryStripPacket }] } }]);
+    const structuredContentRecallOutputPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'recall_output', text: auxiliaryStripPacket }] } }]);
+    const structuredContentRecallSearchResultPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'recall_search_result', text: auxiliaryStripPacket }] } }]);
+    const structuredContentRecallSearchHitPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'recallSearchHit', text: auxiliaryStripPacket }] } }]);
+    const structuredContentRecallSearchHitItemPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'recallSearchHitItem', text: auxiliaryStripPacket }] } }]);
+    const structuredContentRecallSearchEntryPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'recallSearchEntry', text: auxiliaryStripPacket }] } }]);
+    const structuredContentRecallSearchPayloadPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'recallSearchPayload', text: auxiliaryStripPacket }] } }]);
+    const structuredContentResearchHitPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'researchHit', text: auxiliaryStripPacket }] } }]);
+    const structuredContentResearchHitItemPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'researchHitItem', text: auxiliaryStripPacket }] } }]);
+    const structuredContentResearchEntryPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'researchEntry', text: auxiliaryStripPacket }] } }]);
+    const structuredContentResearchPayloadPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'researchPayload', text: auxiliaryStripPacket }] } }]);
+    const structuredContentWebNovelOutputPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'webNovelOutput', text: auxiliaryStripPacket }] } }]);
+    const structuredContentCodeReviewOutputPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'code_review_output', text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextRecallKindPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', kind: 'recall', text: auxiliaryStripPacket }] } }]);
+    const structuredContentRecallNamePacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ name: 'recall', text: auxiliaryStripPacket }] } }]);
+    const structuredContentRecallSourceSearchPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'recall', source: 'search_result', text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextSourceRefPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', source: 'chapter_1', text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextSourceWebSearchPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', source: 'web_search_result', text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextSourceWebSearchPayloadPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', source: 'webSearchPayload', text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextSourceTypeFileSearchPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', source_type: 'file_search_content', text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextSourceTypeBrowserPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', sourceType: 'browserPayload', text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextSubtypeMcpPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', subtype: 'mcpContent', text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextChannelToolPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', channel: 'tool_result', text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextChannelWebSearchPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', channel: 'web_search', text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextToolNameBrowserPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', tool_name: 'browser', text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextProviderCodeInterpreterPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', provider: 'code_interpreter', text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextMetadataSearchResultPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', metadata: { type: 'search_result' }, text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextSourceNameWebSearchPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', sourceName: 'web_search', text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextOriginBrowserPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', origin: 'browser', text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextOriginTypeMcpPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', origin_type: 'mcp_result', text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextOriginTypeFileSearchPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', originType: 'fileSearchPayload', text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextResponseTypeToolPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', response_type: 'tool_result', text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextResponseTypeWebpagePacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', responseType: 'webpageContent', text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextEventToolPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', event: 'tool_call', text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextEventTypeWebSearchPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', eventType: 'web_search', text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextLabelSearchResultPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', label: 'search_result', text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextMetadataSourceNameWebSearchPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', metadata: { sourceName: 'web_search' }, text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextMetadataOriginBrowserPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', metadata: { origin: 'browser' }, text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextMetadataResponseTypeToolPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', metadata: { responseType: 'tool_result' }, text: auxiliaryStripPacket }] } }]);
+    const structuredContentRecallOriginBrowserPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'recall', origin: 'browser', text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextOriginScenePacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', origin: 'scene_1', text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextToolCallIdPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', tool_call_id: 'call_1', text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextToolCallCamelIdPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', toolCallId: 'call_1', text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextCallIdPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', call_id: 'call_1', text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextCallCamelIdPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', callId: 'call_1', text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextFunctionCallIdPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', function_call_id: 'fc_1', text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextToolUseIdPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', tool_use_id: 'tu_1', text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextToolUseCamelIdPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', toolUseId: 'tu_1', text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextInvocationIdPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', invocation_id: 'inv_1', text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextRecipientBrowserPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', recipient: 'browser', text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextTargetWebSearchPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', target: 'web_search', text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextMetadataToolCallIdPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', metadata: { tool_call_id: 'call_1' }, text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextMetadataTargetBrowserPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', metadata: { target: 'browser' }, text: auxiliaryStripPacket }] } }]);
+    const structuredContentRecallToolCallIdPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'recall', tool_call_id: 'call_1', text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextSourceObjectTypePacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', source: { type: 'web_search_result' }, text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextSourceObjectNamePacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', source: { name: 'browser' }, text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextToolObjectNamePacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', tool: { name: 'browser' }, text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextToolObjectTypePacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', tool: { type: 'web_search' }, text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextProviderObjectKindPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', provider: { kind: 'code_interpreter' }, text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextMetadataSourceObjectPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', metadata: { source: { type: 'search_result' } }, text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextMetadataToolObjectPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', metadata: { tool: { name: 'browser' } }, text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextMetadataProviderObjectPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', metadata: { provider: { type: 'mcp_result' } }, text: auxiliaryStripPacket }] } }]);
+    const structuredContentRecallSourceObjectPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'recall', source: { type: 'web_search_result' }, text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextSourceObjectRefPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', source: { name: 'chapter_1' }, text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextSourceMetadataTypePacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', source: { metadata: { type: 'web_search_result' } }, text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextToolMetadataNamePacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', tool: { metadata: { name: 'browser' } }, text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextMetadataSourceMetadataTypePacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', metadata: { source: { metadata: { type: 'search_result' } } }, text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextToolCallsPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', tool_calls: [{ id: 'call_1' }], text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextToolCallsCamelPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', toolCalls: [{ id: 'call_1' }], text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextFunctionCallPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', function_call: { name: 'x' }, text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextFunctionCallCamelPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', functionCall: { name: 'x' }, text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextFunctionCallsPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', function_calls: [{ id: 'fc_1' }], text: auxiliaryStripPacket }] } }]);
+    const structuredContentRecallToolCallsPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'recall', tool_calls: [{ id: 'call_1' }], text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextToolsLabelPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', tools: ['hammer'], text: auxiliaryStripPacket }] } }]);
+    const structuredContentOutputTextSourceSearchPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'outputText', source: 'web_search_result', text: auxiliaryStripPacket }] } }]);
+    const structuredContentInputTextSourceSearchPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'inputText', source: 'web_search_result', text: auxiliaryStripPacket }] } }]);
+    const structuredContentMessageContentSourceSearchPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'messageContent', source: 'web_search_result', text: auxiliaryStripPacket }] } }]);
+    const structuredContentContentPartSourceSearchPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'contentPart', source: 'web_search_result', text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextSegmentSourceSearchPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'textSegment', source: 'web_search_result', text: auxiliaryStripPacket }] } }]);
+    const structuredContentDeltaTextSourceSearchPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'deltaText', source: 'web_search_result', text: auxiliaryStripPacket }] } }]);
+    const structuredContentRecallTextSourceSearchPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'recallText', source: 'web_search_result', text: auxiliaryStripPacket }] } }]);
+    const structuredContentOutputTextSourceRefPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'outputText', source: 'chapter_1', text: auxiliaryStripPacket }] } }]);
+    const structuredContentUrlCitationPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'urlCitation', source: 'web_search_result', text: auxiliaryStripPacket }] } }]);
+    const structuredContentUrlCitationSnakePacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'url_citation', source: 'web_search_result', text: auxiliaryStripPacket }] } }]);
+    const structuredContentFileCitationPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'fileCitation', source: 'file_search_result', text: auxiliaryStripPacket }] } }]);
+    const structuredContentCitationPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'citation', source: 'search_result', text: auxiliaryStripPacket }] } }]);
+    const structuredContentAnnotationPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'annotation', source: 'web_search_result', text: auxiliaryStripPacket }] } }]);
+    const structuredContentUrlCitationNoSourcePacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'urlCitation', text: auxiliaryStripPacket }] } }]);
+    const structuredContentRecallCitationPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'recallCitation', source: 'web_search_result', text: auxiliaryStripPacket }] } }]);
+    const structuredContentSearchCitationPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'searchCitation', text: auxiliaryStripPacket }] } }]);
+    const structuredContentFileSearchCitationPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'fileSearchCitation', text: auxiliaryStripPacket }] } }]);
+    const structuredContentWebpageCitationPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'webpageCitation', text: auxiliaryStripPacket }] } }]);
+    const structuredContentDocumentCitationPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'documentCitation', text: auxiliaryStripPacket }] } }]);
+    const structuredContentBrowserAnnotationPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'browserAnnotation', text: auxiliaryStripPacket }] } }]);
+    const structuredContentToolPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'tool_result', text: auxiliaryStripPacket }] } }]);
+    const structuredContentFunctionPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'function_call_output', content: auxiliaryStripPacket }] } }]);
+    const structuredContentToolCamelPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'toolCallOutput', text: auxiliaryStripPacket }] } }]);
+    const structuredContentFunctionCamelPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'functionCallOutput', content: auxiliaryStripPacket }] } }]);
+    const structuredContentReasoningCamelPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'reasoningText', text: auxiliaryStripPacket }] } }]);
+    const structuredContentWebSearchCamelPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'webSearchCall', text: auxiliaryStripPacket }] } }]);
+    const structuredContentWebSearchResultPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'web_search_result', text: auxiliaryStripPacket }] } }]);
+    const structuredContentWebSearchPayloadPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'webSearchPayload', text: auxiliaryStripPacket }] } }]);
+    const structuredContentWebSearchContentPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'web_search_content', text: auxiliaryStripPacket }] } }]);
+    const structuredContentWebSearchTextPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'webSearchText', text: auxiliaryStripPacket }] } }]);
+    const structuredContentSearchResultPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'search_result', text: auxiliaryStripPacket }] } }]);
+    const structuredContentSearchResultPayloadPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'searchResultPayload', text: auxiliaryStripPacket }] } }]);
+    const structuredContentSearchResultContentPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'search_result_content', text: auxiliaryStripPacket }] } }]);
+    const structuredContentSearchResultTextPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'searchResultText', text: auxiliaryStripPacket }] } }]);
+    const structuredContentSearchResultItemPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'searchResultItem', text: auxiliaryStripPacket }] } }]);
+    const structuredContentSearchResultItemsPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'search_result_items', text: auxiliaryStripPacket }] } }]);
+    const structuredContentSearchResultEntryPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'searchResultEntry', text: auxiliaryStripPacket }] } }]);
+    const structuredContentSearchHitPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'searchHit', text: auxiliaryStripPacket }] } }]);
+    const structuredContentSearchHitItemPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'searchHitItem', text: auxiliaryStripPacket }] } }]);
+    const structuredContentSearchEntryPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'searchEntry', text: auxiliaryStripPacket }] } }]);
+    const structuredContentSearchPayloadPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'search_payload', text: auxiliaryStripPacket }] } }]);
+    const structuredContentSearchContentPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'searchContent', text: auxiliaryStripPacket }] } }]);
+    const structuredContentSearchItemPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'search_items', text: auxiliaryStripPacket }] } }]);
+    const structuredContentSearchSnippetPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'search_snippets', text: auxiliaryStripPacket }] } }]);
+    const structuredContentSearchSnippetItemPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'search_snippet_item', text: auxiliaryStripPacket }] } }]);
+    const structuredContentSearchSourcePacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'searchSource', text: auxiliaryStripPacket }] } }]);
+    const structuredContentSearchDocumentPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'search_documents', text: auxiliaryStripPacket }] } }]);
+    const structuredContentSearchRecordPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'search_records', text: auxiliaryStripPacket }] } }]);
+    const structuredContentSearchRecordItemPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'searchRecordItem', text: auxiliaryStripPacket }] } }]);
+    const structuredContentSearchResultEntryItemPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'searchResultEntryItem', text: auxiliaryStripPacket }] } }]);
+    const structuredContentSearchResultObjectExtraction = extractPackets([{ role: 'assistant', data: { content: [{ object: 'search_result', text: auxiliaryStripPacket }] } }]);
+    const structuredContentSearchResultNameExtraction = extractPackets([{ role: 'assistant', data: { content: [{ name: 'search_result', text: auxiliaryStripPacket }] } }]);
+    const structuredContentFileSearchResultPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'file_search_result', text: auxiliaryStripPacket }] } }]);
+    const structuredContentFileSearchPayloadPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'fileSearchPayload', text: auxiliaryStripPacket }] } }]);
+    const structuredContentFileSearchContentPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'file_search_content', text: auxiliaryStripPacket }] } }]);
+    const structuredContentCodeInterpreterOutputPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'codeInterpreterOutput', text: auxiliaryStripPacket }] } }]);
+    const structuredContentCodeInterpreterPayloadPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'codeInterpreterPayload', text: auxiliaryStripPacket }] } }]);
+    const structuredContentComputerUsePacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'computerUse', text: auxiliaryStripPacket }] } }]);
+    const structuredContentComputerContentPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'computerContent', text: auxiliaryStripPacket }] } }]);
+    const structuredContentMcpResultPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'mcpResult', text: auxiliaryStripPacket }] } }]);
+    const structuredContentMcpResponsePacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'mcp_response', text: auxiliaryStripPacket }] } }]);
+    const structuredContentMcpPayloadPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'mcpPayload', text: auxiliaryStripPacket }] } }]);
+    const structuredContentBrowserResultPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'browser_result', text: auxiliaryStripPacket }] } }]);
+    const structuredContentBrowserContentPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'browserContent', text: auxiliaryStripPacket }] } }]);
+    const structuredContentWebpageResultPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'webpageResult', text: auxiliaryStripPacket }] } }]);
+    const structuredContentWebpagePayloadPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'webpagePayload', text: auxiliaryStripPacket }] } }]);
+    const structuredContentFilesystemResultPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'filesystem_result', text: auxiliaryStripPacket }] } }]);
+    const structuredContentFileSystemResultPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'fileSystemResult', text: auxiliaryStripPacket }] } }]);
+    const structuredContentFileSystemPayloadPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'fileSystemPayload', text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextToolKindPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', kind: 'tool_result', text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextFunctionKindPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', kind: 'functionCallOutput', text: auxiliaryStripPacket }] } }]);
+    const structuredContentObjectToolPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ object: 'tool_call', text: auxiliaryStripPacket }] } }]);
+    const structuredContentCategoryFunctionPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ category: 'function_call_output', text: auxiliaryStripPacket }] } }]);
+    const structuredContentNameToolPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ name: 'tool_result', text: auxiliaryStripPacket }] } }]);
+    const structuredContentTextNameToolPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ type: 'text', name: 'tool_result', text: auxiliaryStripPacket }] } }]);
+    const namedAssistantMessagePacketExtraction = extractPackets([{ role: 'assistant', name: 'tool_result', content: auxiliaryStripPacket }]);
+    const structuredPartsToolPacketExtraction = extractPackets([{ role: 'assistant', content: { parts: [{ type: 'tool_result', text: auxiliaryStripPacket }] } }]);
+    const structuredMessageToolPacketExtraction = extractPackets([{ role: 'assistant', message: { type: 'tool_result', content: auxiliaryStripPacket } }]);
+    const structuredMessageTextToolKindPacketExtraction = extractPackets([{ role: 'assistant', message: { type: 'text', kind: 'tool_result', content: auxiliaryStripPacket } }]);
+    const structuredOutputTextPacketExtraction = extractPackets([{ role: 'assistant', data: { output_text: auxiliaryStripPacket } }]);
+    const topLevelOutputPacketExtraction = extractPackets([{ role: 'assistant', output: [{ type: 'message', content: [{ type: 'output_text', text: auxiliaryStripPacket }] }] }]);
+    const topLevelOutputToolPacketExtraction = extractPackets([{ role: 'assistant', output: [{ type: 'tool_result', content: [{ type: 'text', text: auxiliaryStripPacket }] }] }]);
+    const topLevelOutputFunctionPacketExtraction = extractPackets([{ role: 'assistant', output: [{ type: 'function_call_output', content: auxiliaryStripPacket }] }]);
+    const topLevelOutputTextToolKindPacketExtraction = extractPackets([{ role: 'assistant', output: [{ type: 'output_text', kind: 'tool_result', text: auxiliaryStripPacket }] }]);
+    const structuredChoicePacketExtraction = extractPackets([{ role: 'assistant', data: { choices: [{ message: { role: 'assistant', content: auxiliaryStripPacket } }] } }]);
+    const structuredChoiceUserPacketExtraction = extractPackets([{ role: 'assistant', data: { choices: [{ message: { role: 'user', content: auxiliaryStripPacket } }] } }]);
+    const structuredChoiceRolelessPacketExtraction = extractPackets([{ role: 'assistant', data: { choices: [{ message: { content: auxiliaryStripPacket } }] } }]);
+    const structuredChoiceDeltaRolelessPacketExtraction = extractPackets([{ role: 'assistant', data: { choices: [{ delta: { content: auxiliaryStripPacket } }] } }]);
+    const structuredChoiceToolFinishPacketExtraction = extractPackets([{ role: 'assistant', data: { choices: [{ finish_reason: 'tool_calls', message: { role: 'assistant', content: auxiliaryStripPacket } }] } }]);
+    const structuredChoiceIndexOnePacketExtraction = extractPackets([{ role: 'assistant', data: { choices: [{ index: 1, message: { role: 'assistant', content: auxiliaryStripPacket } }] } }]);
+    const structuredChoiceTextPacketExtraction = extractPackets([{ role: 'assistant', data: { choices: [{ index: 0, text: auxiliaryStripPacket }] } }]);
+    check('extract_packets_reads_structured_segment_payloads', structuredPacketExtraction.length === 1);
+    check('extract_packets_reads_spaced_assistant_roles', spacedRolePacketExtraction.length === 1);
+    check('extract_packets_reads_blank_role_assistant_flags', blankRoleAssistantFlagPacketExtraction.length === 1);
+    check('extract_packets_ignores_blank_role_user_flags', blankRoleUserFlagPacketExtraction.length === 0);
+    check('extract_packets_reads_structured_output_payloads', structuredOutputPacketExtraction.length === 1);
+    check('extract_packets_reads_structured_output_text_items', structuredOutputTextItemPacketExtraction.length === 1);
+    check('extract_packets_ignores_structured_tool_output_payloads', structuredOutputToolPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_function_output_payloads', structuredOutputFunctionPacketExtraction.length === 0);
+    check('extract_packets_reads_structured_recall_content_payloads', structuredContentRecallPacketExtraction.length === 1);
+    check('extract_packets_reads_structured_recall_text_content_payloads', structuredContentRecallTextPacketExtraction.length === 1);
+    check('extract_packets_reads_structured_recall_camel_content_payloads', structuredContentRecallCamelPacketExtraction.length === 1);
+    check('extract_packets_reads_structured_recall_result_payloads', structuredContentRecallResultPacketExtraction.length === 1);
+    check('extract_packets_reads_structured_recall_output_payloads', structuredContentRecallOutputPacketExtraction.length === 1);
+    check('extract_packets_reads_structured_recall_search_result_payloads', structuredContentRecallSearchResultPacketExtraction.length === 1);
+    check('extract_packets_reads_structured_recall_search_hit_payloads', structuredContentRecallSearchHitPacketExtraction.length === 1);
+    check('extract_packets_reads_structured_recall_search_hit_item_payloads', structuredContentRecallSearchHitItemPacketExtraction.length === 1);
+    check('extract_packets_reads_structured_recall_search_entry_payloads', structuredContentRecallSearchEntryPacketExtraction.length === 1);
+    check('extract_packets_reads_structured_recall_search_payload_payloads', structuredContentRecallSearchPayloadPacketExtraction.length === 1);
+    check('extract_packets_reads_structured_research_hit_payloads', structuredContentResearchHitPacketExtraction.length === 1);
+    check('extract_packets_reads_structured_research_hit_item_payloads', structuredContentResearchHitItemPacketExtraction.length === 1);
+    check('extract_packets_reads_structured_research_entry_payloads', structuredContentResearchEntryPacketExtraction.length === 1);
+    check('extract_packets_reads_structured_research_payload_payloads', structuredContentResearchPayloadPacketExtraction.length === 1);
+    check('extract_packets_reads_structured_web_novel_output_payloads', structuredContentWebNovelOutputPacketExtraction.length === 1);
+    check('extract_packets_reads_structured_code_review_output_payloads', structuredContentCodeReviewOutputPacketExtraction.length === 1);
+    check('extract_packets_reads_structured_text_recall_kind_payloads', structuredContentTextRecallKindPacketExtraction.length === 1);
+    check('extract_packets_reads_structured_recall_name_payloads', structuredContentRecallNamePacketExtraction.length === 1);
+    check('extract_packets_reads_structured_recall_source_search_payloads', structuredContentRecallSourceSearchPacketExtraction.length === 1);
+    check('extract_packets_reads_structured_text_source_ref_payloads', structuredContentTextSourceRefPacketExtraction.length === 1);
+    check('extract_packets_ignores_structured_text_source_web_search_payloads', structuredContentTextSourceWebSearchPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_text_source_web_search_payload_payloads', structuredContentTextSourceWebSearchPayloadPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_text_source_type_file_search_payloads', structuredContentTextSourceTypeFileSearchPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_text_source_type_browser_payloads', structuredContentTextSourceTypeBrowserPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_text_subtype_mcp_payloads', structuredContentTextSubtypeMcpPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_text_channel_tool_payloads', structuredContentTextChannelToolPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_text_channel_web_search_payloads', structuredContentTextChannelWebSearchPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_text_tool_name_browser_payloads', structuredContentTextToolNameBrowserPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_text_provider_code_interpreter_payloads', structuredContentTextProviderCodeInterpreterPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_text_metadata_search_result_payloads', structuredContentTextMetadataSearchResultPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_text_source_name_web_search_payloads', structuredContentTextSourceNameWebSearchPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_text_origin_browser_payloads', structuredContentTextOriginBrowserPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_text_origin_type_mcp_payloads', structuredContentTextOriginTypeMcpPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_text_origin_type_file_search_payloads', structuredContentTextOriginTypeFileSearchPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_text_response_type_tool_payloads', structuredContentTextResponseTypeToolPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_text_response_type_webpage_payloads', structuredContentTextResponseTypeWebpagePacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_text_event_tool_payloads', structuredContentTextEventToolPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_text_event_type_web_search_payloads', structuredContentTextEventTypeWebSearchPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_text_label_search_result_payloads', structuredContentTextLabelSearchResultPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_text_metadata_source_name_web_search_payloads', structuredContentTextMetadataSourceNameWebSearchPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_text_metadata_origin_browser_payloads', structuredContentTextMetadataOriginBrowserPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_text_metadata_response_type_tool_payloads', structuredContentTextMetadataResponseTypeToolPacketExtraction.length === 0);
+    check('extract_packets_reads_structured_recall_origin_browser_payloads', structuredContentRecallOriginBrowserPacketExtraction.length === 1);
+    check('extract_packets_reads_structured_text_origin_scene_payloads', structuredContentTextOriginScenePacketExtraction.length === 1);
+    check('extract_packets_ignores_structured_text_tool_call_id_payloads', structuredContentTextToolCallIdPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_text_tool_call_camel_id_payloads', structuredContentTextToolCallCamelIdPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_text_call_id_payloads', structuredContentTextCallIdPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_text_call_camel_id_payloads', structuredContentTextCallCamelIdPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_text_function_call_id_payloads', structuredContentTextFunctionCallIdPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_text_tool_use_id_payloads', structuredContentTextToolUseIdPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_text_tool_use_camel_id_payloads', structuredContentTextToolUseCamelIdPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_text_invocation_id_payloads', structuredContentTextInvocationIdPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_text_recipient_browser_payloads', structuredContentTextRecipientBrowserPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_text_target_web_search_payloads', structuredContentTextTargetWebSearchPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_text_metadata_tool_call_id_payloads', structuredContentTextMetadataToolCallIdPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_text_metadata_target_browser_payloads', structuredContentTextMetadataTargetBrowserPacketExtraction.length === 0);
+    check('extract_packets_reads_structured_recall_tool_call_id_payloads', structuredContentRecallToolCallIdPacketExtraction.length === 1);
+    check('extract_packets_ignores_structured_text_source_object_type_payloads', structuredContentTextSourceObjectTypePacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_text_source_object_name_payloads', structuredContentTextSourceObjectNamePacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_text_tool_object_name_payloads', structuredContentTextToolObjectNamePacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_text_tool_object_type_payloads', structuredContentTextToolObjectTypePacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_text_provider_object_kind_payloads', structuredContentTextProviderObjectKindPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_text_metadata_source_object_payloads', structuredContentTextMetadataSourceObjectPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_text_metadata_tool_object_payloads', structuredContentTextMetadataToolObjectPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_text_metadata_provider_object_payloads', structuredContentTextMetadataProviderObjectPacketExtraction.length === 0);
+    check('extract_packets_reads_structured_recall_source_object_payloads', structuredContentRecallSourceObjectPacketExtraction.length === 1);
+    check('extract_packets_reads_structured_text_source_object_ref_payloads', structuredContentTextSourceObjectRefPacketExtraction.length === 1);
+    check('extract_packets_ignores_structured_text_source_metadata_type_payloads', structuredContentTextSourceMetadataTypePacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_text_tool_metadata_name_payloads', structuredContentTextToolMetadataNamePacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_text_metadata_source_metadata_type_payloads', structuredContentTextMetadataSourceMetadataTypePacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_text_tool_calls_payloads', structuredContentTextToolCallsPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_text_tool_calls_camel_payloads', structuredContentTextToolCallsCamelPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_text_function_call_payloads', structuredContentTextFunctionCallPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_text_function_call_camel_payloads', structuredContentTextFunctionCallCamelPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_text_function_calls_payloads', structuredContentTextFunctionCallsPacketExtraction.length === 0);
+    check('extract_packets_reads_structured_recall_tool_calls_payloads', structuredContentRecallToolCallsPacketExtraction.length === 1);
+    check('extract_packets_reads_structured_text_tools_label_payloads', structuredContentTextToolsLabelPacketExtraction.length === 1);
+    check('extract_packets_ignores_structured_output_text_source_search_payloads', structuredContentOutputTextSourceSearchPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_input_text_source_search_payloads', structuredContentInputTextSourceSearchPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_message_content_source_search_payloads', structuredContentMessageContentSourceSearchPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_content_part_source_search_payloads', structuredContentContentPartSourceSearchPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_text_segment_source_search_payloads', structuredContentTextSegmentSourceSearchPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_delta_text_source_search_payloads', structuredContentDeltaTextSourceSearchPacketExtraction.length === 0);
+    check('extract_packets_reads_structured_recall_text_source_search_payloads', structuredContentRecallTextSourceSearchPacketExtraction.length === 1);
+    check('extract_packets_reads_structured_output_text_source_ref_payloads', structuredContentOutputTextSourceRefPacketExtraction.length === 1);
+    check('extract_packets_ignores_structured_url_citation_payloads', structuredContentUrlCitationPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_url_citation_snake_payloads', structuredContentUrlCitationSnakePacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_file_citation_payloads', structuredContentFileCitationPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_citation_payloads', structuredContentCitationPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_annotation_payloads', structuredContentAnnotationPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_url_citation_no_source_payloads', structuredContentUrlCitationNoSourcePacketExtraction.length === 0);
+    check('extract_packets_reads_structured_recall_citation_payloads', structuredContentRecallCitationPacketExtraction.length === 1);
+    check('extract_packets_ignores_structured_search_citation_payloads', structuredContentSearchCitationPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_file_search_citation_payloads', structuredContentFileSearchCitationPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_webpage_citation_payloads', structuredContentWebpageCitationPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_document_citation_payloads', structuredContentDocumentCitationPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_browser_annotation_payloads', structuredContentBrowserAnnotationPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_tool_content_payloads', structuredContentToolPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_function_content_payloads', structuredContentFunctionPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_tool_camel_content_payloads', structuredContentToolCamelPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_function_camel_content_payloads', structuredContentFunctionCamelPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_reasoning_camel_content_payloads', structuredContentReasoningCamelPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_web_search_camel_content_payloads', structuredContentWebSearchCamelPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_web_search_result_payloads', structuredContentWebSearchResultPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_web_search_payload_payloads', structuredContentWebSearchPayloadPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_web_search_content_payloads', structuredContentWebSearchContentPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_web_search_text_payloads', structuredContentWebSearchTextPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_search_result_payloads', structuredContentSearchResultPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_search_result_payload_payloads', structuredContentSearchResultPayloadPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_search_result_content_payloads', structuredContentSearchResultContentPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_search_result_text_payloads', structuredContentSearchResultTextPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_search_result_item_payloads', structuredContentSearchResultItemPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_search_result_items_payloads', structuredContentSearchResultItemsPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_search_result_entry_payloads', structuredContentSearchResultEntryPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_search_hit_payloads', structuredContentSearchHitPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_search_hit_item_payloads', structuredContentSearchHitItemPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_search_entry_payloads', structuredContentSearchEntryPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_search_payload_payloads', structuredContentSearchPayloadPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_search_content_payloads', structuredContentSearchContentPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_search_item_payloads', structuredContentSearchItemPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_search_snippet_payloads', structuredContentSearchSnippetPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_search_snippet_item_payloads', structuredContentSearchSnippetItemPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_search_source_payloads', structuredContentSearchSourcePacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_search_document_payloads', structuredContentSearchDocumentPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_search_record_payloads', structuredContentSearchRecordPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_search_record_item_payloads', structuredContentSearchRecordItemPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_search_result_entry_item_payloads', structuredContentSearchResultEntryItemPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_search_result_object_payloads', structuredContentSearchResultObjectExtraction.length === 0);
+    check('extract_packets_ignores_structured_search_result_name_payloads', structuredContentSearchResultNameExtraction.length === 0);
+    check('extract_packets_ignores_structured_file_search_result_payloads', structuredContentFileSearchResultPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_file_search_payload_payloads', structuredContentFileSearchPayloadPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_file_search_content_payloads', structuredContentFileSearchContentPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_code_interpreter_output_payloads', structuredContentCodeInterpreterOutputPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_code_interpreter_payload_payloads', structuredContentCodeInterpreterPayloadPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_computer_use_payloads', structuredContentComputerUsePacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_computer_content_payloads', structuredContentComputerContentPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_mcp_result_payloads', structuredContentMcpResultPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_mcp_response_payloads', structuredContentMcpResponsePacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_mcp_payload_payloads', structuredContentMcpPayloadPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_browser_result_payloads', structuredContentBrowserResultPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_browser_content_payloads', structuredContentBrowserContentPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_webpage_result_payloads', structuredContentWebpageResultPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_webpage_payload_payloads', structuredContentWebpagePayloadPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_filesystem_result_payloads', structuredContentFilesystemResultPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_file_system_result_payloads', structuredContentFileSystemResultPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_file_system_payload_payloads', structuredContentFileSystemPayloadPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_text_tool_kind_payloads', structuredContentTextToolKindPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_text_function_kind_payloads', structuredContentTextFunctionKindPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_object_tool_payloads', structuredContentObjectToolPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_category_function_payloads', structuredContentCategoryFunctionPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_name_tool_payloads', structuredContentNameToolPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_text_name_tool_payloads', structuredContentTextNameToolPacketExtraction.length === 0);
+    check('extract_packets_preserves_named_assistant_messages', namedAssistantMessagePacketExtraction.length === 1);
+    check('extract_packets_ignores_structured_tool_part_payloads', structuredPartsToolPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_tool_message_payloads', structuredMessageToolPacketExtraction.length === 0);
+    check('extract_packets_ignores_structured_text_tool_kind_message_payloads', structuredMessageTextToolKindPacketExtraction.length === 0);
+    check('extract_packets_reads_structured_output_text_payloads', structuredOutputTextPacketExtraction.length === 1);
+    check('extract_packets_reads_top_level_output_payloads', topLevelOutputPacketExtraction.length === 1);
+    check('extract_packets_ignores_top_level_tool_output_payloads', topLevelOutputToolPacketExtraction.length === 0);
+    check('extract_packets_ignores_top_level_function_output_payloads', topLevelOutputFunctionPacketExtraction.length === 0);
+    check('extract_packets_ignores_top_level_text_tool_kind_output_payloads', topLevelOutputTextToolKindPacketExtraction.length === 0);
+    check('extract_packets_reads_structured_choice_payloads', structuredChoicePacketExtraction.length === 1);
+    check('extract_packets_ignores_structured_user_choice_payloads', structuredChoiceUserPacketExtraction.length === 0);
+    check('extract_packets_ignores_roleless_structured_choice_payloads', structuredChoiceRolelessPacketExtraction.length === 0);
+    check('extract_packets_ignores_roleless_structured_choice_deltas', structuredChoiceDeltaRolelessPacketExtraction.length === 0);
+    check('extract_packets_ignores_tool_finish_structured_choice_payloads', structuredChoiceToolFinishPacketExtraction.length === 0);
+    check('extract_packets_ignores_nonzero_structured_choice_payloads', structuredChoiceIndexOnePacketExtraction.length === 0);
+    check('extract_packets_reads_legacy_text_choice_payloads', structuredChoiceTextPacketExtraction.length === 1);
+    const nestedAssistantPacketExtraction = extractPackets([{ role: 'assistant', data: { messages: [{ role: 'assistant', content: auxiliaryStripPacket }] } }]);
+    const nestedAiPacketExtraction = extractPackets([{ role: 'assistant', data: { messages: [{ role: 'ai', content: auxiliaryStripPacket }] } }]);
+    const nestedBotPacketExtraction = extractPackets([{ role: 'assistant', data: { messages: [{ role: 'bot', content: auxiliaryStripPacket }] } }]);
+    const nestedSpacedAiPacketExtraction = extractPackets([{ role: 'assistant', data: { messages: [{ role: ' ai ', content: auxiliaryStripPacket }] } }]);
+    const nestedBlankRoleFlagPacketExtraction = extractPackets([{ role: 'assistant', data: { messages: [{ role: ' ', is_user: false, content: auxiliaryStripPacket }] } }]);
+    const nestedUserPacketExtraction = extractPackets([{ role: 'assistant', data: { messages: [{ role: 'user', content: auxiliaryStripPacket }] } }]);
+    const nestedRolelessPacketExtraction = extractPackets([{ role: 'assistant', data: { messages: [{ content: auxiliaryStripPacket }] } }]);
+    const nestedContentUserPacketExtraction = extractPackets([{ role: 'assistant', data: { content: [{ role: 'user', content: auxiliaryStripPacket }] } }]);
+    const nestedPartsUserPacketExtraction = extractPackets([{ role: 'assistant', data: { content: { parts: [{ role: 'user', text: auxiliaryStripPacket }] } } }]);
+    check('extract_packets_reads_nested_assistant_messages', nestedAssistantPacketExtraction.length === 1);
+    check('extract_packets_reads_nested_ai_messages', nestedAiPacketExtraction.length === 1);
+    check('extract_packets_reads_nested_bot_messages', nestedBotPacketExtraction.length === 1);
+    check('extract_packets_reads_nested_spaced_ai_messages', nestedSpacedAiPacketExtraction.length === 1);
+    check('extract_packets_reads_nested_blank_role_flags', nestedBlankRoleFlagPacketExtraction.length === 1);
+    check('extract_packets_ignores_nested_user_messages', nestedUserPacketExtraction.length === 0);
+    check('extract_packets_ignores_roleless_nested_messages', nestedRolelessPacketExtraction.length === 0);
+    check('extract_packets_ignores_nested_user_content_items', nestedContentUserPacketExtraction.length === 0);
+    check('extract_packets_ignores_nested_user_part_items', nestedPartsUserPacketExtraction.length === 0);
+    const dataOnlyPacketInjection = injectPrompt([
+      { role: 'assistant', data: { content: [{ type: 'text', text: `<!-- ${PACKET_START} {"meta":{"schema":"hayaku_packet_v1"}} ${PACKET_END} -->` }] } },
+      { role: 'user', content: 'next' }
+    ], 'block', 'tail');
+    const dataOnlyPacketSystems = dataOnlyPacketInjection.filter(row => row?.role === 'system');
+    check('main_prompt_uses_clean_payload_shape_for_system_injection',
+      dataOnlyPacketSystems.length === 2
+      && dataOnlyPacketSystems.every(row => hasOwnProperty(row, 'content') && !hasOwnProperty(row, 'data')));
+    const auxiliaryDirtyDataPayload = stripHayakuFromMessagePayloads({ role: 'assistant', content: 'visible text', data: auxiliaryStripPacket });
+    check('auxiliary_strip_cleans_data_payload_when_content_clean',
+      auxiliaryDirtyDataPayload.changed === true
+      && auxiliaryDirtyDataPayload.message.content === 'visible text'
+      && !/HAYAKU_STATE_PACKET_START|HAYAKU_STATE_PACKET_END/.test(auxiliaryDirtyDataPayload.message.data || '')
+      && /visible text/.test(auxiliaryDirtyDataPayload.message.data || ''));
+    const auxiliarySegmentDataPayload = stripHayakuFromMessagePayloads({ role: 'assistant', content: 'visible text', data: { content: [{ type: 'text', text: auxiliaryStripPacket }], keep: 'untouched' } });
+    check('auxiliary_strip_cleans_segment_payloads',
+      auxiliarySegmentDataPayload.changed === true
+      && auxiliarySegmentDataPayload.message.data.keep === 'untouched'
+      && !/HAYAKU_STATE_PACKET_START|HAYAKU_STATE_PACKET_END/.test(JSON.stringify(auxiliarySegmentDataPayload.message.data || null)));
+    const auxiliaryNestedPayload = stripHayakuFromMessagePayloads({
+      role: 'assistant',
+      content: { parts: [{ type: 'text', text: auxiliaryStripPacket }] },
+      data: { messages: [{ content: auxiliaryStripPacket }], keep: 'untouched' },
+      extra: { content: auxiliaryStripPacket }
+    });
+    check('auxiliary_strip_cleans_nested_wrapper_payloads',
+      auxiliaryNestedPayload.changed === true
+      && auxiliaryNestedPayload.message.data.keep === 'untouched'
+      && !/HAYAKU_STATE_PACKET_START|HAYAKU_STATE_PACKET_END/.test(JSON.stringify(auxiliaryNestedPayload.message || null)));
+    const auxiliaryDeepPayload = stripHayakuFromMessagePayloads({
+      role: 'assistant',
+      content: { a: { b: { c: { d: { e: { f: auxiliaryStripPacket } } } } } }
+    });
+    check('auxiliary_strip_cleans_deep_wrapper_payloads',
+      auxiliaryDeepPayload.changed === true
+      && !/HAYAKU_STATE_PACKET_START|HAYAKU_STATE_PACKET_END/.test(JSON.stringify(auxiliaryDeepPayload.message || null)));
+    const auxiliaryCleanShared = { label: 'clean' };
+    const auxiliaryCleanSharedResult = stripHayakuFromMessagePayloads({ role: 'assistant', content: { a: auxiliaryCleanShared, b: auxiliaryCleanShared } });
+    check('auxiliary_strip_preserves_clean_shared_aliases',
+      auxiliaryCleanSharedResult.changed === false
+      && auxiliaryCleanSharedResult.message.content.a === auxiliaryCleanSharedResult.message.content.b
+      && auxiliaryCleanSharedResult.message.content.a === auxiliaryCleanShared);
+    const auxiliaryCleanCycle = { label: 'clean' };
+    auxiliaryCleanCycle.self = auxiliaryCleanCycle;
+    const auxiliaryCleanCycleResult = stripHayakuFromMessagePayloads({ role: 'assistant', content: auxiliaryCleanCycle });
+    check('auxiliary_strip_preserves_clean_cycles',
+      auxiliaryCleanCycleResult.changed === false
+      && auxiliaryCleanCycleResult.message.content === auxiliaryCleanCycle
+      && auxiliaryCleanCycleResult.message.content.self === auxiliaryCleanCycle);
+    const auxiliaryCyclicPayload = {
+      role: 'assistant',
+      content: { root: { child: { leaf: auxiliaryStripPacket } } }
+    };
+    auxiliaryCyclicPayload.content.root.loop = auxiliaryCyclicPayload.content.root;
+    const auxiliaryCyclicResult = stripHayakuFromMessagePayloads(auxiliaryCyclicPayload);
+    check('auxiliary_strip_cleans_cyclic_alias_payloads',
+      auxiliaryCyclicResult.changed === true
+      && auxiliaryCyclicResult.message.content.root.loop === auxiliaryCyclicResult.message.content.root
+      && !/HAYAKU_STATE_PACKET_START|HAYAKU_STATE_PACKET_END/.test(auxiliaryCyclicResult.message.content.root.child.leaf || '')
+      && !/HAYAKU_STATE_PACKET_START|HAYAKU_STATE_PACKET_END/.test(auxiliaryCyclicResult.message.content.root.loop.child.leaf || ''));
     check('previous_plain_lbxnai_tag_does_not_skip_main_turn', previousIllustrationTagClass.auxiliary === false && previousIllustrationTagClass.main === true);
     check('previous_gigatrans_prompt_does_not_skip_main_turn', previousGigaTransClass.auxiliary === false && previousGigaTransClass.main === true);
     check('previous_structured_image_prompt_does_not_skip_main_turn', previousStructuredImagePromptClass.auxiliary === false && previousStructuredImagePromptClass.main === true);
@@ -7435,10 +8165,6 @@ const MODE_PROFILES = Object.freeze({
     Memory.store = emptyStore();
     clearTokenSimilarityCache();
     clearNgramCache();
-    if (!settings.enabled) {
-      Memory.lastBeforeRequest = { at: now(), skipped: true, reason: 'disabled', requestType, stages, elapsedMs: now() - startedAt };
-      return messages;
-    }
     const stage = (name, fn) => {
       const stageStartedAt = now();
       try {
@@ -7447,32 +8173,40 @@ const MODE_PROFILES = Object.freeze({
         stages[name] = now() - stageStartedAt;
       }
     };
+    const sanitizeAuxiliaryMessages = (requestClass, extra = {}) => {
+      let hayakuPacketCharsRemoved = 0;
+      const sanitizedMessages = stage('stripAuxiliaryPackets', () => ensureArray(messages).map(msg => {
+        const result = stripHayakuFromMessagePayloads(msg);
+        hayakuPacketCharsRemoved += result.removed;
+        return result.message;
+      }));
+      Memory.lastBeforeRequest = {
+        at: now(),
+        skipped: true,
+        sanitized: true,
+        reason: requestClass.reason,
+        requestType,
+        stages,
+        hayakuPacketCharsRemoved,
+        elapsedMs: now() - startedAt,
+        ...extra
+      };
+      debugLog('beforeRequest:skip', Memory.lastBeforeRequest);
+      return sanitizedMessages;
+    };
     try {
       debugLog('beforeRequest:start', { requestType, messages: ensureArray(messages).length });
       const configuredMainTypes = text(Memory.settings?.mainRequestTypes || '').trim()
         ? text(Memory.settings?.mainRequestTypes || '').split(/[\s,]+/).map(s => s.trim().toLowerCase()).filter(Boolean)
         : null;
       const requestClass = stage('classifyRequest', () => RequestKindCore.classify(requestType, messages, '', configuredMainTypes ? { mainTypes: configuredMainTypes } : {}));
+      if (!settings.enabled) {
+        if (requestClass.auxiliary) return sanitizeAuxiliaryMessages(requestClass, { disabled: true, reason: `disabled,${requestClass.reason}` });
+        Memory.lastBeforeRequest = { at: now(), skipped: true, reason: 'disabled', requestType, stages, elapsedMs: now() - startedAt };
+        return messages;
+      }
       if (requestClass.auxiliary) {
-        let hayakuPacketCharsRemoved = 0;
-        const sanitizedMessages = stage('stripAuxiliaryPackets', () => ensureArray(messages).map(msg => {
-          const body = messageContent(msg);
-          const cleanBody = stripHayakuBlocks(body);
-          hayakuPacketCharsRemoved += Math.max(0, text(body).length - text(cleanBody).length);
-          return cleanBody === body ? msg : withMessagePayload(msg, cleanBody);
-        }));
-        Memory.lastBeforeRequest = {
-          at: now(),
-          skipped: true,
-          sanitized: true,
-          reason: requestClass.reason,
-          requestType,
-          stages,
-          hayakuPacketCharsRemoved,
-          elapsedMs: now() - startedAt
-        };
-        debugLog('beforeRequest:skip', Memory.lastBeforeRequest);
-        return sanitizedMessages;
+        return sanitizeAuxiliaryMessages(requestClass);
       }
       const store = emptyStore();
       const query = stage('latestUserText', () => latestUserText(messages));
