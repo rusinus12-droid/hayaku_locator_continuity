@@ -1,8 +1,8 @@
 //@name hayaku_locator_continuity
-//@display-name HAYAKU · Locator Continuity v1.0.14
+//@display-name HAYAKU · Locator Continuity v1.0.15
 //@author rusinus12@gmail.com
 //@api 3.0
-//@version 1.0.14
+//@version 1.0.15
 //@update-url https://raw.githubusercontent.com/rusinus12-droid/hayaku_locator_continuity/main/hayaku_locator_continuity.js
 //@arg hayaku_enabled string true|false
 //@arg hayaku_mode string auto|balanced|fast|deep
@@ -53,7 +53,7 @@
 
   const PLUGIN_ID = 'hayaku.locator.continuity';
   const PLUGIN_NAME = 'HAYAKU';
-  const PLUGIN_VERSION = '1.0.14';
+  const PLUGIN_VERSION = '1.0.15';
   const KEY_PREFIX = 'hayaku.v1';
   const STORE_KEY = `${KEY_PREFIX}.store`;
   const SETTINGS_CACHE_KEY = `${KEY_PREFIX}.settings.cache`;
@@ -188,7 +188,7 @@
   const KNOWLEDGE_STATES = Object.freeze(['known', 'suspected', 'uncertain', 'misunderstood', 'forgotten', 'hidden']);
   const PRIVACY_STATES = Object.freeze(['public', 'shared', 'private', 'secret', 'internal']);
   const TRUTH_STATES = Object.freeze(['true', 'false', 'contested', 'unknown']);
-  const COMPACT_PACKET_EXAMPLE = '{"meta":{"schema":"hayaku_packet_v1","packet_type":"current_snapshot","packet_schema_rev":2,"ledger_profile":"hidden_packet_ledger_v2","scene_id":"","turn_anchor":"","confidence":0.0,"pov_entity":"","active_speaker":"","visible_participants":[],"scene_visibility":"limited","summary_memory":{"summary":"","recallAnchors":[],"canonicalAnchors":[],"mentionedEntityNames":[],"confidence":0.0,"overpromotion_risks":[]},"speaker_boundaries":[],"pattern_guard":[],"overpromotion_risks":[],"consent_memory":{"preferences":[],"limits":[],"comfort":null}},"entity":{"characters":[],"relations":[],"pov_memories":[],"secrets":[]},"world":{"location":"","time":"","sensory":"","active_events":[]},"narrative":{"scene_phase":"","tension_level":0.0,"pacing":"","time_elapsed":"","conflict_traces":[]},"planner":{"continuity_locks":[],"do_not_resolve_yet":[],"open_invitations":[]},"importance":{"overall":0.0,"reason":[]}}';
+  const COMPACT_PACKET_EXAMPLE = '{"meta":{"schema":"hayaku_packet_v1","packet_type":"current_snapshot","packet_schema_rev":2,"ledger_profile":"hidden_packet_ledger_v2","scene_id":"s7","turn_anchor":"리아가 하루에게 열쇠를 건넴","confidence":0.88,"pov_entity":"리아","active_speaker":"리아","visible_participants":["하루","리아"],"scene_visibility":"limited","summary_memory":{"summary":"리아가 숨겨둔 열쇠를 하루에게 넘기고 신뢰가 심화됨","recallAnchors":["key / 열쇠 / 鍵 / object:key","relation:trust"],"canonicalAnchors":["object:key","relation:trust"],"mentionedEntityNames":["하루","Haru","리아","Lia"],"confidence":0.8,"overpromotion_risks":[]},"speaker_boundaries":[],"pattern_guard":[],"overpromotion_risks":[],"consent_memory":{"preferences":["신뢰 기반 접근","느린 긴장"],"limits":["강제 공개 금지"],"comfort":0.7}},"entity":{"characters":[{"name":"리아","current_state":"열쇠를 건네며 감정을 드러냄","emotion":"긴장과 안도","relation_to_user":"신뢰 심화","condition":"오른손 가벼운 찰과상","attire":"두건과 긴 소매 외투","carrying":["열쇠","서약서"],"importance":0.9}],"relations":[{"from":"하루","to":"리아","state":"신뢰 심화","trust":0.7,"intimacy":0.62,"power_balance":"peer","dynamic":"warming"}]},"world":{"location":"기록실","time":"밤","sensory":"희미한 촛불, 오래한 종이 냄새, 밤공기 차가움","active_events":[{"event":"열쇠 인도","status":"active"}]},"narrative":{"scene_phase":"전환","tension_level":0.6,"pacing":"escalating","time_elapsed":"수 분","conflict_traces":[{"summary":"비밀 공유로 관계 전환"}]},"planner":{"continuity_locks":[{"label":"열쇠의 의미는 미해결","status":"active"}],"do_not_resolve_yet":[{"label":"하루의 진짜 의도는 아직 밝히지 않음","status":"active"}],"open_invitations":[{"label":"하루가 열쇠의 용도를 당장 물을 수 있음","status":"active"}]},"importance":{"overall":0.85,"reason":["비밀 공유로 관계 전환"]}}';
 
   
 
@@ -869,17 +869,17 @@ const MODE_PROFILES = Object.freeze({
   const CANONICAL_RECALL_TOKEN_RE = /^(?:object|color|place|position|relation|state|info|time|intent|emotion|world|narrative|story|locator):[a-z0-9_\-]+$/i;
   const CANONICAL_RECALL_TOKEN_PREFIX_RE = /^(?:object|color|place|position|relation|state|info|time|intent|emotion|entity|world|narrative|story|locator):/i;
   const MULTILINGUAL_ANCHOR_EXAMPLES = Object.freeze([
-    'native_phrase / known_translation / canonical_token',
-    'place_phrase / known_translation / place:stable_place',
-    'position_phrase / known_translation / position:stable_position',
-    'private_fact_phrase / known_translation / info:stable_fact'
+    'key / 열쇠 / 鍵 / object:key',
+    'archive / 기록실 / 資料室 / place:archive',
+    'under desk / 책상 아래 / 机の下 / position:under',
+    'secret / 비밀 / 秘密 / info:secret'
   ]);
   const UNIVERSAL_CANONICAL_ANCHOR_PATCH_MARKER = 'universal_canonical_anchor_v1';
   const UNIVERSAL_CANONICAL_ANCHOR_EXAMPLES = Object.freeze([
-    'object:stable_object',
-    'place:stable_place',
-    'state:stable_state',
-    'info:stable_fact',
+    'object:necklace',
+    'place:wardrobe',
+    'state:hidden',
+    'info:location',
     'relation:friend',
     'emotion:fear',
     'narrative:aftermath'
@@ -6821,7 +6821,7 @@ const MODE_PROFILES = Object.freeze({
     if (mode === 'full') {
       lines.push('Packet prose may use one natural language, but retrieval-critical facts should also carry language-independent canonical anchors. This lets Korean, English, Japanese, or any other language packet meet through shared handles.');
       lines.push('For meta.summary_memory.recallAnchors, include 1-4 compact anchors using the pattern "native phrase / optional known translations / canonical_token" when relevant; the canonical token is the important part.');
-      lines.push('When the exact translation is unknown, still include a truthful canonical token such as object:stable_object, place:stable_place, state:stable_state, info:stable_fact, relation:stable_relation, emotion:stable_emotion, or narrative:stable_beat.');
+      lines.push('When the exact translation is unknown, still include a truthful canonical token such as object:necklace, place:wardrobe, state:hidden, info:location, relation:friend, emotion:fear, or narrative:aftermath.');
       lines.push(`Useful multilingual examples: ${MULTILINGUAL_ANCHOR_EXAMPLES.join('; ')}.`);
       lines.push(`Useful canonical-only examples: ${UNIVERSAL_CANONICAL_ANCHOR_EXAMPLES.join(', ')}.`);
       lines.push('For recurring people, include aliases and mentionedEntityNames in available script variants such as Korean name, romanization, Japanese spelling, or other known spellings. Keep this compact and focused on active/relevant entities.');
@@ -6829,7 +6829,7 @@ const MODE_PROFILES = Object.freeze({
       lines.push('Keep summaries concise in one language and use canonical anchors for retrieval-critical nouns, places, relationships, secrets, current state, object locations, and unresolved pressures, rather than translating the whole packet.');
     } else {
       lines.push('Keep packet prose in one language, but add 1-4 compact language-independent canonical anchors for retrieval-critical facts so Korean/English/Japanese packets meet through shared handles.');
-      lines.push('Pattern: "native phrase / known translations / canonical_token"; when the translation is unknown use a truthful canonical-only token such as object:stable_object, place:stable_place, state:stable_state, or info:stable_fact. Canonical tokens are search handles for packet retrieval; use public or safely shareable facts for anchors.');
+      lines.push('Pattern: "native phrase / known translations / canonical_token" (e.g. key / 열쇠 / 鍵 / object:key); when the translation is unknown use a truthful canonical-only token (object:necklace, place:wardrobe, state:hidden, info:location). Canonical tokens are search handles for packet retrieval; use public or safely shareable facts for anchors.');
       lines.push('For active recurring people, add aliases/mentionedEntityNames in available script variants (Korean name, romanization, Japanese spelling); keep it compact and focused on relevant entities.');
     }
     lines.push('');
@@ -6862,7 +6862,7 @@ const MODE_PROFILES = Object.freeze({
       lines.push('Also include compact control fields when useful: status(active/resolved/superseded/contested/dormant), time_scope(baseline/past/current/future_pressure/scheduled/no_longer_true), confidence, evidence, known_to, hidden_from, replaces, related_refs, and aliases.');
       lines.push('Choose the most appropriate section for each continuity fact: meta for compact scene-level recall hints and safety guards; entity, world, narrative, and planner for the durable continuity rows; importance for overall priority.');
       lines.push('Use meta.summary_memory for a compact recall summary and anchors; use speaker_boundaries, pattern_guard, and overpromotion_risks for knowledge/speaker boundaries, repetition guards, and overpromotion cautions; use meta.consent_memory to persist the user persona\'s preferences, hard limits, safeword, and comfort (0.0-1.0) so stated boundaries carry across turns.');
-      lines.push('When filling summary_memory.recallAnchors and canonicalAnchors, prefer compact canonical anchors for retrieval-critical facts, e.g. "native phrase / known translations / canonical_token" or canonical-only "object:stable_object" when translations are unknown.');
+      lines.push('When filling summary_memory.recallAnchors and canonicalAnchors, prefer compact canonical anchors for retrieval-critical facts, e.g. "key / 열쇠 / 鍵 / object:key", "archive / 기록실 / 資料室 / place:archive", or canonical-only "object:necklace" when translations are unknown.');
       lines.push('When filling mentionedEntityNames or aliases, include useful Korean/English/Japanese variants for active names, e.g. "Rin", "린", "凛".');
       lines.push('Use the listed top-level packet keys and packet-safe fields.');
       lines.push('Set a secret revealState to revealed when the visible chat gives evidence or a related_ref for the reveal; use hidden, hinted, or partially_revealed for unrevealed states.');
@@ -6878,7 +6878,7 @@ const MODE_PROFILES = Object.freeze({
       lines.push('- meta: schema, packet_type, packet_schema_rev, ledger_profile, scene_id, confidence, turn_hint, turn_anchor, pov_entity, active_speaker, visible_participants, scene_visibility, summary_memory, canonical_anchors/canonicalAnchors, speaker_boundaries, pattern_guard, overpromotion_risks, consent_memory');
       lines.push('- entity: characters(name/current_state/condition/attire/carrying), relations(from/to/state/trust/intimacy/power_balance/dynamic), pov_memories, secrets | world: location, time, scene_type, danger_level, active_events, world_rules, offscreen_threads, factions, regions, sensory | narrative: scene_phase, current_arc, tension_level, dominant_mood, pacing, time_elapsed, conflict_traces, scene_deltas, theme_motifs | planner: consequence_ledger, payoff_tracker, continuity_locks, do_not_resolve_yet, next_direction, suggested_hooks, open_invitations | importance: overall, reason');
       lines.push('Use meta.summary_memory for compact recall summary/anchors; use speaker_boundaries, pattern_guard, and overpromotion_risks for high-priority speaker boundary, repetition, and overpromotion guards; use consent_memory to persist the user persona\'s preferences, limits, safeword, and comfort.');
-      lines.push('For cross-language and cross-script recall, make recallAnchors compact canonical handles when useful: "native phrase / known translations / canonical_token"; or canonical-only "object:stable_object", "place:stable_place" when translations are unknown.');
+      lines.push('For cross-language and cross-script recall, make recallAnchors compact canonical handles when useful: "key / 열쇠 / 鍵 / object:key"; "archive / 기록실 / 資料室 / place:archive"; or canonical-only "object:necklace", "place:wardrobe" when translations are unknown.');
       lines.push('For active recurring people, put available Korean/English/Japanese variants in aliases and mentionedEntityNames; keep aliases focused on the active cast.');
     }
     lines.push('For pov_memories and secrets, reuse the provided ref when updating the same knowledge boundary.');
