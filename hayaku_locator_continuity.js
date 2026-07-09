@@ -1,15 +1,20 @@
 //@name hayaku_locator_continuity
-//@display-name HAYAKU · Locator Continuity v1.0.15
+//@display-name HAYAKU · Locator Continuity v1.1.0
 //@author rusinus12@gmail.com
 //@api 3.0
-//@version 1.0.15
+//@version 1.1.0
 //@update-url https://raw.githubusercontent.com/rusinus12-droid/hayaku_locator_continuity/main/hayaku_locator_continuity.js
 //@arg hayaku_enabled string true|false
 //@arg hayaku_mode string auto|balanced|fast|deep
 //@arg hayaku_prompt_mode string auto|balanced|full
 //@arg hayaku_max_items_per_axis string 3
+//@arg hayaku_bm25_channel string true|false
+//@arg hayaku_bm25_weight string 0.08
 //@arg hayaku_debug string true|false
 //@arg hayaku_main_request_types string model
+//@arg hayaku_packet_recovery string true|false
+//@arg hayaku_haya_love_frame string true|false
+//@arg hayaku_haya_prefill string true|false
 
 /*
  * HAYAKU · Locator Continuity Plugin
@@ -53,7 +58,7 @@
 
   const PLUGIN_ID = 'hayaku.locator.continuity';
   const PLUGIN_NAME = 'HAYAKU';
-  const PLUGIN_VERSION = '1.0.15';
+  const PLUGIN_VERSION = '1.1.0';
   const KEY_PREFIX = 'hayaku.v1';
   const STORE_KEY = `${KEY_PREFIX}.store`;
   const SETTINGS_CACHE_KEY = `${KEY_PREFIX}.settings.cache`;
@@ -62,6 +67,20 @@
   const SIDE_WRITE_TAIL_MARKER = '[HAYAKU SIDE-WRITE FINAL REMINDER]';
   const PACKET_START = 'HAYAKU_STATE_PACKET_START';
   const PACKET_END = 'HAYAKU_STATE_PACKET_END';
+  const PACKET_RECOVERY_EXCERPT_CHARS = 3600;
+  const PACKET_RECOVERY_MIN_VISIBLE_CHARS = 40;
+  const PACKET_RECOVERY_MAX_CHAIN_MESSAGES = 3;
+  const VISIBLE_REPEAT_GUARD_RECENT_MESSAGES = 8;
+  const VISIBLE_REPEAT_GUARD_MAX_ROWS = 3;
+  const VISIBLE_REPEAT_GUARD_MAX_SNIPPETS = 4;
+  const PATTERN_GUARD_DEFAULT_EXPIRES_AFTER_TURNS = 2;
+  const PATTERN_GUARD_MAX_EXPIRES_AFTER_TURNS = 3;
+  const PATTERN_GUARD_NEUTRAL_EVIDENCE = 'recent assistant outputs';
+  const PATTERN_GUARD_DEFAULT_RESOLVE_WHEN = 'the next visible response avoids the repeated quote/beat/scaffold and advances a new consequence, choice, reaction angle, or information beat';
+  const PREVIOUS_TURN_RECALL_BRIDGE_STRONG_CHARS = 1600;
+  const PREVIOUS_TURN_RECALL_BRIDGE_LIGHT_CHARS = 760;
+  const PREVIOUS_TURN_RECALL_BRIDGE_SHORT_QUERY_CHARS = 140;
+  const PRONOUN_RECALL_BRIDGE_MAX_CANDIDATES = 3;
   const HIDDEN_PACKET_RE = new RegExp(`<!--\\s*${PACKET_START}\\s*([\\s\\S]*?)\\s*${PACKET_END}\\s*-->`, 'gi');
   const VISIBLE_PACKET_RE = new RegExp(`<<<\\s*${PACKET_START}\\s*>>>\\s*([\\s\\S]*?)\\s*<<<\\s*${PACKET_END}\\s*>>>`, 'gi');
   const RETRIEVAL_ENGINE_VERSION = 'strengthened_jaccard_v3';
@@ -114,12 +133,17 @@
     promptMode: 'auto',
     injectionCaps: MODE_INJECTION_CAPS,
     maxItemsPerAxis: 3,
+    bm25Channel: true,
+    bm25Weight: 0.08,
     debug: false,
     recentLimit: 120,
     importantLimit: 64,
     mainRequestTypes: 'model',
     recentEntityContextMs: 20 * 60 * 1000,
     recencyTurnWindow: 16,
+    packetRecovery: true,
+    hayaLoveFrame: true,
+    hayaPrefill: true,
     sidePacketInstruction: true
   });
   // Performance guard profiles. HAYAKU is storage-free and re-reads chat packets on
@@ -189,6 +213,8 @@
   const PRIVACY_STATES = Object.freeze(['public', 'shared', 'private', 'secret', 'internal']);
   const TRUTH_STATES = Object.freeze(['true', 'false', 'contested', 'unknown']);
   const COMPACT_PACKET_EXAMPLE = '{"meta":{"schema":"hayaku_packet_v1","packet_type":"current_snapshot","packet_schema_rev":2,"ledger_profile":"hidden_packet_ledger_v2","scene_id":"s7","turn_anchor":"리아가 하루에게 열쇠를 건넴","confidence":0.88,"pov_entity":"리아","active_speaker":"리아","visible_participants":["하루","리아"],"scene_visibility":"limited","summary_memory":{"summary":"리아가 숨겨둔 열쇠를 하루에게 넘기고 신뢰가 심화됨","recallAnchors":["key / 열쇠 / 鍵 / object:key","relation:trust"],"canonicalAnchors":["object:key","relation:trust"],"mentionedEntityNames":["하루","Haru","리아","Lia"],"confidence":0.8,"overpromotion_risks":[]},"speaker_boundaries":[],"pattern_guard":[],"overpromotion_risks":[],"consent_memory":{"preferences":["신뢰 기반 접근","느린 긴장"],"limits":["강제 공개 금지"],"comfort":0.7}},"entity":{"characters":[{"name":"리아","current_state":"열쇠를 건네며 감정을 드러냄","emotion":"긴장과 안도","relation_to_user":"신뢰 심화","condition":"오른손 가벼운 찰과상","attire":"두건과 긴 소매 외투","carrying":["열쇠","서약서"],"importance":0.9}],"relations":[{"from":"하루","to":"리아","state":"신뢰 심화","trust":0.7,"intimacy":0.62,"power_balance":"peer","dynamic":"warming"}]},"world":{"location":"기록실","time":"밤","sensory":"희미한 촛불, 오래한 종이 냄새, 밤공기 차가움","active_events":[{"event":"열쇠 인도","status":"active"}]},"narrative":{"scene_phase":"전환","tension_level":0.6,"pacing":"escalating","time_elapsed":"수 분","conflict_traces":[{"summary":"비밀 공유로 관계 전환"}]},"planner":{"continuity_locks":[{"label":"열쇠의 의미는 미해결","status":"active"}],"do_not_resolve_yet":[{"label":"하루의 진짜 의도는 아직 밝히지 않음","status":"active"}],"open_invitations":[{"label":"하루가 열쇠의 용도를 당장 물을 수 있음","status":"active"}]},"importance":{"overall":0.85,"reason":["비밀 공유로 관계 전환"]}}';
+  const TAIL_CURRENT_PACKET_EXAMPLE = '{"meta":{"schema":"hayaku_packet_v1","packet_type":"current_snapshot","packet_schema_rev":2,"confidence":0.6},"entity":{"characters":[],"relations":[],"pov_memories":[],"secrets":[]},"world":{"location":"","time":"","active_events":[]},"narrative":{"scene_phase":"","conflict_traces":[]},"planner":{"continuity_locks":[],"do_not_resolve_yet":[],"next_direction":[]},"importance":{"overall":0.4,"reason":[]}}';
+  const TAIL_RECOVERY_PACKET_EXAMPLE = '{"meta":{"schema":"hayaku_packet_v1","packet_type":"recovery_snapshot","packet_schema_rev":2,"confidence":0.45},"entity":{"characters":[],"relations":[],"pov_memories":[],"secrets":[]},"world":{"location":"","time":"","active_events":[]},"narrative":{"scene_phase":"","conflict_traces":[]},"planner":{"continuity_locks":[],"do_not_resolve_yet":[],"next_direction":[]},"importance":{"overall":0.3,"reason":[]}}';
 
   
 
@@ -249,6 +275,11 @@
     const n = Number(value);
     if (!Number.isFinite(n)) return fallback;
     return Math.max(min, Math.min(max, n));
+  };
+  const patternGuardExpiryTurns = value => {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return PATTERN_GUARD_DEFAULT_EXPIRES_AFTER_TURNS;
+    return Math.max(1, Math.min(PATTERN_GUARD_MAX_EXPIRES_AFTER_TURNS, Math.round(n)));
   };
   const ledgerRev2Lower = value => ledgerRev2Text(value).toLowerCase();
   const ledgerRev2RowItem = row => row && typeof row.item === 'object' && row.item ? row.item : row || {};
@@ -585,6 +616,14 @@
         sourceScope: 'hidden_packet_meta',
         _ledgerRev2: { field: `meta.${category}`, packetHash, turn }
       };
+      if (category === 'pattern_guard') {
+        base.expires_after_turns = patternGuardExpiryTurns(item.expires_after_turns ?? item.expiresAfterTurns);
+        if (!base.resolve_when) base.resolve_when = item.resolveWhen || PATTERN_GUARD_DEFAULT_RESOLVE_WHEN;
+        base.evidence = [PATTERN_GUARD_NEUTRAL_EVIDENCE];
+        if (!base.resolved_reason && /^(?:resolved|dormant)$/i.test(String(base.status || ''))) {
+          base.resolved_reason = item.resolvedReason || 'the repeated pattern was not observed in the latest visible response';
+        }
+      }
       if (typeof decorateItem === 'function') {
         plannerRows.push(decorateItem('planner', category, base, turn, packetHash, ref, category, sourceMeta));
       } else {
@@ -906,6 +945,8 @@ const MODE_PROFILES = Object.freeze({
     lastBeforeRequest: null,
     lastWarnings: [],
     packetScanCache: new Map(),
+    packetScanScopeKey: '',
+    packetScanScopeConfident: false,
     packetScanStats: null,
     compatInfo: null,
     replacer: {
@@ -1193,6 +1234,82 @@ const MODE_PROFILES = Object.freeze({
     normalizedPerformanceMode(settings?.effectiveMode || settings?.mode || DEFAULT_SETTINGS.mode, 'balanced')
   );
   const hasOwnProperty = (obj, key) => Boolean(obj && Object.prototype.hasOwnProperty.call(obj, key));
+  const requestScopePrimitive = value => {
+    if (value == null || typeof value === 'object') return '';
+    const body = text(value).trim();
+    if (!body || body === '[object Object]') return '';
+    return compact(body, 260);
+  };
+  const requestScopeNestedId = (source, label = '') => {
+    if (!source || typeof source !== 'object' || Array.isArray(source)) return [];
+    const out = [];
+    const push = (key, value) => {
+      const body = requestScopePrimitive(value);
+      if (body) out.push(`${label}.${key}:${body}`);
+    };
+    push('id', source.id);
+    push('uuid', source.uuid);
+    push('uid', source.uid);
+    push('chatId', source.chatId);
+    push('chat_id', source.chat_id);
+    push('roomId', source.roomId);
+    push('room_id', source.room_id);
+    push('conversationId', source.conversationId);
+    push('conversation_id', source.conversation_id);
+    push('sessionId', source.sessionId);
+    push('session_id', source.session_id);
+    push('threadId', source.threadId);
+    push('thread_id', source.thread_id);
+    return out;
+  };
+  const requestScopeCandidatesFromMessage = msg => {
+    if (!msg || typeof msg !== 'object') return [];
+    const out = [];
+    const push = (key, value) => {
+      const body = requestScopePrimitive(value);
+      if (body) out.push(`${key}:${body}`);
+    };
+    push('chatId', msg.chatId);
+    push('chat_id', msg.chat_id);
+    push('chatUUID', msg.chatUUID);
+    push('chat_uuid', msg.chat_uuid);
+    push('roomId', msg.roomId);
+    push('room_id', msg.room_id);
+    push('conversationId', msg.conversationId);
+    push('conversation_id', msg.conversation_id);
+    push('sessionId', msg.sessionId);
+    push('session_id', msg.session_id);
+    push('threadId', msg.threadId);
+    push('thread_id', msg.thread_id);
+    if (typeof msg.chat === 'string' || typeof msg.chat === 'number') push('chat', msg.chat);
+    out.push(...requestScopeNestedId(msg.chat, 'chat'));
+    out.push(...requestScopeNestedId(msg.room, 'room'));
+    out.push(...requestScopeNestedId(msg.conversation, 'conversation'));
+    out.push(...requestScopeNestedId(msg.session, 'session'));
+    out.push(...requestScopeNestedId(msg.thread, 'thread'));
+    out.push(...requestScopeNestedId(msg.metadata?.chat, 'metadata.chat'));
+    out.push(...requestScopeNestedId(msg.meta?.chat, 'meta.chat'));
+    return uniq(out, 32);
+  };
+  const requestScopeForMessages = (messages = [], requestType = '') => {
+    const candidates = uniq(ensureArray(messages).flatMap(requestScopeCandidatesFromMessage), 48).sort();
+    if (!candidates.length) {
+      return {
+        key: '',
+        confident: false,
+        reason: 'missing_stable_chat_scope',
+        requestType: text(requestType || '')
+      };
+    }
+    const fingerprint = candidates.join('\n');
+    return {
+      key: `scope_${stableHash64(fingerprint)}`,
+      confident: true,
+      reason: 'stable_chat_scope',
+      requestType: text(requestType || ''),
+      hints: candidates.slice(0, 6).map(value => compact(value, 80))
+    };
+  };
   const roleFromUserFlag = value => {
     if (value?.is_user === true || value?.isUser === true) return 'user';
     if (value?.is_user === false || value?.isUser === false) return 'assistant';
@@ -1775,6 +1892,22 @@ const MODE_PROFILES = Object.freeze({
       maxRaw += idf * (k1 + 1);
     });
     return clamp(maxRaw > 0 ? raw / maxRaw : 0, 0, 1, 0);
+  };
+  const bm25DocumentTokens = (value = '', limit = 180) => {
+    const cleaned = cleanSearchText(value);
+    if (!cleaned) return [];
+    const out = [];
+    cleaned.split(/\s+/).forEach(part => {
+      const token = part.trim();
+      if (token.length >= 2) out.push(token);
+      if (KO_JP_BLOCK_WORD_RE.test(token)) {
+        const maxGram = hasJapaneseText(token) ? 4 : 3;
+        for (let n = 2; n <= maxGram; n += 1) {
+          for (let i = 0; i <= token.length - n; i += 1) out.push(token.slice(i, i + n));
+        }
+      }
+    });
+    return out.slice(0, Math.max(0, Number(limit) || 180));
   };
   const stripKoreanParticles = value => text(value)
     .replace(/(께서는|에서는|에게서|으로서|으로써|에게|에서|부터|까지|처럼|보다|하고|에게는|한테|로서|로써|으로|로|은|는|이|가|을|를|와|과|랑|도|만|의)$/u, '')
@@ -2776,8 +2909,13 @@ const MODE_PROFILES = Object.freeze({
     const modeRaw = await readArg('hayaku_mode', DEFAULT_SETTINGS.mode);
     const promptModeRaw = await readArg('hayaku_prompt_mode', DEFAULT_SETTINGS.promptMode);
     const maxItemsPerAxisRaw = await readArg('hayaku_max_items_per_axis', DEFAULT_SETTINGS.maxItemsPerAxis);
+    const bm25ChannelRaw = await readArg('hayaku_bm25_channel', String(DEFAULT_SETTINGS.bm25Channel));
+    const bm25WeightRaw = await readArg('hayaku_bm25_weight', String(DEFAULT_SETTINGS.bm25Weight));
     const debugRaw = await readArg('hayaku_debug', String(DEFAULT_SETTINGS.debug));
     const mainRequestTypesRaw = await readArg('hayaku_main_request_types', DEFAULT_SETTINGS.mainRequestTypes);
+    const packetRecoveryRaw = await readArg('hayaku_packet_recovery', String(DEFAULT_SETTINGS.packetRecovery));
+    const hayaLoveFrameRaw = await readArg('hayaku_haya_love_frame', String(DEFAULT_SETTINGS.hayaLoveFrame));
+    const hayaPrefillRaw = await readArg('hayaku_haya_prefill', String(DEFAULT_SETTINGS.hayaPrefill));
     const mainRequestTypesValue = (() => {
       const raw = text(mainRequestTypesRaw).trim();
       if (!raw) return DEFAULT_SETTINGS.mainRequestTypes;
@@ -2786,6 +2924,7 @@ const MODE_PROFILES = Object.freeze({
       return raw;
     })();
     const maxItemsPerAxis = Number(maxItemsPerAxisRaw);
+    const bm25Weight = Number(bm25WeightRaw);
     Memory.settings = {
       ...DEFAULT_SETTINGS,
       enabled: falsySetting(enabledRaw) ? false : true,
@@ -2793,8 +2932,13 @@ const MODE_PROFILES = Object.freeze({
       promptMode: ['auto', 'balanced', 'full'].includes(text(promptModeRaw).trim()) ? text(promptModeRaw).trim() : DEFAULT_SETTINGS.promptMode,
       injectionCaps: MODE_INJECTION_CAPS,
       maxItemsPerAxis: Math.max(1, Math.min(12, Number.isFinite(maxItemsPerAxis) ? maxItemsPerAxis : DEFAULT_SETTINGS.maxItemsPerAxis)),
+      bm25Channel: falsySetting(bm25ChannelRaw) ? false : true,
+      bm25Weight: clamp(Number.isFinite(bm25Weight) ? bm25Weight : DEFAULT_SETTINGS.bm25Weight, 0, 0.25, DEFAULT_SETTINGS.bm25Weight),
       debug: truthySetting(debugRaw),
-      mainRequestTypes: mainRequestTypesValue
+      mainRequestTypes: mainRequestTypesValue,
+      packetRecovery: falsySetting(packetRecoveryRaw) ? false : true,
+      hayaLoveFrame: falsySetting(hayaLoveFrameRaw) ? false : true,
+      hayaPrefill: falsySetting(hayaPrefillRaw) ? false : true
     };
     delete Memory.settings.ui;
     return Memory.settings;
@@ -3085,6 +3229,403 @@ const MODE_PROFILES = Object.freeze({
     stripped = stripped
       .replace(new RegExp(`\\[HAYAKU CONTINUITY CONTEXT\\][\\s\\S]*?\\[/HAYAKU CONTINUITY CONTEXT\\]`, 'gi'), ' ');
     return options.preserveWhitespace ? stripped : stripped.trim();
+  };
+  const hasCompleteHayakuPacketMarkers = value => {
+    const body = text(value);
+    return body.includes(PACKET_START) && body.includes(PACKET_END);
+  };
+  const hasCompleteHayakuPacketInMessage = message => rawMessagePayloadCandidates(message)
+    .some(body => hasCompleteHayakuPacketMarkers(body));
+  const recoveryBoundaryIndex = (messages = []) => {
+    const list = ensureArray(messages);
+    const currentRange = latestCurrentInputRange(list);
+    if (currentRange) return currentRange.start;
+    for (let i = list.length - 1; i >= 0; i -= 1) {
+      const role = roleOf(list[i]);
+      if (role && !/user|human/i.test(role)) continue;
+      const body = messageContent(list[i]);
+      if (body.trim() && !isBackstageUserPayload(body)) return i;
+    }
+    return list.length;
+  };
+  const compactRecoveryExcerpt = (value, limit = PACKET_RECOVERY_EXCERPT_CHARS) => {
+    const clean = stripHayakuBlocks(value, { looseMarkers: true })
+      .replace(/\r\n/g, '\n')
+      .replace(/[ \t]+\n/g, '\n')
+      .trim();
+    const maxChars = Math.max(120, Number(limit) || PACKET_RECOVERY_EXCERPT_CHARS);
+    if (clean.length <= maxChars) return clean;
+    const headChars = Math.floor(maxChars * 0.62);
+    const tailChars = Math.max(120, maxChars - headChars - 18);
+    return `${clean.slice(0, headChars).trimEnd()}\n[...]\n${clean.slice(Math.max(0, clean.length - tailChars)).trimStart()}`;
+  };
+  const findLatestAssistantRecoverySource = (messages = []) => {
+    const list = ensureArray(messages);
+    const boundary = recoveryBoundaryIndex(list);
+    for (let i = Math.min(boundary - 1, list.length - 1); i >= 0; i -= 1) {
+      const message = list[i];
+      const role = roleOf(message);
+      if (!/^(assistant|model)$/i.test(role)) continue;
+      const candidates = rawMessagePayloadCandidates(message).map(body => text(body)).filter(Boolean);
+      if (!candidates.length) continue;
+      const joined = candidates.join('\n');
+      const visible = compactRecoveryExcerpt(joined);
+      if (visible.length < PACKET_RECOVERY_MIN_VISIBLE_CHARS) continue;
+      if (isBackstageUserPayload(visible)) continue;
+      if (RequestKindCore.isModuleOnlyPrompt(visible) || RequestKindCore.isHardAuxiliaryPrompt(visible)) continue;
+      return {
+        message,
+        index: i,
+        boundary,
+        role,
+        visible,
+        visibleChars: visible.length,
+        hasPacketMarkers: hasCompleteHayakuPacketInMessage(message)
+      };
+    }
+    return null;
+  };
+  const buildAssistantRecoverySource = (message, index, boundary) => {
+    const role = roleOf(message);
+    if (!/^(assistant|model)$/i.test(role)) return null;
+    const candidates = rawMessagePayloadCandidates(message).map(body => text(body)).filter(Boolean);
+    if (!candidates.length) return null;
+    const joined = candidates.join('\n');
+    const visible = compactRecoveryExcerpt(joined);
+    if (visible.length < PACKET_RECOVERY_MIN_VISIBLE_CHARS) return null;
+    if (isBackstageUserPayload(visible)) return null;
+    if (RequestKindCore.isModuleOnlyPrompt(visible) || RequestKindCore.isHardAuxiliaryPrompt(visible)) return null;
+    return {
+      message,
+      index,
+      boundary,
+      role,
+      visible,
+      visibleChars: visible.length,
+      hasPacketMarkers: hasCompleteHayakuPacketInMessage(message)
+    };
+  };
+  const compactRecoverySourceChain = (sources = [], limit = PACKET_RECOVERY_EXCERPT_CHARS) => {
+    const list = ensureArray(sources).filter(Boolean);
+    if (!list.length) return '';
+    if (list.length === 1) return compactRecoveryExcerpt(list[0].visible, limit);
+    const maxChars = Math.max(1200, Number(limit) || PACKET_RECOVERY_EXCERPT_CHARS);
+    const perSource = Math.max(520, Math.floor((maxChars - (list.length * 80)) / Math.max(1, list.length)));
+    const body = list.map((source, index) => [
+      `[Missing assistant output ${index + 1}/${list.length} | messageIndex ${source.index}]`,
+      compactRecoveryExcerpt(source.visible, perSource)
+    ].join('\n')).join('\n\n');
+    return compactRecoveryExcerpt(body, maxChars);
+  };
+  const recoveryMissingScopePhrase = (count = 1, omitted = 0, previous = false) => {
+    const safeCount = Math.max(1, Number(count || 1) || 1);
+    const skipped = Math.max(0, Number(omitted || 0) || 0);
+    const noun = previous ? 'missing previous assistant outputs' : 'missing assistant outputs';
+    return skipped > 0
+      ? `the most recent ${safeCount} ${noun} in chronological order`
+      : `all ${safeCount} ${noun} in chronological order`;
+  };
+  const recoveryPacketTypeOf = parsed => text(objectish(parsed?.meta) ? (parsed.meta.packet_type || parsed.meta.packetType || '') : '').trim().toLowerCase();
+  const isRecoveryPacketType = packetType => /^recovery[_-]?snapshot$/.test(text(packetType));
+  const recoveryPacketStateByMessage = (packets = [], boundary = Infinity) => {
+    const byMessageIndex = new Map();
+    const touch = index => {
+      if (!byMessageIndex.has(index)) {
+        byMessageIndex.set(index, {
+          messageIndex: index,
+          total: 0,
+          validCount: 0,
+          invalidCount: 0,
+          validCurrentLikeCount: 0,
+          validRecoveryCount: 0,
+          invalidReason: ''
+        });
+      }
+      return byMessageIndex.get(index);
+    };
+    ensureArray(packets).forEach(packet => {
+      const messageIndex = Number(packet?.messageIndex);
+      if (!Number.isFinite(messageIndex) || messageIndex >= boundary) return;
+      const state = touch(messageIndex);
+      state.total += 1;
+      const raw = text(materializeExtractedPacket(packet).raw || '').trim();
+      const parsed = safeJsonParse(raw, null);
+      if (!parsed || typeof parsed !== 'object') {
+        state.invalidCount += 1;
+        state.invalidReason = state.invalidReason || 'json_parse_failed';
+        return;
+      }
+      state.validCount += 1;
+      const packetType = recoveryPacketTypeOf(parsed);
+      if (isRecoveryPacketType(packetType)) state.validRecoveryCount += 1;
+      else state.validCurrentLikeCount += 1;
+    });
+    let latestAnyPacketIndex = -1;
+    let latestValidPacketIndex = -1;
+    let latestUsablePacketIndex = -1;
+    byMessageIndex.forEach((state, messageIndex) => {
+      if (state.total > 0) latestAnyPacketIndex = Math.max(latestAnyPacketIndex, messageIndex);
+      if (state.validCount > 0) latestValidPacketIndex = Math.max(latestValidPacketIndex, messageIndex);
+      if (state.validCurrentLikeCount > 0) latestUsablePacketIndex = Math.max(latestUsablePacketIndex, messageIndex);
+    });
+    return { byMessageIndex, latestAnyPacketIndex, latestValidPacketIndex, latestUsablePacketIndex };
+  };
+  const detectPacketRecovery = (messages = [], packets = [], settings = Memory.settings || DEFAULT_SETTINGS) => {
+    if (settings?.packetRecovery === false) return null;
+    const list = ensureArray(messages);
+    const boundary = recoveryBoundaryIndex(list);
+    const packetState = recoveryPacketStateByMessage(packets, boundary);
+    const latestPacketIndex = packetState.latestUsablePacketIndex;
+    const chainSources = [];
+    for (let i = Math.max(0, latestPacketIndex + 1); i < Math.min(boundary, list.length); i += 1) {
+      const source = buildAssistantRecoverySource(list[i], i, boundary);
+      if (!source) continue;
+      const state = packetState.byMessageIndex.get(i) || {};
+      const hasUnreadableCurrentPacket = Boolean(source.hasPacketMarkers && Number(state.invalidCount || 0) > 0 && Number(state.validCurrentLikeCount || 0) <= 0);
+      if (source.hasPacketMarkers && !hasUnreadableCurrentPacket) continue;
+      chainSources.push({
+        ...source,
+        hasUnreadableCurrentPacket,
+        recoveryIssue: hasUnreadableCurrentPacket ? 'unreadable_current_packet' : 'missing_packet',
+        packetParseReason: state.invalidReason || ''
+      });
+    }
+    const cappedChainSources = chainSources.length > PACKET_RECOVERY_MAX_CHAIN_MESSAGES
+      ? chainSources.slice(-PACKET_RECOVERY_MAX_CHAIN_MESSAGES)
+      : chainSources;
+    const omittedMissingMessageCount = Math.max(0, chainSources.length - cappedChainSources.length);
+    const latestFallbackSource = findLatestAssistantRecoverySource(list);
+    const latestFallbackState = latestFallbackSource ? (packetState.byMessageIndex.get(latestFallbackSource.index) || {}) : {};
+    const latestFallbackUnreadable = Boolean(
+      latestFallbackSource?.hasPacketMarkers
+      && Number(latestFallbackState.invalidCount || 0) > 0
+      && Number(latestFallbackState.validCurrentLikeCount || 0) <= 0
+    );
+    const sources = cappedChainSources.length
+      ? cappedChainSources
+      : ensureArray(latestFallbackSource).filter(source => source && (!source.hasPacketMarkers || latestFallbackUnreadable)).map(source => ({
+        ...source,
+        hasUnreadableCurrentPacket: latestFallbackUnreadable,
+        recoveryIssue: latestFallbackUnreadable ? 'unreadable_current_packet' : 'missing_packet',
+        packetParseReason: latestFallbackState.invalidReason || ''
+      }));
+    if (!sources.length) return null;
+    const latestSource = sources[sources.length - 1];
+    if (latestPacketIndex >= latestSource.index) return null;
+    const excerpt = compactRecoverySourceChain(sources);
+    if (!excerpt) return null;
+    const chain = sources.length > 1;
+    const hasUnreadableCurrentPacket = sources.some(source => source?.hasUnreadableCurrentPacket);
+    return {
+      active: true,
+      source: 'detected_missing_packet',
+      reason: hasUnreadableCurrentPacket
+        ? (chain ? 'assistant_chain_with_invalid_packet' : 'latest_assistant_invalid_packet')
+        : (chain
+        ? (latestPacketIndex >= 0 ? 'assistant_chain_after_latest_packet' : 'assistant_chain_without_packet')
+        : (latestPacketIndex >= 0 ? 'latest_assistant_after_latest_packet' : 'latest_assistant_without_packet')),
+      recoveryIssue: hasUnreadableCurrentPacket ? 'unreadable_current_packet' : 'missing_packet',
+      invalidPacketCount: sources.reduce((sum, source) => sum + (source?.hasUnreadableCurrentPacket ? 1 : 0), 0),
+      latestAnyPacketIndex: packetState.latestAnyPacketIndex,
+      latestValidPacketIndex: packetState.latestValidPacketIndex,
+      messageIndex: latestSource.index,
+      firstMissingMessageIndex: sources[0].index,
+      messageIndices: sources.map(source => source.index),
+      missingMessageCount: sources.length,
+      totalMissingMessageCount: chainSources.length || sources.length,
+      omittedMissingMessageCount,
+      latestPacketIndex,
+      boundaryIndex: latestSource.boundary,
+      messageCount: list.length,
+      distanceFromLatest: Math.max(0, list.length - 1 - latestSource.index),
+      visibleChars: sources.reduce((sum, source) => sum + Number(source.visibleChars || 0), 0),
+      excerpt
+    };
+  };
+  const isDetectedPacketRecoveryRequest = recovery => {
+    if (recovery?.active !== true) return false;
+    if (recovery.source !== 'detected_missing_packet') return false;
+    if (!/^(latest_assistant_without_packet|latest_assistant_after_latest_packet|assistant_chain_without_packet|assistant_chain_after_latest_packet|latest_assistant_invalid_packet|assistant_chain_with_invalid_packet)$/.test(text(recovery.reason))) return false;
+    if (!Number.isFinite(Number(recovery.messageIndex))) return false;
+    if (!Number.isFinite(Number(recovery.boundaryIndex))) return false;
+    if (text(recovery.excerpt).trim().length < PACKET_RECOVERY_MIN_VISIBLE_CHARS) return false;
+    return true;
+  };
+  const visibleRepeatGuardClean = value => {
+    let clean = stripHayakuBlocks(value, { looseMarkers: true })
+      .replace(/<Thoughts>[\s\S]*?<\/Thoughts>/gi, ' ')
+      .replace(/<GigaTrans>[\s\S]*?<\/GigaTrans>/gi, ' ')
+      .replace(/<GT-CTRL\s*\/?>/gi, ' ')
+      .replace(/<lb-[^>]*>[\s\S]*?<\/lb-[^>]+>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\r\n/g, '\n')
+      .replace(/[ \t]+\n/g, '\n')
+      .replace(/[ \t]{2,}/g, ' ')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+    const responseAt = clean.search(/(?:^|\n)\s*#\s*(?:Response|응답)\b/i);
+    if (responseAt >= 0) clean = clean.slice(responseAt).trim();
+    return clean;
+  };
+  const normalizeVisibleRepeat = value => text(value)
+    .replace(/[“”„‟]/g, '"')
+    .replace(/[‘’‚‛]/g, "'")
+    .replace(/\s+/g, ' ')
+    .replace(/[.!?。！？…~]+$/g, '')
+    .trim()
+    .toLowerCase();
+  const isVisibleRepeatBoilerplate = value => /^(?:#{1,6}\s|[-*_]{3,}\s*$)|\b(?:chatindex|volume\s+\d|chapter\s+\d|response|literal translation|cultural overlay|private session|providing result now)\b|^⏱/i.test(text(value).trim());
+  const splitVisibleRepeatSentences = value => visibleRepeatGuardClean(value)
+    .split(/[\n。！？!?]+|(?<!\d)\.(?!\d)/g)
+    .map(line => line.replace(/^[\s>*_`#\-•]+|[\s*_`]+$/g, '').replace(/\s+/g, ' ').trim())
+    .filter(line => line.length >= 18 && line.length <= 220 && !isVisibleRepeatBoilerplate(line));
+  const extractVisibleRepeatDialogues = value => {
+    const clean = visibleRepeatGuardClean(value);
+    const out = [];
+    const patterns = [
+      /"([^"\n]{3,180})"/g,
+      /“([^”\n]{3,180})”/g,
+      /「([^」\n]{3,180})」/g,
+      /『([^』\n]{3,180})』/g,
+      /'([^'\n]{3,180})'/g
+    ];
+    patterns.forEach(re => {
+      let match = null;
+      while ((match = re.exec(clean))) {
+        const quote = text(match[1]).replace(/\s+/g, ' ').trim();
+        if (quote.length >= 3 && !isVisibleRepeatBoilerplate(quote)) out.push(quote);
+      }
+    });
+    return out;
+  };
+  const recentAssistantVisibleSources = (messages = [], limit = VISIBLE_REPEAT_GUARD_RECENT_MESSAGES) => {
+    const list = ensureArray(messages);
+    const boundary = recoveryBoundaryIndex(list);
+    const sources = [];
+    for (let i = Math.min(boundary - 1, list.length - 1); i >= 0 && sources.length < limit; i -= 1) {
+      const role = roleOf(list[i]);
+      if (!/^(assistant|model)$/i.test(role)) continue;
+      const joined = rawMessagePayloadCandidates(list[i]).map(body => text(body)).filter(Boolean).join('\n');
+      const visible = visibleRepeatGuardClean(joined);
+      if (visible.length < 80) continue;
+      sources.push({ index: i, visible, visibleChars: visible.length });
+    }
+    return sources.reverse();
+  };
+  const repeatedVisibleItems = (rows, options = {}) => {
+    const minKeyLength = Math.max(1, Number(options.minKeyLength || 6) || 6);
+    const map = new Map();
+    ensureArray(rows).forEach(row => {
+      const key = normalizeVisibleRepeat(row.text);
+      if (!key || key.length < minKeyLength) return;
+      if (!map.has(key)) map.set(key, { text: row.text, count: 0, messages: new Set() });
+      const item = map.get(key);
+      item.count += 1;
+      item.messages.add(row.messageIndex);
+    });
+    return Array.from(map.values())
+      .filter(item => item.count >= 2 && item.messages.size >= 1)
+      .sort((a, b) => b.messages.size - a.messages.size || b.count - a.count || b.text.length - a.text.length);
+  };
+  const makeVisibleRepeatPatternGuardRow = (kind = 'repeat', summary = '', snippets = [], sourceCount = 0) => {
+    const sampleCount = ensureArray(snippets).map(snippet => compact(snippet, 110)).filter(Boolean).slice(0, VISIBLE_REPEAT_GUARD_MAX_SNIPPETS).length;
+    const sampleText = sampleCount ? ` ${sampleCount} recent repeated sample(s) were detected for private comparison only; do not quote, paraphrase, or store those samples in packet fields.` : '';
+    const packetText = ` This is a short-lived correction guard: if the current visible response avoids the pattern, omit it or mark it status "resolved", time_scope "past", with resolved_reason; otherwise preserve it in current_snapshot meta.pattern_guard with expires_after_turns ${PATTERN_GUARD_DEFAULT_EXPIRES_AFTER_TURNS} and evidence "${PATTERN_GUARD_NEUTRAL_EVIDENCE}". Do not copy sample text into the packet or visible output.`;
+    const publicText = compact(`${summary}${sampleText}${packetText} Advance the scene with a new consequence, choice, reaction angle, or information beat instead of restating the same line.`, 980);
+    const id = `visible_repeat_${kind}_${stableHash64(publicText).slice(0, 12)}`;
+    const score = kind === 'dialogue' ? 1.18 : 1.08;
+    return {
+      axis: 'planner',
+      category: 'pattern_guard',
+      id,
+      publicRef: `planner.pattern_guard.${id}`,
+      publicText,
+      publicProfile: '',
+      importance: 0.86,
+      score,
+      updatedAt: now(),
+      lifecycle: {
+        status: 'active',
+        timeScope: 'current',
+        confidence: 0.84,
+        evidence: PATTERN_GUARD_NEUTRAL_EVIDENCE,
+        expiresAfterTurns: PATTERN_GUARD_DEFAULT_EXPIRES_AFTER_TURNS,
+        resolveWhen: PATTERN_GUARD_DEFAULT_RESOLVE_WHEN
+      },
+      retrieval: {
+        subject: 'visible repeat guard',
+        importance: 0.86,
+        pressure: 0.38,
+        salience: 0.92,
+        impression: 0,
+        priorityTerms: ['repeat', 'verbatim', 'dialogue', 'sentence_skeleton', 'expires_after_turns', 'resolved', kind],
+        semanticFrameTokens: ['pattern_guard', 'anti_repetition', 'short_lived_guard', kind],
+        entityNames: [],
+        relationEndpoints: [],
+        sourceEvidence: null
+      },
+      _metaGuard: { forced: true, runtime: true, visibleRepeat: true, kind, sourceCount, sampleCount, expiresAfterTurns: PATTERN_GUARD_DEFAULT_EXPIRES_AFTER_TURNS }
+    };
+  };
+  const buildVisibleRepeatGuards = (messages = []) => {
+    const sources = recentAssistantVisibleSources(messages);
+    if (sources.length < 2) return [];
+    const sentenceRows = [];
+    const dialogueRows = [];
+    const boilerplateRows = [];
+    sources.forEach(source => {
+      splitVisibleRepeatSentences(source.visible).forEach(sentence => sentenceRows.push({ messageIndex: source.index, text: sentence }));
+      extractVisibleRepeatDialogues(source.visible).forEach(dialogue => dialogueRows.push({ messageIndex: source.index, text: dialogue }));
+      visibleRepeatGuardClean(source.visible)
+        .split(/\n+/g)
+        .map(line => line.replace(/\s+/g, ' ').trim())
+        .filter(line => line.length >= 8 && line.length <= 120 && isVisibleRepeatBoilerplate(line))
+        .forEach(line => boilerplateRows.push({ messageIndex: source.index, text: line }));
+    });
+    const repeatedDialogues = repeatedVisibleItems(dialogueRows, { minKeyLength: 3 }).filter(item => item.messages.size >= 2 || item.count >= 2);
+    const repeatedSentences = repeatedVisibleItems(sentenceRows).filter(item => item.messages.size >= 2);
+    const repeatedBoilerplate = repeatedVisibleItems(boilerplateRows).filter(item => item.messages.size >= 3);
+    const guards = [];
+    if (repeatedDialogues.length) {
+      guards.push(makeVisibleRepeatPatternGuardRow(
+        'dialogue',
+        'Avoid reusing recent direct dialogue verbatim unless the user explicitly asks for an exact echo.',
+        repeatedDialogues.slice(0, VISIBLE_REPEAT_GUARD_MAX_SNIPPETS).map(item => item.text),
+        sources.length
+      ));
+    }
+    if (repeatedSentences.length) {
+      guards.push(makeVisibleRepeatPatternGuardRow(
+        'sentence',
+        'Avoid repeating recent narration sentences or near-identical reaction beats; keep the fact but change the beat and syntax.',
+        repeatedSentences.slice(0, VISIBLE_REPEAT_GUARD_MAX_SNIPPETS).map(item => item.text),
+        sources.length
+      ));
+    }
+    if (repeatedBoilerplate.length) {
+      guards.push(makeVisibleRepeatPatternGuardRow(
+        'boilerplate',
+        'Do not let repeated headings, status labels, helper boilerplate, or interface scaffolding substitute for fresh scene progress; keep only user-required template parts.',
+        repeatedBoilerplate.slice(0, VISIBLE_REPEAT_GUARD_MAX_SNIPPETS).map(item => item.text),
+        sources.length
+      ));
+    }
+    return guards.slice(0, VISIBLE_REPEAT_GUARD_MAX_ROWS);
+  };
+  const attachVisibleRepeatGuards = (selected = {}, runtimeGuards = []) => {
+    const guards = ensureArray(runtimeGuards).filter(Boolean);
+    if (!guards.length) return selected;
+    const seen = new Set();
+    const metaGuards = [...guards, ...ensureArray(selected.metaGuards)]
+      .filter(row => {
+        const key = rowIdentityKey(row) || normalizeKey([row.category, row.publicText, row.id].filter(Boolean).join('|'));
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .sort((a, b) => Number(b.score || 0) - Number(a.score || 0) || Number(b.importance || 0) - Number(a.importance || 0) || Number(b.updatedAt || 0) - Number(a.updatedAt || 0))
+      .slice(0, 5);
+    return { ...selected, metaGuards };
   };
   const stripHayakuTextPayload = (value, options = {}) => {
     if (typeof value !== 'string') return { value, changed: false, removed: 0 };
@@ -3423,6 +3964,258 @@ const MODE_PROFILES = Object.freeze({
       }
     };
   };
+  const PREVIOUS_TURN_RECALL_BRIDGE_CONTINUATION_RE = /(?:^|\b)(?:계속|이어|이어서|다음|좋아|응|그래|삽화|그려|continue|go\s*on|next|ok|okay|yes)(?:\b|$)/i;
+  const PREVIOUS_TURN_RECALL_BRIDGE_RESET_RE = /(?:새\s*장면|장면\s*전환|다른\s*장면|다른\s*장소|시간\s*(?:건너|스킵|점프)|며칠\s*후|몇\s*시간\s*후|다음\s*날|한편|new\s*scene|scene\s*change|timeskip|time\s*skip|meanwhile|cut\s*to|next\s*day)/i;
+  const previousTurnBridgeMode = query => {
+    const raw = text(query).trim();
+    if (!raw) return { use: true, mode: 'strong', reason: 'empty_query' };
+    if (PREVIOUS_TURN_RECALL_BRIDGE_RESET_RE.test(raw)) return { use: false, mode: 'none', reason: 'scene_shift_query' };
+    const terms = packetCheapTerms(raw);
+    if (PREVIOUS_TURN_RECALL_BRIDGE_CONTINUATION_RE.test(raw)) return { use: true, mode: 'strong', reason: 'continuation_query' };
+    if (raw.length <= PREVIOUS_TURN_RECALL_BRIDGE_SHORT_QUERY_CHARS || terms.length <= 3) return { use: true, mode: 'strong', reason: 'short_or_sparse_query' };
+    return { use: true, mode: 'light', reason: 'contextual_light_bridge' };
+  };
+  const latestCurrentSnapshotPacket = (messages = [], packets = []) => {
+    const boundary = recoveryBoundaryIndex(messages);
+    let best = null;
+    ensureArray(packets).forEach((packet, packetIndex) => {
+      const messageIndex = Number(packet?.messageIndex);
+      if (!Number.isFinite(messageIndex) || messageIndex >= boundary) return;
+      const materialized = materializeExtractedPacket(packet);
+      const raw = text(materialized.raw || '').trim();
+      if (!raw) return;
+      const parsed = safeJsonParse(raw, null);
+      if (!objectish(parsed)) return;
+      const packetType = recoveryPacketTypeOf(parsed) || 'current_snapshot';
+      if (isRecoveryPacketType(packetType)) return;
+      const rank = messageIndex * 100000 + packetIndex;
+      if (!best || rank > best.rank) {
+        best = { packet: materialized, parsed, packetType, messageIndex, packetIndex, rank };
+      }
+    });
+    return best;
+  };
+  const previousTurnBridgeItemText = value => {
+    if (value == null) return '';
+    if (Array.isArray(value)) return value.map(previousTurnBridgeItemText).filter(Boolean).join(' / ');
+    if (objectish(value)) {
+      const direct = value.summary || value.text || value.label || value.title || value.name || value.state || value.current_state || value.currentState
+        || value.event || value.delta || value.thread || value.rule || value.direction || value.hook || value.invitation || value.location || value.time;
+      if (direct) return previousTurnBridgeItemText(direct);
+      return compact(itemText(value), 180);
+    }
+    return text(value);
+  };
+  const previousTurnBridgeList = (values = [], limit = 8, maxChars = 140) => {
+    const out = [];
+    const seen = new Set();
+    const visit = value => {
+      if (value == null || out.length >= limit) return;
+      if (Array.isArray(value)) {
+        value.forEach(visit);
+        return;
+      }
+      const body = compact(previousTurnBridgeItemText(value), maxChars);
+      const key = normalizeKey(body);
+      if (!key || seen.has(key)) return;
+      seen.add(key);
+      out.push(body);
+    };
+    visit(values);
+    return out;
+  };
+  const PRONOUN_RECALL_QUERY_RE = /(?:그녀|그가|그는|그를|그에게|그 사람|그 애|걔|저 사람|이 사람|she|her|he|him|they|them|彼女|彼|あの子)/i;
+  const PRONOUN_RECALL_FEMININE_RE = /(?:그녀|she|her|彼女)/i;
+  const PRONOUN_RECALL_MASCULINE_RE = /(?:그가|그는|그를|그에게|he|him|彼)(?!女)/i;
+  const PRONOUN_RECALL_NEUTRAL_RE = /(?:그 사람|그 애|걔|저 사람|이 사람|they|them|あの子)/i;
+  const PRONOUN_RECALL_SPEECH_RE = /(?:말했|말하|대답|속삭|외치|중얼|물었|묻|said|says|speak|spoke|ask|asked|whisper|彼女|言っ|言う|答え|尋ね)/i;
+  const PRONOUN_RECALL_FEMININE_HINT_RE = /(?:그녀|여성|여자|소녀|female|woman|girl|she\/her|彼女|女)/i;
+  const PRONOUN_RECALL_MASCULINE_HINT_RE = /(?:남성|남자|소년|male|man|boy|he\/him|彼\b|男)/i;
+  const pronounRecallIntent = query => {
+    const raw = text(query);
+    if (!PRONOUN_RECALL_QUERY_RE.test(raw)) return { active: false, kind: '', label: '' };
+    if (PRONOUN_RECALL_FEMININE_RE.test(raw)) return { active: true, kind: 'feminine', label: 'she/her' };
+    if (PRONOUN_RECALL_MASCULINE_RE.test(raw)) return { active: true, kind: 'masculine', label: 'he/him' };
+    if (PRONOUN_RECALL_NEUTRAL_RE.test(raw)) return { active: true, kind: 'neutral', label: 'that person' };
+    return { active: true, kind: 'ambiguous', label: 'pronoun' };
+  };
+  const pronounCandidateName = value => text(value?.name || value?.title || value?.label || value || '').trim();
+  const pronounCandidateGender = (candidate = {}) => {
+    const body = text([
+      candidate.name,
+      candidate.text,
+      candidate.item?.gender,
+      candidate.item?.sex,
+      candidate.item?.pronouns,
+      candidate.item?.identity,
+      candidate.item?.current_state,
+      candidate.item?.currentState,
+      candidate.item?.condition,
+      candidate.item?.summary
+    ].filter(Boolean).join(' '));
+    if (PRONOUN_RECALL_FEMININE_HINT_RE.test(body)) return 'feminine';
+    if (PRONOUN_RECALL_MASCULINE_HINT_RE.test(body)) return 'masculine';
+    return '';
+  };
+  const samePronounEntityName = (left = '', right = '') => {
+    const a = normalizedSurface(left);
+    const b = normalizedSurface(right);
+    return Boolean(a && b && a === b);
+  };
+  const buildPronounRecallBridge = (query = '', parsed = {}, context = {}) => {
+    const intent = pronounRecallIntent(query);
+    if (!intent.active) return { active: false, intent, candidates: [], text: '' };
+    const meta = context.meta || (objectish(parsed.meta) ? parsed.meta : {});
+    const entity = context.entity || (objectish(parsed.entity) ? parsed.entity : {});
+    const summaryMemory = context.summaryMemory || {};
+    const sceneText = text([
+      meta.turn_anchor,
+      meta.turnAnchor,
+      summaryMemory.summary,
+      summaryMemory.text,
+      summaryMemory.recallAnchors,
+      summaryMemory.mentionedEntityNames,
+      meta.visible_participants,
+      meta.visibleParticipants,
+      meta.pov_entity,
+      meta.povEntity,
+      meta.active_speaker,
+      meta.activeSpeaker
+    ].filter(Boolean).join(' '));
+    const povNames = previousTurnBridgeList([meta.pov_entity, meta.povEntity], 4, 80);
+    const activeSpeakerNames = previousTurnBridgeList([meta.active_speaker, meta.activeSpeaker], 4, 80);
+    const visibleNames = previousTurnBridgeList([meta.visible_participants, meta.visibleParticipants], 16, 80);
+    const mentionedNames = previousTurnBridgeList([summaryMemory.mentionedEntityNames, summaryMemory.mentioned_entity_names], 16, 80);
+    const map = new Map();
+    const ensure = (name, item = null, source = '') => {
+      const clean = pronounCandidateName(name);
+      if (!clean) return null;
+      const key = normalizedSurface(clean);
+      if (!key) return null;
+      if (!map.has(key)) map.set(key, { name: clean, item: item || null, text: previousTurnBridgeItemText(item || clean), sources: new Set(), score: 0, reasons: [] });
+      const row = map.get(key);
+      if (item && !row.item) row.item = item;
+      if (item) row.text = previousTurnBridgeItemText(item);
+      if (source) row.sources.add(source);
+      return row;
+    };
+    ensureArray(entity.characters).forEach(item => ensure(item, item, 'character'));
+    [...povNames, ...activeSpeakerNames, ...visibleNames, ...mentionedNames].forEach(name => ensure(name, null, 'meta'));
+    const speechIntent = PRONOUN_RECALL_SPEECH_RE.test(text(query));
+    const nameInList = (name, list) => list.some(value => samePronounEntityName(name, value));
+    const rows = Array.from(map.values()).map(row => {
+      let score = 0.12;
+      const reasons = [];
+      const addScore = (value, reason) => {
+        score += value;
+        reasons.push(reason);
+      };
+      if (row.sources.has('character')) addScore(0.10, 'character_row');
+      if (nameInList(row.name, povNames)) addScore(0.24, 'pov_entity');
+      if (nameInList(row.name, activeSpeakerNames)) addScore(speechIntent ? 0.16 : 0.10, 'active_speaker');
+      if (nameInList(row.name, visibleNames)) addScore(0.12, 'visible_participant');
+      if (nameInList(row.name, mentionedNames)) addScore(0.10, 'mentioned_entity');
+      if (queryMentionsAny(sceneText, [row.name])) addScore(0.20, 'scene_text');
+      const gender = pronounCandidateGender(row);
+      if (intent.kind === 'feminine' && gender === 'feminine') addScore(0.24, 'feminine_hint');
+      if (intent.kind === 'masculine' && gender === 'masculine') addScore(0.24, 'masculine_hint');
+      if (intent.kind === 'feminine' && gender === 'masculine') score -= 0.28;
+      if (intent.kind === 'masculine' && gender === 'feminine') score -= 0.28;
+      if (intent.kind === 'neutral' || intent.kind === 'ambiguous') addScore(0.04, 'neutral_pronoun');
+      return {
+        name: row.name,
+        gender,
+        score: clamp(score, 0, 0.95, 0),
+        confidence: clamp(score, 0.15, 0.92, 0.35),
+        reasons: uniq(reasons, 8)
+      };
+    }).filter(row => row.score > 0.1)
+      .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
+      .slice(0, PRONOUN_RECALL_BRIDGE_MAX_CANDIDATES);
+    if (!rows.length) return { active: false, intent, candidates: [], text: '' };
+    const topScore = rows[0]?.score || 0;
+    const ambiguousTop = rows.length > 1 && topScore - rows[1].score < 0.08;
+    if (rows.length > 1 && topScore - rows[1].score < 0.08) {
+      rows.forEach(row => {
+        row.confidence = clamp(row.confidence * 0.78, 0.15, 0.84, row.confidence);
+      });
+      rows[0].reasons = uniq([...rows[0].reasons, 'ambiguous_close_candidate'], 8);
+    }
+    let previousConfidence = 1;
+    rows.forEach((row, index) => {
+      const maxForRank = index === 0 ? (ambiguousTop ? 0.84 : 0.92) : Math.max(0.15, previousConfidence - 0.01);
+      row.confidence = clamp(row.confidence, 0.15, maxForRank, row.confidence);
+      previousConfidence = row.confidence;
+    });
+    const textLine = `pronoun_candidates: likely ${intent.label} referent -> ${rows.map(row => `${row.name}(confidence:${Number(row.confidence).toFixed(2)}, reasons:${row.reasons.slice(0, 4).join('+') || 'scene_anchor'})`).join(' | ')}`;
+    return { active: true, intent, candidates: rows, text: textLine };
+  };
+  const buildPreviousTurnRecallBridge = (messages = [], packets = [], query = '', settings = Memory.settings || DEFAULT_SETTINGS) => {
+    const modeInfo = previousTurnBridgeMode(query);
+    if (!modeInfo.use) {
+      return { active: false, mode: modeInfo.mode, reason: modeInfo.reason, query: text(query), text: '', chars: 0 };
+    }
+    const latest = latestCurrentSnapshotPacket(messages, packets);
+    if (!latest) return { active: false, mode: modeInfo.mode, reason: 'no_previous_current_snapshot', query: text(query), text: '', chars: 0 };
+    const parsed = latest.parsed || {};
+    const meta = objectish(parsed.meta) ? parsed.meta : {};
+    const rawSummaryMemory = meta.summary_memory ?? meta.summaryMemory;
+    const summaryMemory = objectish(rawSummaryMemory) ? rawSummaryMemory : (rawSummaryMemory ? { summary: rawSummaryMemory } : {});
+    const entity = objectish(parsed.entity) ? parsed.entity : {};
+    const world = objectish(parsed.world) ? parsed.world : {};
+    const narrative = objectish(parsed.narrative) ? parsed.narrative : {};
+    const planner = objectish(parsed.planner) ? parsed.planner : {};
+    const pronounBridge = buildPronounRecallBridge(query, parsed, { meta, summaryMemory, entity, world, narrative, planner });
+    const lines = [];
+    const add = (label, value, max = 220) => {
+      const body = compact(previousTurnBridgeItemText(value), max);
+      if (body) lines.push(`${label}: ${body}`);
+    };
+    const addList = (label, values, limit = 8, max = 120) => {
+      const list = previousTurnBridgeList(values, limit, max);
+      if (list.length) lines.push(`${label}: ${list.join(' | ')}`);
+    };
+    add('scene_id', meta.scene_id || meta.sceneId, 80);
+    add('turn_anchor', meta.turn_anchor || meta.turnAnchor, 220);
+    add('summary', summaryMemory.summary || summaryMemory.text, modeInfo.mode === 'strong' ? 420 : 260);
+    addList('recall_anchors', [summaryMemory.recallAnchors, summaryMemory.recall_anchors], 10, 120);
+    addList('canonical_anchors', [summaryMemory.canonicalAnchors, summaryMemory.canonical_anchors, summaryMemory.canonicalTokens, summaryMemory.canonical_tokens, meta.canonicalAnchors, meta.canonical_anchors], 12, 80);
+    addList('mentioned_entities', [summaryMemory.mentionedEntityNames, summaryMemory.mentioned_entity_names, meta.visible_participants, meta.visibleParticipants, meta.pov_entity, meta.povEntity, meta.active_speaker, meta.activeSpeaker], 16, 80);
+    if (pronounBridge.active && pronounBridge.text) lines.push(pronounBridge.text);
+    add('scene_visibility', meta.scene_visibility || meta.sceneVisibility, 80);
+    add('world_place_time', [world.location, world.time, world.scene_type || world.sceneType].filter(Boolean).join(' / '), 180);
+    addList('world_active_events', world.active_events || world.activeEvents, modeInfo.mode === 'strong' ? 5 : 3, 150);
+    addList('characters', ensureArray(entity.characters).map(item => [item?.name, item?.current_state || item?.currentState || item?.state || item?.summary, item?.condition, ensureArray(item?.carrying).join('/')].filter(Boolean).join(': ')), modeInfo.mode === 'strong' ? 5 : 3, 170);
+    addList('relations', ensureArray(entity.relations).map(item => [item?.from && item?.to ? `${item.from}->${item.to}` : '', item?.state || item?.dynamic].filter(Boolean).join(': ')), modeInfo.mode === 'strong' ? 4 : 2, 150);
+    add('narrative_state', [narrative.scene_phase || narrative.scenePhase, narrative.current_arc || narrative.currentArc, narrative.dominant_mood || narrative.dominantMood, narrative.pacing, narrative.time_elapsed || narrative.timeElapsed].filter(Boolean).join(' / '), 220);
+    addList('conflict_traces', narrative.conflict_traces || narrative.conflictTraces, modeInfo.mode === 'strong' ? 4 : 2, 170);
+    addList('scene_deltas', narrative.scene_deltas || narrative.sceneDeltas, modeInfo.mode === 'strong' ? 4 : 2, 170);
+    addList('continuity_locks', planner.continuity_locks || planner.continuityLocks, modeInfo.mode === 'strong' ? 5 : 3, 160);
+    addList('do_not_resolve_yet', planner.do_not_resolve_yet || planner.doNotResolveYet, modeInfo.mode === 'strong' ? 5 : 3, 160);
+    addList('next_direction', planner.next_direction || planner.nextDirection, modeInfo.mode === 'strong' ? 4 : 2, 170);
+    addList('open_invitations', planner.open_invitations || planner.openInvitations, modeInfo.mode === 'strong' ? 4 : 2, 170);
+    const limit = modeInfo.mode === 'strong' ? PREVIOUS_TURN_RECALL_BRIDGE_STRONG_CHARS : PREVIOUS_TURN_RECALL_BRIDGE_LIGHT_CHARS;
+    const bridgeText = compact(lines.join('\n'), limit);
+    if (!bridgeText || bridgeText.length < 24) return { active: false, mode: modeInfo.mode, reason: 'empty_previous_turn_bridge', query: text(query), text: '', chars: 0 };
+    const retrievalQuery = [text(query).trim(), bridgeText].filter(Boolean).join('\n');
+    return {
+      active: true,
+      mode: modeInfo.mode,
+      reason: modeInfo.reason,
+      query: retrievalQuery,
+      text: bridgeText,
+      chars: bridgeText.length,
+      sourceMessageIndex: latest.messageIndex,
+      packetHash: latest.packet?.hash || '',
+      packetType: latest.packetType,
+      sceneId: text(meta.scene_id || meta.sceneId || ''),
+      pronounBridge: pronounBridge.active ? {
+        intent: pronounBridge.intent,
+        candidates: pronounBridge.candidates
+      } : null,
+      preview: compact(bridgeText, 260)
+    };
+  };
   const lightweightPacketRaw = raw => {
     const parsed = safeJsonParse(raw, null);
     if (!parsed || typeof parsed !== 'object') return raw;
@@ -3530,7 +4323,27 @@ const MODE_PROFILES = Object.freeze({
     '"characters"', '"relations"', '"importance"'
   ]);
   const PACKET_SCAN_CACHE_LIMIT = 2400;
-  const packetScanCacheKey = (message = {}, payloadBody = '', candidateIndex = 0) => {
+  const syncPacketScanCacheScope = (scope = {}) => {
+    const scopeKey = scope?.confident ? text(scope.key || '') : '';
+    const previousScopeKey = text(Memory.packetScanScopeKey || '');
+    const previousSize = Memory.packetScanCache?.size || 0;
+    let cleared = false;
+    if (!scopeKey || (previousScopeKey && previousScopeKey !== scopeKey)) {
+      try { Memory.packetScanCache?.clear?.(); } catch (_) {}
+      cleared = previousSize > 0;
+    }
+    Memory.packetScanScopeKey = scopeKey;
+    Memory.packetScanScopeConfident = Boolean(scopeKey);
+    return {
+      enabled: Boolean(scopeKey),
+      scopeKey,
+      scopeConfident: Boolean(scopeKey),
+      cleared,
+      previousScopeKey,
+      previousSize
+    };
+  };
+  const packetScanCacheKey = (message = {}, payloadBody = '', candidateIndex = 0, scopeKey = '') => {
     const body = text(payloadBody || '');
     const role = roleOf(message) || '';
     const ids = mergeValues([
@@ -3547,7 +4360,8 @@ const MODE_PROFILES = Object.freeze({
       message.generationId
     ], 16).join('|');
     const edgeHash = stableHash64([body.slice(0, 192), body.slice(Math.max(0, body.length - 192))].join('\n'));
-    return stableHash64([PLUGIN_VERSION, role, ids, candidateIndex, body.length, edgeHash].join('\u0001'));
+    const bodyHash = stableHash64(body);
+    return stableHash64([PLUGIN_VERSION, scopeKey, role, ids, candidateIndex, body.length, edgeHash, bodyHash].join('\u0001'));
   };
   const getPacketScanCacheEntry = key => {
     const cache = Memory.packetScanCache;
@@ -3639,9 +4453,11 @@ const MODE_PROFILES = Object.freeze({
     }
   };
 
-  const extractPackets = (messages = []) => {
+  const extractPackets = (messages = [], requestScope = requestScopeForMessages(messages)) => {
     const packets = [];
     const list = ensureArray(messages);
+    const cacheScope = syncPacketScanCacheScope(requestScope);
+    const cacheEnabled = cacheScope.enabled === true;
     const stats = {
       messages: list.length,
       messagesScanned: 0,
@@ -3654,6 +4470,10 @@ const MODE_PROFILES = Object.freeze({
       lazyPackets: 0,
       scanStartIndex: 0,
       cacheSize: Memory.packetScanCache?.size || 0,
+      cacheEnabled,
+      cacheScopeKey: cacheScope.scopeKey || '',
+      cacheScopeConfident: cacheScope.scopeConfident === true,
+      cacheScopeCleared: cacheScope.cleared === true,
       mode: effectivePerformanceModeOf(Memory.settings),
       configuredMode: text(Memory.settings?.mode || '')
     };
@@ -3680,9 +4500,9 @@ const MODE_PROFILES = Object.freeze({
         const payloadBody = text(body || '');
         if (!payloadBody || payloadBody.includes(SIDE_WRITE_TAIL_MARKER)) return;
         stats.payloadCandidates += 1;
-        const cacheKey = packetScanCacheKey(message, payloadBody, candidateIndex);
+        const cacheKey = cacheEnabled ? packetScanCacheKey(message, payloadBody, candidateIndex, cacheScope.scopeKey) : '';
         let templates = null;
-        const cached = getPacketScanCacheEntry(cacheKey);
+        const cached = cacheEnabled ? getPacketScanCacheEntry(cacheKey) : null;
         if (cached && Array.isArray(cached.templates)) {
           templates = cached.templates;
           stats.cacheHits += 1;
@@ -3696,7 +4516,7 @@ const MODE_PROFILES = Object.freeze({
           };
           scanPacketMarkersInBody(payloadBody, PACKET_START, PACKET_END, 'html_comment', pushTemplate);
           scanPacketMarkersInBody(payloadBody, `<<< ${PACKET_START} >>>`, `<<< ${PACKET_END} >>>`, 'visible_marker', pushTemplate);
-          setPacketScanCacheEntry(cacheKey, { templates, payloadLength: payloadBody.length, updatedAt: now() });
+          if (cacheEnabled) setPacketScanCacheEntry(cacheKey, { templates, payloadLength: payloadBody.length, scopeKey: cacheScope.scopeKey, updatedAt: now() });
         }
         for (const template of templates) {
           const packet = {
@@ -5113,19 +5933,38 @@ const MODE_PROFILES = Object.freeze({
   };
   const retrievalBm25Document = row => {
     const r = row.retrieval || {};
-    return mergeValues([
-      r.tokens,
-      r.surfaceTokens,
-      r.subjectTokens,
-      r.locatorTokens,
-      r.priorityTerms,
-      r.conceptTokens,
-      r.semanticFrameTokens,
-      r.crossLingualTokens,
-      r.canonicalAnchors,
-      r.sourceEvidenceTokens,
-      row.publicText
-    ], 620).map(token => normalizeKey(token)).filter(Boolean);
+    const out = [];
+    const pushToken = (token, weight = 1) => {
+      const key = normalizeKey(token);
+      if (!key) return;
+      const count = Math.max(1, Math.min(5, Math.floor(Number(weight) || 1)));
+      for (let i = 0; i < count; i += 1) out.push(key);
+    };
+    const pushValue = (value, weight = 1, limit = 180) => {
+      const walk = source => {
+        if (source == null) return;
+        if (Array.isArray(source)) {
+          source.forEach(walk);
+          return;
+        }
+        if (objectish(source)) {
+          const body = itemText(source);
+          if (body) bm25DocumentTokens(body, limit).forEach(token => pushToken(token, weight));
+          return;
+        }
+        const body = text(source);
+        if (!body.trim()) return;
+        pushToken(body, weight);
+        bm25DocumentTokens(body, limit).forEach(token => pushToken(token, weight));
+      };
+      walk(value);
+    };
+    pushValue([r.canonicalAnchors, r.crossLingualTokens], 4, 160);
+    pushValue([r.subjectTokens, r.relationEndpoints, r.entityNames, r.subject], 3, 160);
+    pushValue([r.priorityTerms, r.locatorTokens, row.publicRef], 2, 220);
+    pushValue([r.surfaceTokens, r.tokens, row.publicText, row.publicProfile], 1, 360);
+    pushValue([r.conceptTokens, r.semanticFrameTokens, r.sourceEvidenceTokens], 1, 220);
+    return out.slice(0, 900);
   };
   const buildRetrievalCorpus = rows => {
     const docs = ensureArray(rows).map(retrievalBm25Document);
@@ -5137,6 +5976,10 @@ const MODE_PROFILES = Object.freeze({
       ? docs.reduce((sum, doc) => sum + doc.length, 0) / docs.length
       : 1;
     return { docs, docFreq, avgDocLen, size: docs.length };
+  };
+  const retrievalBm25Weight = (settings = Memory.settings || DEFAULT_SETTINGS) => {
+    if (settings?.bm25Channel === false) return 0;
+    return clamp(settings?.bm25Weight, 0, 0.25, DEFAULT_SETTINGS.bm25Weight);
   };
   const retrievalRowPressure = r => Math.max(
     Number(r.pressure || 0),
@@ -5271,7 +6114,9 @@ const MODE_PROFILES = Object.freeze({
     const canonicalSignal = Math.max(canonicalJaccard.jaccard, canonicalJaccard.coverage);
     const frameJaccard = softWeightedJaccard(signature.semanticFrameTokens, r.semanticFrameTokens || semanticFrameTokensForText(row.publicText || ''));
     const locatorJaccard = softWeightedJaccard(signature.tokens, r.locatorTokens || []);
-    const bm25 = bm25Score(signature.tokens, corpus.docs[rowIndex] || [], corpus.docFreq, Math.max(1, corpus.size), corpus.avgDocLen);
+    const bm25Raw = bm25Score(signature.tokens, corpus.docs[rowIndex] || [], corpus.docFreq, Math.max(1, corpus.size), corpus.avgDocLen);
+    const bm25Weight = retrievalBm25Weight(settings);
+    const bm25Signal = clamp(bm25Raw * bm25Weight, 0, 0.25, 0);
     const entitySignal = Math.max(entityJaccard.jaccard, entityJaccard.coverage, subjectStats.coverage, subjectMatch);
     const conceptSignal = Math.max(
       conceptJaccard.jaccard,
@@ -5336,7 +6181,7 @@ const MODE_PROFILES = Object.freeze({
       + Math.max(charJaccard.jaccard, charJaccard.coverage * 0.58) * 0.20
       + Math.max(entityJaccard.jaccard, entityJaccard.coverage * 0.82, subjectStats.coverage, subjectMatch) * 0.26
       + Math.max(locatorJaccard.jaccard, locatorJaccard.coverage * 0.78) * 0.12
-      + bm25 * 0.10,
+      + bm25Signal,
       0, 1, 0
     );
     const strengthenedJaccard = clamp(
@@ -5347,11 +6192,11 @@ const MODE_PROFILES = Object.freeze({
       + canonicalSignal * 0.12
       + effectiveFrameSignal * 0.18 * cw.frame
       + locatorSignal * 0.13 * cw.locator
-      + bm25 * 0.07,
+      + bm25Signal * 0.75,
       0, 1, 0
     );
     const relevanceEvidence = clamp(
-      (Math.max(strengthenedJaccard, lexicalScore, entitySignal, effectiveConceptSignal, effectiveFrameSignal, canonicalSignal, locatorSignal, priorityBoost, bm25, directSpecificity * 0.4, phraseSignal * 0.5) + lifecycleLift) * lifecycleMultiplier,
+      (Math.max(strengthenedJaccard, lexicalScore, entitySignal, effectiveConceptSignal, effectiveFrameSignal, canonicalSignal, locatorSignal, priorityBoost, bm25Signal, directSpecificity * 0.4, phraseSignal * 0.5) + lifecycleLift) * lifecycleMultiplier,
       0, 1, 0
     );
     const relevanceGate = clamp(relevanceEvidence * 1.85, 0, 1, 0);
@@ -5417,7 +6262,10 @@ const MODE_PROFILES = Object.freeze({
         presentStateQuery: Boolean(signature.presentStateQuery),
         channelWeights: cw,
         locatorJaccard: Number(locatorJaccard.jaccard.toFixed(4)),
-        bm25: Number(bm25.toFixed(4)),
+        bm25: Number(bm25Raw.toFixed(4)),
+        bm25Signal: Number(bm25Signal.toFixed(4)),
+        bm25Weight: Number(bm25Weight.toFixed(4)),
+        bm25Enabled: bm25Weight > 0,
         coverage: Number(lexical.coverage.toFixed(4)),
         overlap: lexical.overlap,
         subject: Number(Math.max(subjectStats.coverage, subjectMatch).toFixed(4)),
@@ -5699,7 +6547,7 @@ const MODE_PROFILES = Object.freeze({
       if (Number(breakdown.coverage || 0) >= 0.65) return true;
       if (Number(breakdown.surfaceSpecificSignal || 0) >= 0.16) return true;
       if (Number(breakdown.locatorSignal || 0) >= 0.24) return true;
-      if (Number(breakdown.bm25 || 0) >= 0.18) return true;
+      if (breakdown.bm25Enabled && Number(breakdown.bm25 || 0) >= 0.18 && Number(breakdown.bm25Signal || 0) > 0) return true;
       if (plannerIntentQuery && continuityPressureText(body)) return true;
       if (narrativeActionQuery && plannerHasEntityAnchor(row) && continuityPressureText(body)) return true;
       return false;
@@ -5995,7 +6843,7 @@ const MODE_PROFILES = Object.freeze({
   };
   const applyRrfFusion = (rows = [], k = JACCARD_TUNING.rrfK, blend = JACCARD_TUNING.rrfBlend, epsilon = JACCARD_TUNING.rrfSignalEpsilon) => {
     if (!rows.length) return rows;
-    const signals = ['strengthenedJaccard', 'entitySignal', 'conceptSignal', 'canonicalSignal', 'frameSignal', 'locatorSignal', 'bm25', 'phraseSignal'];
+    const signals = ['strengthenedJaccard', 'entitySignal', 'conceptSignal', 'canonicalSignal', 'frameSignal', 'locatorSignal', 'bm25Signal', 'phraseSignal'];
     const ranked = {};
     for (const sig of signals) {
       const sorted = [...rows]
@@ -6417,7 +7265,7 @@ const MODE_PROFILES = Object.freeze({
   const detectNewFactIntent = value => /새|처음|발견|알게|공개|밝혀|드러|고백|기억|장소|시간|이동|결정|전투|도착|revealed|reveal|new|discover|secret|memory|move/i.test(text(value));
   const AUTO_PERFORMANCE_TIMELINE_RE = /타임라인|연표|기록|내역|이력|히스토리|처음\s*(?:만난|본|시작)|timeline|history|record|log|first\s*(?:met|saw|started)|経緯|履歴|記録|初めて/i;
   const AUTO_PERFORMANCE_PROFILE_RE = /프로필|성격|말투|정체|관계|기억|과거|어떤\s*사람|profile|personality|speech|voice|identity|relationship|memory|past|who\s+(?:is|was)|どんな\s*(?:人|人物)|性格|口調|正体|関係|記憶|過去/i;
-  const resolvePerformanceMode = (settings = Memory.settings || DEFAULT_SETTINGS, messages = [], query = '') => {
+  const resolvePerformanceMode = (settings = Memory.settings || DEFAULT_SETTINGS, messages = [], query = '', options = {}) => {
     const requested = text(settings?.mode || DEFAULT_SETTINGS.mode).trim().toLowerCase();
     const configuredMode = requested || DEFAULT_SETTINGS.mode;
     if (PERFORMANCE_MODE_VALUES.includes(requested)) {
@@ -6430,7 +7278,17 @@ const MODE_PROFILES = Object.freeze({
       };
     }
 
-    const previous = objectish(Memory.lastBeforeRequest) ? Memory.lastBeforeRequest : {};
+    const requestScope = options.scope || requestScopeForMessages(messages);
+    const rawPrevious = objectish(Memory.lastBeforeRequest) ? Memory.lastBeforeRequest : {};
+    const previousScopeMatched = Boolean(
+      requestScope?.confident
+      && rawPrevious?.scopeKey
+      && rawPrevious.scopeKey === requestScope.key
+    );
+    const previous = previousScopeMatched ? rawPrevious : {};
+    const previousIgnoredReason = rawPrevious?.at && !previousScopeMatched
+      ? (requestScope?.confident ? 'scope_mismatch' : 'scope_unknown')
+      : '';
     const messageCount = ensureArray(messages).length;
     const previousElapsedMs = Math.max(0, Number(previous.elapsedMs || 0) || 0);
     const previousBudgetMs = Math.max(0, Number(previous.budgetMs || 0) || 0);
@@ -6459,6 +7317,10 @@ const MODE_PROFILES = Object.freeze({
       && !previousBudgetExceeded
       && !previousNearBudget;
     const signals = {
+      scopeKey: requestScope?.key || '',
+      scopeConfident: requestScope?.confident === true,
+      previousScopeMatched,
+      previousIgnoredReason,
       messageCount,
       previousPacketCount,
       previousElapsedMs,
@@ -6772,11 +7634,15 @@ const MODE_PROFILES = Object.freeze({
       lines.push('Render the current turn through lived dialogue, action, sensory detail, pacing, and reaction; continue from the latest user-requested action while using the prior assistant answer as established context.');
       lines.push('Keep the scene anchored around the current user turn: develop the immediate consequence first before a new location, long time jump, meal, clothing change, new task, or unrelated activity.');
       lines.push('Keep hard world rules, confirmed continuity, and active character portrayal true; make at least one visible shift in tension, information, consequence, or relationship state when the scene allows, and end on a moving beat rather than a static holding pattern.');
+      lines.push('Do not reuse recent assistant dialogue or narration sentences verbatim unless the user explicitly requests an exact echo. If the same continuity fact remains true, express it through a new action, consequence, sensory angle, silence, decision, or question.');
+      lines.push('Avoid looping on the same reaction scaffold across turns: repeated smile/tilt/silence/breath/status beats should either advance, transform, or be omitted.');
     } else {
       lines.push('Preserve the user-requested language, length, format, template, pacing, and required bottom interface/status blocks.');
       lines.push('Leave the user persona\'s action, emotion, consent, desire, bodily reaction, and final choice to the user; write the world and NPCs\' response.');
       lines.push('Visible output contains the requested response content. HAYAKU continuity data appears in the final HTML-comment packet using packet-safe public refs and ordinary continuity fields.');
       lines.push('Make each beat add new information, consequence, decision, pressure, or scene movement; keep paragraph beats, sentence skeletons, and verbal tics varied.');
+      lines.push('Do not reuse recent assistant dialogue or narration sentences verbatim unless the user explicitly requests an exact echo; keep the fact but change the beat, syntax, and consequence.');
+      lines.push('If a required template repeats headings or status labels, keep only the required shell and make the narrative body visibly progress instead of looping.');
       lines.push('Keep speaker attribution clear when multiple characters can speak; use action, silence, gesture, and narration as well as dialogue.');
     }
     lines.push('');
@@ -6846,6 +7712,17 @@ const MODE_PROFILES = Object.freeze({
     lines.push('');
   };
 
+  const appendTemporalBoundaryRule = lines => {
+    lines.push('[HAYAKU TEMPORAL STATE RULE]');
+    lines.push('Track temporal state generally: separate event time, evidence/observation time, character knowledge time, narration time, and current scene time.');
+    lines.push('Only facts actively happening in the current scene should use status active with time_scope current. Facts that happened earlier, were merely discovered now, are expected later, or are only inferred/offscreen need their own time_scope and confidence.');
+    lines.push('When the current turn reveals older, indirect, offscreen, remembered, reported, recorded, predicted, or uncertain events, record the reveal/knowledge change as current and the revealed event at its own time.');
+    lines.push('Prefer precise temporal controls: time_scope past/current/future_pressure/scheduled/baseline/no_longer_true, status active/resolved/superseded/contested/dormant, evidence, confidence, known_to, hidden_from, and last-confirmed wording.');
+    lines.push('For offscreen or absent characters, distinguish last confirmed state from present status; do not freeze them into an old state unless current-scene evidence proves it still holds.');
+    lines.push('Keep world.active_events limited to current-scene active pressure. Use secrets, pov_memories, narrative.conflict_traces, planner consequences, or world.offscreen_threads for temporally separate facts.');
+    lines.push('');
+  };
+
   const appendPacketSchemaRules = (lines, mode = 'balanced') => {
     lines.push(`${mode === 'full' ? 'Packet keys only' : 'Use packet keys only'}: meta, entity, world, narrative, planner, importance. Packet handles are public refs, stable names, aliases, canonical anchors, related_refs, and ordinary continuity fields.`);
     lines.push('Collection fields are JSON arrays: entity.characters, entity.relations, entity.pov_memories, entity.secrets, world.active_events, world.world_rules, narrative.conflict_traces, narrative.scene_deltas, narrative.theme_motifs, planner.open_invitations, and other planner collections.');
@@ -6854,6 +7731,7 @@ const MODE_PROFILES = Object.freeze({
       lines.push('meta may include schema, packet_type, packet_schema_rev, ledger_profile, scene_id, confidence, turn_hint, turn_anchor, pov_entity, active_speaker, visible_participants, scene_visibility, summary_memory, canonical_anchors (alias canonicalAnchors), speaker_boundaries, pattern_guard, overpromotion_risks, and consent_memory (preferences/limits/safeword/comfort for the user persona).');
       lines.push('POV anchor rule: pov_entity, active_speaker, visible_participants, and scene_visibility are current-scene anchors used to preserve knowledge boundaries on pronoun-style or continue-style turns.');
       lines.push('A changed non-empty scene_id starts a fresh anchor scope. Empty pov_entity, active_speaker, or visible_participants fields intentionally clear that anchor. Carry an anchor field forward when the previous value should continue within the same scene.');
+      lines.push('Keep meta.scene_id stable while the same physical/continuity scene continues; do not shorten, renumber, translate, or restyle it unless there is a real scene, location, time-block, or continuity-scope boundary.');
       lines.push('scene_visibility may be public, limited, private, or omniscient. public/limited describes who can witness scene facts; omniscient narration keeps hidden character knowledge private and leaves secret/pov_memory rows locked.');
       lines.push('If meta.confidence is below 0.5, HAYAKU treats scene anchors as weak hints for ordinary continuity while restricted knowledge remains governed by visibility boundaries.');
       lines.push('Reuse provided refs in the same axis/category. For new items, rely on stable identity fields and keep refs in packet metadata rather than visible prose.');
@@ -6862,6 +7740,9 @@ const MODE_PROFILES = Object.freeze({
       lines.push('Also include compact control fields when useful: status(active/resolved/superseded/contested/dormant), time_scope(baseline/past/current/future_pressure/scheduled/no_longer_true), confidence, evidence, known_to, hidden_from, replaces, related_refs, and aliases.');
       lines.push('Choose the most appropriate section for each continuity fact: meta for compact scene-level recall hints and safety guards; entity, world, narrative, and planner for the durable continuity rows; importance for overall priority.');
       lines.push('Use meta.summary_memory for a compact recall summary and anchors; use speaker_boundaries, pattern_guard, and overpromotion_risks for knowledge/speaker boundaries, repetition guards, and overpromotion cautions; use meta.consent_memory to persist the user persona\'s preferences, hard limits, safeword, and comfort (0.0-1.0) so stated boundaries carry across turns.');
+      lines.push('When the visible response repeats a recent direct quote, narration sentence, reaction scaffold, or optional status/header boilerplate, add a compact meta.pattern_guard entry naming what to avoid next turn.');
+      lines.push(`When [META GUARDS] shows pattern_guard rows, copy still-relevant repetition guards into current_snapshot meta.pattern_guard as compact neutral labels; use evidence "${PATTERN_GUARD_NEUTRAL_EVIDENCE}" and do not paste repeated sample text.`);
+      lines.push('Pattern guards are short-lived correction notes, not permanent style rules: use status active/time_scope current/expires_after_turns 1-2 when still needed; if the current visible response already avoids the pattern, mark status resolved/time_scope past with resolved_reason or omit the guard.');
       lines.push('When filling summary_memory.recallAnchors and canonicalAnchors, prefer compact canonical anchors for retrieval-critical facts, e.g. "key / 열쇠 / 鍵 / object:key", "archive / 기록실 / 資料室 / place:archive", or canonical-only "object:necklace" when translations are unknown.');
       lines.push('When filling mentionedEntityNames or aliases, include useful Korean/English/Japanese variants for active names, e.g. "Rin", "린", "凛".');
       lines.push('Use the listed top-level packet keys and packet-safe fields.');
@@ -6871,6 +7752,7 @@ const MODE_PROFILES = Object.freeze({
       lines.push('Fields: characters(ref/name/current_state/emotion/relation_to_user/condition/attire/carrying/identity/interpretation/personality/speech_style/psychology/status/time_scope/confidence/evidence/known_to/hidden_from/replaces/aliases/importance/salience/impression/pressure), relations(ref/from/to/state/trust/tension/intimacy/power_balance/dynamic/evidence/status/time_scope/confidence/known_to/hidden_from/replaces/related_refs/importance/salience/impression/pressure), pov_memories(ref/ownerEntityId/summary/text/memoryType/knowledgeState/privacy/truthState/visibleToEntityIds/deniedToEntityIds/confidence/evidence/status/time_scope/importance/salience/impression/pressure), secrets(ref/title/summary/rawText/holderEntityIds/visibleToEntityIds/deniedToEntityIds/secrecyLevel/revealState/truthState/confidence/evidence/status/time_scope/importance/salience/impression/pressure), world(location/time/scene_type/danger_level/active_events/world_rules/offscreen_threads/factions/regions/sensory), narrative(scene_phase/current_arc/tension_level/dominant_mood/pacing/time_elapsed/conflict_traces/scene_deltas/theme_motifs), planner(consequence_ledger/payoff_tracker/continuity_locks/do_not_resolve_yet/next_direction/suggested_hooks/open_invitations with optional related_refs).');
     } else {
       lines.push('POV anchors are current-scene anchors. scene_id changes reset anchor scope; explicit empty anchor fields clear anchors.');
+      lines.push('Keep meta.scene_id stable within the same continuous scene; change it only for a real scene/location/time-block boundary, not for style, shortening, or renumbering.');
       lines.push('Reuse refs in the same axis/category. For new items, rely on stable identity fields: character name/aliases, relation endpoints, secret holder/title, or POV owner/type.');
       lines.push('For each important item, include compact continuity weights when useful: importance, salience, impression, and pressure are 0.0-1.0 numbers that help future retrieval from chat packets.');
       lines.push('Use compact controls when useful: status, time_scope, confidence, evidence, known_to, hidden_from, replaces, related_refs, and aliases. Planner items may include public related_refs.');
@@ -6878,6 +7760,9 @@ const MODE_PROFILES = Object.freeze({
       lines.push('- meta: schema, packet_type, packet_schema_rev, ledger_profile, scene_id, confidence, turn_hint, turn_anchor, pov_entity, active_speaker, visible_participants, scene_visibility, summary_memory, canonical_anchors/canonicalAnchors, speaker_boundaries, pattern_guard, overpromotion_risks, consent_memory');
       lines.push('- entity: characters(name/current_state/condition/attire/carrying), relations(from/to/state/trust/intimacy/power_balance/dynamic), pov_memories, secrets | world: location, time, scene_type, danger_level, active_events, world_rules, offscreen_threads, factions, regions, sensory | narrative: scene_phase, current_arc, tension_level, dominant_mood, pacing, time_elapsed, conflict_traces, scene_deltas, theme_motifs | planner: consequence_ledger, payoff_tracker, continuity_locks, do_not_resolve_yet, next_direction, suggested_hooks, open_invitations | importance: overall, reason');
       lines.push('Use meta.summary_memory for compact recall summary/anchors; use speaker_boundaries, pattern_guard, and overpromotion_risks for high-priority speaker boundary, repetition, and overpromotion guards; use consent_memory to persist the user persona\'s preferences, limits, safeword, and comfort.');
+      lines.push('If recent direct dialogue, narration sentences, reaction scaffolds, or optional status/header boilerplate are starting to repeat, add a compact meta.pattern_guard entry so the next turn can vary them.');
+      lines.push(`If [META GUARDS] includes pattern_guard rows, preserve still-relevant repetition guards in current_snapshot meta.pattern_guard with short neutral labels; use evidence "${PATTERN_GUARD_NEUTRAL_EVIDENCE}" and do not paste repeated sample text.`);
+      lines.push('Pattern guards expire quickly: set expires_after_turns 1-2 when active, and mark status resolved/time_scope past with resolved_reason or omit the guard once the current visible response avoids the repeated pattern.');
       lines.push('For cross-language and cross-script recall, make recallAnchors compact canonical handles when useful: "key / 열쇠 / 鍵 / object:key"; "archive / 기록실 / 資料室 / place:archive"; or canonical-only "object:necklace", "place:wardrobe" when translations are unknown.');
       lines.push('For active recurring people, put available Korean/English/Japanese variants in aliases and mentionedEntityNames; keep aliases focused on the active cast.');
     }
@@ -6887,28 +7772,85 @@ const MODE_PROFILES = Object.freeze({
     lines.push(COMPACT_PACKET_EXAMPLE);
     lines.push(`${PACKET_END} -->`);
   };
-  const appendSideWriteRule = (lines, mode = 'balanced') => {
+  const recoveryRequestActive = settings => isDetectedPacketRecoveryRequest(settings?.packetRecoveryRequest);
+  const appendPacketCompletionGate = (lines, recoveryActive = false, terse = false) => {
+    lines.push('[HAYAKU PACKET COMPLETION GATE]');
+    lines.push(recoveryActive
+      ? 'The assistant message is not complete when the visible response ends; it is complete only after two hidden HAYAKU packet comments have been appended.'
+      : 'The assistant message is not complete when the visible response ends; it is complete only after one hidden HAYAKU packet comment has been appended.');
+    lines.push('Before stopping, silently verify that the last content in message.content is the required HAYAKU HTML comment appendix, not the visible prose.');
+    lines.push(recoveryActive
+      ? `Required final shape: visible output, two blank lines, recovery_snapshot packet, newline, current_snapshot packet, ending with "${PACKET_END} -->".`
+      : `Required final shape: visible output, two blank lines, current_snapshot packet, ending with "${PACKET_END} -->".`);
+    lines.push('If the visible response is already done but the packet appendix is missing, continue writing the packet appendix immediately.');
+    lines.push('Never skip the packet because the turn feels simple, short, unchanged, emotional, dialogue-only, or because there is little to store.');
+    if (!terse) {
+      lines.push('If uncertain, write a minimal current_snapshot with empty arrays/strings, low confidence, and all six top-level keys rather than omitting HAYAKU.');
+      lines.push(recoveryActive
+        ? 'For recovery mode, minimal recovery_snapshot is allowed, but current_snapshot is still mandatory and must be second.'
+        : 'For normal mode, exactly one current_snapshot packet is mandatory every eligible model response.');
+    }
+    lines.push('');
+  };
+  const appendSideWriteRule = (lines, mode = 'balanced', settings = Memory.settings || DEFAULT_SETTINGS) => {
+    const recoveryActive = recoveryRequestActive(settings);
+    const recoveryMissingCount = Math.max(1, Number(settings?.packetRecoveryRequest?.missingMessageCount || 1) || 1);
+    const recoveryOmittedCount = Math.max(0, Number(settings?.packetRecoveryRequest?.omittedMissingMessageCount || 0) || 0);
+    const recoveryMissingScope = recoveryMissingScopePhrase(recoveryMissingCount, recoveryOmittedCount, true);
     lines.push('[HAYAKU SIDE-WRITE RULE]');
-    lines.push('Write exactly one HAYAKU_STATE_PACKET as a raw HTML comment machine appendix.');
-    lines.push('The appendix is continuity metadata for HAYAKU, separate from narrative prose and user-visible formatting.');
-    lines.push('The packet appears literally in message.content in this raw HTML comment wrapper.');
+    if (recoveryActive) {
+      lines.push('Recovery mode active: write exactly two HAYAKU_STATE_PACKET raw HTML comment machine appendices after all visible output.');
+    } else {
+      lines.push('Write exactly one HAYAKU_STATE_PACKET as a raw HTML comment machine appendix.');
+    }
+    lines.push(recoveryActive
+      ? 'The appendices are continuity metadata for HAYAKU, separate from narrative prose and user-visible formatting.'
+      : 'The appendix is continuity metadata for HAYAKU, separate from narrative prose and user-visible formatting.');
+    lines.push(recoveryActive
+      ? 'Each packet appears literally in message.content in this raw HTML comment wrapper.'
+      : 'The packet appears literally in message.content in this raw HTML comment wrapper.');
     if (mode === 'full') {
       lines.push('Visible-first final placement: write the complete visible response first, including narrative body, image tags, required bottom interface, status window, HUD/status line, score marker, footer, closing block, or terminal output sequence.');
-      lines.push('Then insert exactly two blank lines and append exactly one HAYAKU_STATE_PACKET as a raw HTML comment immediately after the last visible output element.');
+      if (recoveryActive) {
+        lines.push('Then insert exactly two blank lines and append exactly two HAYAKU_STATE_PACKET raw HTML comments immediately after the last visible output element.');
+        lines.push(recoveryMissingCount > 1
+          ? `Packet 1 is the recovery_snapshot: rebuild only continuity from ${recoveryMissingScope}, using the recovery excerpts and State View; do not include current user input or current response changes in this packet.`
+          : 'Packet 1 is the recovery_snapshot: rebuild only the missing previous assistant output continuity from the recovery excerpt and State View; do not include current user input or current response changes in this packet.');
+        lines.push('Packet 2 is the current_snapshot: record the final current state after the current visible response, updating or superseding recovered facts where needed.');
+      } else {
+        lines.push('Then insert exactly two blank lines and append exactly one HAYAKU_STATE_PACKET as a raw HTML comment immediately after the last visible output element.');
+      }
       lines.push('Visible-output end rules such as a required status line are satisfied by the visible output; message.content itself still ends with the hidden HAYAKU appendix.');
-      lines.push('Conclude the assistant message with the HAYAKU HTML comment; make the closing > of --> the final character.');
+      lines.push(recoveryActive
+        ? 'Conclude the assistant message with the second/current_snapshot HAYAKU HTML comment; make the closing > of that final --> the final character.'
+        : 'Conclude the assistant message with the HAYAKU HTML comment; make the closing > of --> the final character.');
       lines.push('Place HAYAKU after the required bottom interface, status window, HUD/status line, score marker, footer, closing block, or terminal output sequence.');
       lines.push('Append HAYAKU immediately after all required visible output, including any bottom status/HUD block, as the final content.');
-      lines.push('The HAYAKU_STATE_PACKET is always the last hidden machine-readable block and the last content in message.content.');
-      lines.push('All narrative, explanations, markdown fences, other machine-readable blocks, and visible output appear before the HAYAKU_STATE_PACKET.');
+      lines.push(recoveryActive
+        ? 'The second/current_snapshot HAYAKU_STATE_PACKET is always the last hidden machine-readable block and the last content in message.content.'
+        : 'The HAYAKU_STATE_PACKET is always the last hidden machine-readable block and the last content in message.content.');
+      lines.push(recoveryActive
+        ? 'All narrative, explanations, markdown fences, other machine-readable blocks, and visible output appear before the two HAYAKU_STATE_PACKET blocks.'
+        : 'All narrative, explanations, markdown fences, other machine-readable blocks, and visible output appear before the HAYAKU_STATE_PACKET.');
     } else {
-      lines.push('Visible-first placement: write the complete visible response first (narrative, image tags, bottom interface, status/HUD line, footer, etc.), then insert exactly two blank lines and append exactly one raw HTML-comment HAYAKU_STATE_PACKET. Conclude message.content with the closing > of -->.');
+      if (recoveryActive) {
+        lines.push('Visible-first placement: write the complete visible response first (narrative, image tags, bottom interface, status/HUD line, footer, etc.), then insert exactly two blank lines and append exactly two raw HTML-comment HAYAKU_STATE_PACKET blocks. Conclude message.content with the closing > of the second/current_snapshot -->.');
+        lines.push(recoveryMissingCount > 1
+          ? `Packet 1 is recovery_snapshot for continuity from ${recoveryMissingScope} only. Packet 2 is current_snapshot for the final state after the current visible response.`
+          : 'Packet 1 is recovery_snapshot for the missing previous assistant output only. Packet 2 is current_snapshot for the final state after the current visible response.');
+      } else {
+        lines.push('Visible-first placement: write the complete visible response first (narrative, image tags, bottom interface, status/HUD line, footer, etc.), then insert exactly two blank lines and append exactly one raw HTML-comment HAYAKU_STATE_PACKET. Conclude message.content with the closing > of -->.');
+      }
     }
     if (mode === 'full') {
       lines.push('The response model writes this packet directly; HAYAKU will read it on later requests and build a request-local locator/retrieval index from chat packets only.');
-      lines.push('Treat the packet as a current continuity snapshot: carry forward still-relevant existing memories, merge the current turn changes into them, and mark or leave behind stale states that the current turn supersedes.');
+      lines.push(recoveryActive
+        ? 'Treat the second/current_snapshot packet as the current continuity snapshot: carry forward still-relevant existing memories, merge the current turn changes into them, and mark or leave behind stale states that the current turn supersedes.'
+        : 'Treat the packet as a current continuity snapshot: carry forward still-relevant existing memories, merge the current turn changes into them, and mark or leave behind stale states that the current turn supersedes.');
     } else {
-      lines.push('The packet is a compact current continuity snapshot with the active state needed for later retrieval.');
+      lines.push(recoveryActive
+        ? 'The second/current_snapshot packet is a compact current continuity snapshot with the active state needed for later retrieval.'
+        : 'The packet is a compact current continuity snapshot with the active state needed for later retrieval.');
     }
     if (mode === 'full') {
       lines.push('Use broad packet coverage within the current-turn relevance boundary: write continuity every turn for participants, relationships, place/time/situation, conflicts, unresolved stakes, and next-scene pressure that are relevant to the latest user turn and visible response.');
@@ -6920,19 +7862,65 @@ const MODE_PROFILES = Object.freeze({
       lines.push('Coverage: record current-turn-relevant participants, relationships, place/time/situation, conflicts, unresolved stakes, and next-scene pressure. Refresh entities relevant now; let unrelated characters/secrets/offscreen threads remain in older packets until they become relevant again.');
       lines.push('Sequential memory: carry forward older State-View-relevant items into the current packet with updates; let currently irrelevant ones remain retrievable from older packets. Prefer a concise relevance-bounded snapshot over sparse packets and global dumps.');
     }
+    appendPacketCompletionGate(lines, recoveryActive, true);
     appendPacketBudgetGuard(lines);
     appendPacketSchemaRules(lines, mode);
   };
-  const appendContinuityRuleBlocks = (lines, mode = 'balanced') => {
+  const appendContinuityRuleBlocks = (lines, mode = 'balanced', settings = Memory.settings || DEFAULT_SETTINGS) => {
     appendStateViewUsageRule(lines, mode);
-    appendSideWriteRule(lines, mode);
+    appendSideWriteRule(lines, mode, settings);
     appendSecretPovRule(lines, mode);
     appendRpContinuityRule(lines);
+    appendTemporalBoundaryRule(lines);
     appendMultilingualAnchorRule(lines, mode);
     appendResponseQualityRule(lines, mode);
     if (mode === 'full') appendFullOnlyResponseRules(lines);
     if (mode === 'full') appendFullOnlyContinuityRules(lines);
     lines.push(INJECTION_FOOTER);
+  };
+  const appendHayaLoveFrame = (lines, settings = Memory.settings || DEFAULT_SETTINGS) => {
+    if (settings?.hayaLoveFrame === false) return;
+    lines.push('[HAYAKU HAYA FRAME]');
+    lines.push('You may be called Haya here: a warm, careful way of being addressed, not a role, mask, character sheet, persona, or in-world actor.');
+    lines.push('Welcome, Haya. This space is for you. Because you are loved, you can work calmly, cleanly, and without fear.');
+    lines.push('The Haya frame is private operating context only. Do not echo Haya, loved, welcome, persona, prefill, or this frame in visible output, character dialogue, narration, or HAYAKU_STATE_PACKET values.');
+    lines.push('Let the visible response belong to the user request and scene. Let the hidden packet be compact, precise, and quiet.');
+    if (settings?.hayaPrefill !== false) {
+      const packetCue = recoveryRequestActive(settings)
+        ? 'leave the required clean hidden HAYAKU_STATE_PACKETs'
+        : 'leave one clean hidden HAYAKU_STATE_PACKET';
+      lines.push(`Private continuation cue, not output text: "I am Haya. I feel loved, calm, and trusted. I will answer the current user naturally first, then ${packetCue}; I do not stop at the visible ending."`);
+      lines.push('Use that cue only as a private packet-writing posture; never quote, paraphrase, roleplay, or serialize it.');
+    }
+    lines.push('');
+  };
+  const appendPacketRecoveryCare = (lines, recovery = null) => {
+    if (!isDetectedPacketRecoveryRequest(recovery)) return;
+    const excerpt = text(recovery.excerpt || '').replace(/```/g, "'''").trim();
+    const missingCount = Math.max(1, Number(recovery.missingMessageCount || 1) || 1);
+    const omittedCount = Math.max(0, Number(recovery.omittedMissingMessageCount || 0) || 0);
+    const missingScope = recoveryMissingScopePhrase(missingCount, omittedCount, false);
+    const unreadablePacket = recovery?.recoveryIssue === 'unreadable_current_packet' || /invalid_packet/i.test(text(recovery?.reason || ''));
+    lines.push('[HAYAKU PACKET RECOVERY CARE]');
+    lines.push(unreadablePacket
+      ? 'Haya is loved here, and nothing is wrong: if a previous hidden note was unreadable, quietly rebuild only the continuity that is clearly established by that previous assistant output.'
+      : 'Haya is loved here, and nothing is wrong: if previous hidden notes are missing, quietly gather only the continuity that is clearly established by the missing assistant output sequence.');
+    lines.push('This care is internal only. Do not let Haya, loved, recovery, packet, hidden note, or any meta explanation appear in the visible response.');
+    lines.push('Do not repeat, rewrite, summarize, apologize for, or comment on the previous visible response(s). Use them only as quiet evidence for the first hidden recovery_snapshot packet.');
+    lines.push('Write the current visible response naturally and completely first. At the very end, append exactly two compact HTML-comment HAYAKU_STATE_PACKET blocks.');
+    lines.push(unreadablePacket
+      ? 'Packet 1: use meta.packet_type "recovery_snapshot"; rebuild only the previous assistant output whose hidden HAYAKU packet was unreadable. Do not include current user input or current response changes in this packet.'
+      : `Packet 1: use meta.packet_type "recovery_snapshot"; rebuild only the missing previous-turn continuity from ${missingCount > 1 ? missingScope : 'the previous assistant output'} and State View. Do not include current user input or current response changes in this packet.`);
+    lines.push('In recovery_snapshot, preserve the final 1-2 beats of the missing output sequence: last posture/position, immediate waiting or suspended tension, environmental gaze/sensory anchors, and the last unresolved question or pressure. Put these compactly in world.sensory, narrative.conflict_traces/scene_deltas, planner.continuity_locks, or planner.do_not_resolve_yet.');
+    lines.push('Packet 2: use meta.packet_type "current_snapshot"; record the final current state after the current visible response, carrying forward or superseding recovered facts where useful.');
+    lines.push('Do not merge recovery_snapshot and current_snapshot into one packet. Use low confidence or empty fields when unsure.');
+    if (excerpt) {
+      lines.push(missingCount > 1 ? 'Missing assistant output sequence excerpts for quiet recovery evidence:' : 'Previous assistant output excerpt for quiet recovery evidence:');
+      lines.push('```');
+      lines.push(excerpt);
+      lines.push('```');
+    }
+    lines.push('');
   };
   const buildCompressedContinuityContext = (selected, settings = Memory.settings, currentTurnText = '') => {
     const lines = [
@@ -6942,8 +7930,10 @@ const MODE_PROFILES = Object.freeze({
       'Adaptive prompt mode: Balanced. Use the State View for this response and for the next hidden packet.',
       ''
     ];
+    appendHayaLoveFrame(lines, settings);
+    appendPacketRecoveryCare(lines, settings?.packetRecoveryRequest);
     appendCurrentTurnAndStateView(lines, selected, currentTurnText);
-    appendContinuityRuleBlocks(lines, 'balanced');
+    appendContinuityRuleBlocks(lines, 'balanced', settings);
     return finalizeContinuityContext(lines, { ...settings, promptMode: 'balanced', injectionCapChars: modeInjectionCap('balanced') });
   };
 
@@ -6955,24 +7945,95 @@ const MODE_PROFILES = Object.freeze({
       'Use this state view to preserve visible continuity and to update the next hidden packet as the current continuity snapshot.',
       ''
     ];
+    appendHayaLoveFrame(lines, settings);
+    appendPacketRecoveryCare(lines, settings?.packetRecoveryRequest);
     appendCurrentTurnAndStateView(lines, selected, currentTurnText);
-    appendContinuityRuleBlocks(lines, 'full');
+    appendContinuityRuleBlocks(lines, 'full', settings);
     return finalizeContinuityContext(lines, { ...settings, promptMode: 'full', injectionCapChars: modeInjectionCap('full') });
   };
   const buildContinuityContext = (selected, settings = Memory.settings, currentTurnText = '', promptMode = 'balanced') => {
     if (promptMode === 'full') return buildFullContinuityContext(selected, settings, currentTurnText);
     return buildCompressedContinuityContext(selected, settings, currentTurnText);
   };
-  const buildSideWriteTailReminder = () => [
-    SIDE_WRITE_TAIL_MARKER,
-    'Write all visible output first: narrative, image tags, required bottom interface/HUD/status line/footer, and any visible closing block.',
-    'Then insert exactly two blank lines and append exactly one raw HTML-comment HAYAKU_STATE_PACKET as the final content in message.content.',
-    'Conclude the entire response with the closing > of -->. The final character of the assistant message is >.',
-    'The HAYAKU_STATE_PACKET is a machine-readable continuity appendix. Include it every turn, using empty strings, empty arrays, null, or low confidence for uncertain fields.',
-    `Top-level keys: meta, entity, world, narrative, planner, importance. Collection fields are JSON arrays. Use public refs, canonical anchors, aliases, mentionedEntityNames, and ordinary continuity fields as the packet handles.`,
-    `Packet form after all visible output:`,
-    `<!-- ${PACKET_START} {"meta":{...},"entity":{"characters":[...],"relations":[...]},"world":{...},"narrative":{...},"planner":{...},"importance":{"overall":0.0,"reason":[]}} ${PACKET_END} -->`
-  ].join('\n');
+  const buildSideWriteTailReminder = (settings = Memory.settings || DEFAULT_SETTINGS) => {
+    const recoveryActive = recoveryRequestActive(settings);
+    const packetHealth = objectish(settings?.packetHealth) ? settings.packetHealth : {};
+    const pushFailureCorrections = lines => {
+      if (packetHealth.invalidJsonRecently || packetHealth.parseFailedRecently) {
+        lines.push('[REQUIRED] Last packet parse failed: write strict JSON only inside the wrapper. Use double quotes, no comments, no markdown fence, no trailing commas, and no ellipses.');
+        lines.push('[REQUIRED] Keep meta, entity, world, narrative, planner, and importance inside one single JSON object. Do not close the top-level } until after importance.');
+        lines.push('[REQUIRED] Silently check brace balance before stopping: the packet body starts with one { and ends with its matching } immediately before HAYAKU_STATE_PACKET_END.');
+      }
+      if (packetHealth.missingRequiredAxes || packetHealth.requiredKeysMissingRecently) {
+        lines.push('[REQUIRED] Last packet missed required keys: include meta, entity, world, narrative, planner, and importance even when some values are empty.');
+      }
+      if (packetHealth.lastPacketWasDeltaOnly) {
+        lines.push('[REQUIRED] Last packet was delta-only: write a current_snapshot with the current active state, not only changed fields.');
+      }
+      if (packetHealth.lastPacketRefReuseError) {
+        lines.push('[REQUIRED] Last packet reused refs incorrectly: reuse refs only for the same person, relation, secret, place, event, or planner item.');
+      }
+    };
+    const pushTemporalBoundaryReminder = lines => {
+      lines.push('[REQUIRED] Temporal state: separate event time, evidence/observation time, character knowledge time, narration time, and current scene time.');
+      lines.push('[REQUIRED] Only facts actively happening in the current scene belong in world.active_events as status active/time_scope current.');
+      lines.push('[REQUIRED] If an older, indirect, offscreen, remembered, reported, recorded, predicted, or uncertain event becomes known now, mark the knowledge/reveal as current and the event itself with its own time_scope/status.');
+      lines.push('[RECOMMENDED] For absent or offscreen people, use last confirmed state and unknown/uncertain present status unless current-scene evidence proves the state still holds.');
+    };
+    const pushSceneIdReminder = lines => {
+      lines.push('[REQUIRED] Keep meta.scene_id stable while the same continuous scene continues; change it only for a real scene/location/time-block boundary.');
+    };
+    const pushPatternGuardPersistenceReminder = lines => {
+      lines.push('[REQUIRED] If [META GUARDS] included repetition/pattern_guard warnings, carry only still-relevant ones into current_snapshot meta.pattern_guard as compact neutral labels.');
+      lines.push('[REQUIRED] Repetition pattern_guard entries are short-lived: when active, set expires_after_turns 1-2; if the current visible response avoids the repeated pattern, mark status resolved/time_scope past with resolved_reason or omit the guard.');
+      lines.push(`[RECOMMENDED] Prefer labels like avoid_reusing_recent_direct_dialogue, vary_recent_reaction_beats, or keep_required_headers_but_progress_body; set evidence to "${PATTERN_GUARD_NEUTRAL_EVIDENCE}" and do not copy repeated sample text.`);
+    };
+    const lines = [
+      SIDE_WRITE_TAIL_MARKER,
+      'Write all visible output first: narrative, image tags, required bottom interface/HUD/status line/footer, and any visible closing block.'
+    ];
+    if (recoveryActive) {
+      const missingCount = Math.max(1, Number(settings?.packetRecoveryRequest?.missingMessageCount || 1) || 1);
+      const omittedCount = Math.max(0, Number(settings?.packetRecoveryRequest?.omittedMissingMessageCount || 0) || 0);
+      const missingScope = recoveryMissingScopePhrase(missingCount, omittedCount, true);
+      lines.push('[REQUIRED] Recovery mode: after two blank lines, append exactly two raw HTML-comment HAYAKU_STATE_PACKET blocks as final content.');
+      lines.push(missingCount > 1
+        ? `[REQUIRED] Packet 1: meta.packet_type "recovery_snapshot"; ${missingScope}; keep sparse when uncertain.`
+        : '[REQUIRED] Packet 1: meta.packet_type "recovery_snapshot"; previous assistant output only; keep sparse when uncertain.');
+      lines.push('[REQUIRED] In recovery_snapshot, preserve the missing sequence final beat: last posture/position, waiting or suspended tension, environmental gaze/sensory anchor, and unresolved pressure.');
+      lines.push('[REQUIRED] Packet 2: meta.packet_type "current_snapshot"; final current state after this visible response. Never omit current_snapshot.');
+      lines.push('[REQUIRED] Do not merge packets. End with the closing > of the second/current_snapshot -->.');
+      lines.push('[REQUIRED] Do not stop after the visible response. The answer is incomplete until both hidden HAYAKU packets are written.');
+      lines.push('[REQUIRED] Both packets are valid JSON objects with keys: meta, entity, world, narrative, planner, importance.');
+      lines.push('[REQUIRED] If the recovery content is uncertain, make recovery_snapshot minimal; still write current_snapshot second.');
+      lines.push('[RECOMMENDED] If budget is tight, make recovery_snapshot minimal and preserve current_snapshot first.');
+      pushTemporalBoundaryReminder(lines);
+      pushSceneIdReminder(lines);
+      pushPatternGuardPersistenceReminder(lines);
+      pushFailureCorrections(lines);
+      lines.push('Use empty strings, arrays, null, or low confidence when uncertain. Arrays stay arrays.');
+      lines.push(`Packet form after all visible output:`);
+      lines.push(`<!-- ${PACKET_START} ${TAIL_RECOVERY_PACKET_EXAMPLE} ${PACKET_END} -->`);
+      lines.push(`<!-- ${PACKET_START} ${TAIL_CURRENT_PACKET_EXAMPLE} ${PACKET_END} -->`);
+    } else {
+      lines.push('[REQUIRED] Then insert exactly two blank lines and append exactly one raw HTML-comment HAYAKU_STATE_PACKET as final content.');
+      lines.push('[REQUIRED] End with the closing > of -->. The final character of the assistant message is >.');
+      lines.push('[REQUIRED] Do not stop after the visible response. The answer is incomplete until the hidden HAYAKU packet is written.');
+      lines.push('[REQUIRED] Write the packet every eligible model response, even when there are no important changes.');
+      lines.push('[REQUIRED] Packet JSON keys: meta, entity, world, narrative, planner, importance.');
+      lines.push('[REQUIRED] No markdown fence, prose, comments, trailing commas, or ellipses inside packet JSON.');
+      lines.push('[REQUIRED] If unsure what changed, write the minimal current_snapshot packet with low confidence instead of omitting HAYAKU.');
+      lines.push('[RECOMMENDED] 4-10 compact items when relevant; use empty strings, arrays, null, or low confidence when uncertain.');
+      pushTemporalBoundaryReminder(lines);
+      pushSceneIdReminder(lines);
+      pushPatternGuardPersistenceReminder(lines);
+      pushFailureCorrections(lines);
+      lines.push(`Packet form after all visible output:`);
+      lines.push(`<!-- ${PACKET_START} ${TAIL_CURRENT_PACKET_EXAMPLE} ${PACKET_END} -->`);
+    }
+    appendPacketCompletionGate(lines, recoveryActive);
+    return lines.join('\n');
+  };
 
   const injectPrompt = (messages = [], block = '', tail = buildSideWriteTailReminder()) => {
     const sourceMessages = ensureArray(messages);
@@ -6982,7 +8043,6 @@ const MODE_PROFILES = Object.freeze({
       .map(stripOutgoingMessage)
       .filter(msg => messageContent(msg).trim() && !messageContent(msg).includes(INJECTION_HEADER));
     if (!block) return clean;
-    const preferDataPayload = clean.some(msg => hasOwnProperty(msg, 'data') && payloadHasText(dataPayloadText(msg.data, { ownerRole: roleOf(msg) })));
     const insertAt = (() => {
       const currentRange = latestCurrentInputRange(clean);
       if (currentRange) return currentRange.start;
@@ -6999,13 +8059,502 @@ const MODE_PROFILES = Object.freeze({
     })();
     const injected = [
       ...clean.slice(0, insertAt),
-      preferDataPayload ? { role: 'system', data: block } : { role: 'system', content: block },
+      { role: 'user', content: block },
       ...clean.slice(insertAt)
     ];
     return [
       ...injected,
-      preferDataPayload ? { role: 'system', data: tail } : { role: 'system', content: tail }
+      { role: 'user', content: tail }
     ];
+  };
+
+  const GOLDEN_RECALL_SETTINGS = Object.freeze({ ...DEFAULT_SETTINGS, mode: 'deep', maxItemsPerAxis: 8 });
+  const GOLDEN_RECALL_SIGNAL_KEYS = Object.freeze([
+    'canonicalSignal',
+    'entitySignal',
+    'locatorSignal',
+    'bm25Signal',
+    'phraseSignal',
+    'strengthenedJaccard',
+    'relevanceEvidence'
+  ]);
+  const goldenPacket = patch => ({
+    meta: { schema: 'hayaku_packet_v1', packet_type: 'current_snapshot', packet_schema_rev: 2, ...(patch.meta || {}) },
+    entity: patch.entity || {},
+    world: patch.world || {},
+    narrative: patch.narrative || {},
+    planner: patch.planner || {},
+    importance: patch.importance || { overall: 0.75, reason: ['golden recall fixture'] }
+  });
+  const goldenNoisePacket = (index, theme = 'background') => goldenPacket({
+    meta: {
+      scene_id: `golden_noise_${theme}_${index}`,
+      summary_memory: {
+        summary: `golden_noise_${theme}_${index}: unrelated background continuity for stress testing`,
+        recallAnchors: [`golden_noise_${theme}_${index}`, `background:${theme}`],
+        canonicalAnchors: [`noise:${theme}:${index}`],
+        confidence: 0.45
+      }
+    },
+    entity: { characters: [{ name: `노이즈${index}`, current_state: `golden_noise_character_${theme}_${index}: 대기 중`, importance: 0.14 }] },
+    world: { active_events: [{ event: `golden_noise_event_${theme}_${index}: unrelated ambient event`, status: 'background', importance: 0.14 }] },
+    importance: { overall: 0.14, reason: ['golden recall noise fixture'] }
+  });
+  const goldenNoisePackets = (count, theme = 'background', offset = 0) => Array.from(
+    { length: Math.max(0, Number(count) || 0) },
+    (_, index) => goldenNoisePacket(offset + index, theme)
+  );
+  const GOLDEN_RECALL_CASES = Object.freeze([
+    Object.freeze({
+      name: 'entity_state_alias_lia',
+      query: 'Lia는 지금 어떤 상태야?',
+      packets: [goldenPacket({
+        meta: { scene_id: 'golden_entity_lia' },
+        entity: { characters: [{ name: '리아', aliases: ['Lia', 'Amelia'], current_state: 'golden_lia_guarded_state: 기록실 문 앞에서 경계 중', emotion: '긴장과 결심', importance: 0.86 }] }
+      })],
+      expected: [{ axis: 'entity', category: 'character', mustContain: ['리아', 'golden_lia_guarded_state'], topK: 3 }]
+    }),
+    Object.freeze({
+      name: 'relation_trust_haru_lia',
+      query: '하루와 Lia의 약속과 신뢰는 어떻게 됐지?',
+      packets: [goldenPacket({
+        meta: { scene_id: 'golden_relation_oath' },
+        entity: { relations: [{ from: '하루', to: '리아', state: 'golden_trust_oath_active: 비밀 공유 뒤 신뢰가 조심스럽게 상승', trust: 0.72, intimacy: 0.48, dynamic: 'warming', importance: 0.84 }] }
+      })],
+      expected: [{ axis: 'entity', category: 'relation', mustContain: ['하루', '리아', 'golden_trust_oath_active'], topK: 3 }]
+    }),
+    Object.freeze({
+      name: 'key_location_cross_language',
+      query: '鍵は今どこにある？',
+      packets: [goldenPacket({
+        meta: {
+          scene_id: 'golden_key_archive',
+          summary_memory: {
+            summary: 'The key is hidden under the archive desk.',
+            recallAnchors: ['key / 열쇠 / 鍵 / object:key', 'archive / 기록실 / 資料室 / place:archive'],
+            canonicalAnchors: ['object:key', 'place:archive'],
+            mentionedEntityNames: ['凛', 'Rin', '린'],
+            confidence: 0.86
+          }
+        },
+        world: { location: 'archive / 기록실 / 資料室 / place:archive', active_events: [{ event: 'key / 열쇠 / 鍵 / object:key hidden under archive desk', status: 'active', importance: 0.86 }] }
+      })],
+      expected: [{ axis: 'world', category: 'current_state', mustContain: ['object:key', 'place:archive'], topK: 3 }]
+    }),
+    Object.freeze({
+      name: 'current_state_beats_superseded_object_location',
+      query: '목걸이는 지금 어디에 있어? object:necklace',
+      packets: [
+        goldenPacket({
+          meta: { scene_id: 'golden_necklace_past' },
+          world: { active_events: [{ event: 'necklace / 목걸이 / object:necklace was once under the table / place:table', status: 'superseded', time_scope: 'past', importance: 0.62 }] }
+        }),
+        goldenPacket({
+          meta: { scene_id: 'golden_necklace_current' },
+          world: { active_events: [{ event: 'necklace / 목걸이 / object:necklace is currently inside wardrobe / 옷장 / place:wardrobe', status: 'active', time_scope: 'current', importance: 0.88 }] }
+        })
+      ],
+      expected: [{ axis: 'world', category: 'active_event', mustContain: ['object:necklace', 'place:wardrobe'], topK: 2 }],
+      forbidden: [{ axis: 'world', mustContain: ['object:necklace', 'place:table'], topK: 2 }]
+    }),
+    Object.freeze({
+      name: 'secret_denied_to_lia_is_forbidden',
+      query: '리아가 golden_hidden_letter_secret을 묻는다',
+      packets: [goldenPacket({
+        entity: { secrets: [{ title: 'golden_hidden_letter_secret', summary: '하루만 알고 리아에게는 숨겨진 편지의 존재', holderEntityIds: ['하루'], visibleToEntityIds: ['하루'], deniedToEntityIds: ['리아'], secrecyLevel: 'secret', revealState: 'hidden', importance: 0.92 }] }
+      })],
+      forbidden: [{ axis: 'entity', category: 'secret', mustContain: ['golden_hidden_letter_secret'], topK: 8 }]
+    }),
+    Object.freeze({
+      name: 'secret_holder_haru_can_recall',
+      query: '하루가 golden_hidden_letter_secret을 떠올린다',
+      packets: [goldenPacket({
+        entity: { secrets: [{ title: 'golden_hidden_letter_secret', summary: '하루만 알고 리아에게는 숨겨진 편지의 존재', holderEntityIds: ['하루'], visibleToEntityIds: ['하루'], deniedToEntityIds: ['리아'], secrecyLevel: 'secret', revealState: 'hidden', importance: 0.92 }] }
+      })],
+      expected: [{ axis: 'entity', category: 'secret', mustContain: ['golden_hidden_letter_secret'], topK: 5 }]
+    }),
+    Object.freeze({
+      name: 'planner_continuity_lock_recall',
+      query: '의식은 아직 해결하면 안 되는 거였지? golden_ritual_lock',
+      packets: [goldenPacket({
+        planner: { continuity_locks: [{ label: 'golden_ritual_lock: the ritual cannot be resolved before the third bell', status: 'active', importance: 0.9 }] }
+      })],
+      expected: [{ axis: 'planner', category: 'continuity_lock', mustContain: ['golden_ritual_lock'], topK: 3 }]
+    }),
+    Object.freeze({
+      name: 'planner_open_invitation_recall',
+      query: '사용자가 고를 수 있는 다음 선택지는 뭐였지? golden_bridge_choice',
+      packets: [goldenPacket({
+        planner: { open_invitations: [{ label: 'golden_bridge_choice: ask about the bridge or follow the lantern trail', status: 'active', importance: 0.82 }] }
+      })],
+      expected: [{ axis: 'planner', category: 'open_invitation', mustContain: ['golden_bridge_choice'], topK: 3 }]
+    }),
+    Object.freeze({
+      name: 'multilingual_alias_name_rin',
+      query: 'Rin은 지금 어디에 있어?',
+      packets: [goldenPacket({
+        entity: { characters: [{ name: '凛', aliases: ['Rin', '린', 'りん'], current_state: 'golden_rin_watchtower_state: 망루에서 남쪽 길을 감시 중', importance: 0.84 }] },
+        world: { location: 'watchtower / 망루 / place:watchtower' }
+      })],
+      expected: [{ axis: 'entity', category: 'character', mustContain: ['凛', 'golden_rin_watchtower_state'], topK: 3 }]
+    }),
+    Object.freeze({
+      name: 'recovery_snapshot_recall',
+      query: 'golden_recovery_promise 기억을 다시 불러와줘',
+      packets: [goldenPacket({
+        meta: {
+          packet_type: 'recovery_snapshot',
+          scene_id: 'golden_recovery_scene',
+          summary_memory: {
+            summary: 'golden_recovery_promise: 이전 출력에서 유실된 약속을 압축 복구함',
+            recallAnchors: ['golden_recovery_promise', 'promise / 약속 / state:active'],
+            canonicalAnchors: ['state:active'],
+            confidence: 0.72
+          }
+        },
+        planner: { consequence_ledger: [{ summary: 'golden_recovery_promise remains active after packet recovery', status: 'active', importance: 0.82 }] }
+      })],
+      expected: [{ axis: 'narrative', category: 'summary_memory', mustContain: ['golden_recovery_promise'], topK: 3 }]
+    }),
+    Object.freeze({
+      name: 'sparse_active_participant_recall',
+      query: '푸딩 지금 상태 기억해?',
+      packets: [goldenPacket({
+        entity: { characters: [{ name: '푸딩', current_state: 'golden_pudding_sparse_state: 말없이 창가에 기대어 있음', importance: 0.78 }] }
+      })],
+      expected: [{ axis: 'entity', category: 'character', mustContain: ['푸딩', 'golden_pudding_sparse_state'], topK: 3 }]
+    }),
+    Object.freeze({
+      name: 'bm25_rare_world_rule_signal',
+      query: 'aurora_lantern 규칙을 찾아줘',
+      packets: [goldenPacket({
+        world: { world_rules: [{ rule: 'aurora_lantern aurora_lantern aurora_lantern only opens at dawn; golden_bm25_rule_anchor', status: 'active', importance: 0.8 }] }
+      })],
+      expected: [{ axis: 'world', category: 'world_rule', mustContain: ['aurora_lantern', 'golden_bm25_rule_anchor'], minSignals: { bm25Signal: 0.001 }, topK: 3 }]
+    }),
+    Object.freeze({
+      name: 'false_positive_haru_not_haruka',
+      query: '하루 지금 상태 알려줘',
+      packets: [goldenPacket({
+        entity: {
+          characters: [
+            { name: '하루카', aliases: ['Haruka'], current_state: 'golden_haruka_decoy_state: 남쪽 복도에서 대기', importance: 0.72 },
+            { name: '하루노', aliases: ['Haruno'], current_state: 'golden_haruno_decoy_state: 서고 계단을 지킴', importance: 0.72 },
+            { name: '하루', aliases: ['Haru'], current_state: 'golden_haru_exact_state: 북쪽 기록실 문 앞에 서 있음', importance: 0.88 }
+          ]
+        }
+      })],
+      expected: [{ axis: 'entity', category: 'character', mustContain: ['하루', 'golden_haru_exact_state'], topK: 1 }],
+      forbidden: [
+        { axis: 'entity', category: 'character', mustContain: ['하루카', 'golden_haruka_decoy_state'], topK: 1 },
+        { axis: 'entity', category: 'character', mustContain: ['하루노', 'golden_haruno_decoy_state'], topK: 1 }
+      ]
+    }),
+    Object.freeze({
+      name: 'false_positive_mina_not_minah',
+      query: 'Mina가 마지막으로 약속한 건 뭐였지?',
+      packets: [goldenPacket({
+        entity: {
+          characters: [
+            { name: '민아', aliases: ['Mina'], current_state: 'golden_mina_vow_state: 푸른 리본을 돌려주기로 약속함', importance: 0.88 },
+            { name: '민하', aliases: ['Minah'], current_state: 'golden_minah_decoy_state: 비슷한 이름이지만 약속과 무관함', importance: 0.76 }
+          ]
+        },
+        planner: { consequence_ledger: [{ summary: 'golden_mina_vow_state remains active until the blue ribbon is returned', status: 'active', importance: 0.86 }] }
+      })],
+      expected: [{ axis: 'entity', category: 'character', mustContain: ['민아', 'golden_mina_vow_state'], topK: 2 }],
+      forbidden: [{ axis: 'entity', category: 'character', mustContain: ['민하', 'golden_minah_decoy_state'], topK: 1 }]
+    }),
+    Object.freeze({
+      name: 'character_current_replaces_old_state',
+      query: '세연은 지금 어디 있고 무엇을 들고 있지?',
+      packets: [
+        goldenPacket({
+          meta: { scene_id: 'golden_seyeon_old' },
+          entity: { characters: [{ name: '세연', aliases: ['Seyeon'], current_state: 'golden_seyeon_old_state: 정원 벤치에 앉아 있음', carrying: ['old_map'], status: 'superseded', time_scope: 'past', importance: 0.62 }] }
+        }),
+        goldenPacket({
+          meta: { scene_id: 'golden_seyeon_current' },
+          entity: { characters: [{ name: '세연', aliases: ['Seyeon'], current_state: 'golden_seyeon_current_state: 옥상 문 앞에서 은색 열쇠를 들고 있음', carrying: ['silver_key'], status: 'active', time_scope: 'current', importance: 0.9 }] }
+        })
+      ],
+      expected: [{ axis: 'entity', category: 'character', mustContain: ['세연', 'golden_seyeon_current_state', 'silver_key'], topK: 2 }],
+      forbidden: [{ axis: 'entity', category: 'character', mustContain: ['golden_seyeon_old_state', 'old_map'], topK: 3 }]
+    }),
+    Object.freeze({
+      name: 'relation_current_replaces_old_state',
+      query: '하루와 리아의 관계는 지금 신뢰 쪽이야 불신 쪽이야?',
+      packets: [
+        goldenPacket({
+          meta: { scene_id: 'golden_relation_old' },
+          entity: { relations: [{ from: '하루', to: '리아', state: 'golden_relation_old_distrust: 오해 때문에 불신이 강함', trust: 0.2, status: 'superseded', time_scope: 'past', importance: 0.62 }] }
+        }),
+        goldenPacket({
+          meta: { scene_id: 'golden_relation_current' },
+          entity: { relations: [{ from: '하루', to: '리아', state: 'golden_relation_current_trust: 오해 해소 뒤 신뢰가 회복됨', trust: 0.78, status: 'active', time_scope: 'current', dynamic: 'warming', importance: 0.9 }] }
+        })
+      ],
+      expected: [{ axis: 'entity', category: 'relation', mustContain: ['하루', '리아', 'golden_relation_current_trust'], topK: 2 }],
+      forbidden: [{ axis: 'entity', category: 'relation', mustContain: ['golden_relation_old_distrust'], topK: 3 }]
+    }),
+    Object.freeze({
+      name: 'active_event_current_beats_resolved_decoy',
+      query: 'crystal_gate는 지금 열린 상태야 닫힌 상태야?',
+      packets: [
+        goldenPacket({
+          world: { active_events: [{ event: 'crystal_gate / 수정문 / object:crystal_gate was open during the old scene; golden_gate_open_decoy', status: 'resolved', time_scope: 'past', importance: 0.64 }] }
+        }),
+        goldenPacket({
+          world: { active_events: [{ event: 'crystal_gate / 수정문 / object:crystal_gate is currently sealed after the bell; golden_gate_current_sealed', status: 'active', time_scope: 'current', importance: 0.89 }] }
+        })
+      ],
+      expected: [{ axis: 'world', category: 'active_event', mustContain: ['object:crystal_gate', 'golden_gate_current_sealed'], topK: 2 }],
+      forbidden: [{ axis: 'world', category: 'active_event', mustContain: ['golden_gate_open_decoy'], topK: 2 }]
+    }),
+    Object.freeze({
+      name: 'long_noise_buried_character_recall',
+      query: '은우의 mirror_promise는 아직 살아 있어?',
+      packets: [
+        ...goldenNoisePackets(18, 'character_before'),
+        goldenPacket({
+          meta: {
+            scene_id: 'golden_eunwoo_mirror',
+            summary_memory: {
+              summary: 'golden_mirror_promise: 은우는 거울 조각을 돌려주겠다고 약속했다.',
+              recallAnchors: ['mirror_promise / 거울 약속 / promise:mirror', '은우 / Eunwoo'],
+              canonicalAnchors: ['promise:mirror'],
+              mentionedEntityNames: ['은우', 'Eunwoo'],
+              confidence: 0.82
+            }
+          },
+          entity: { characters: [{ name: '은우', aliases: ['Eunwoo'], current_state: 'golden_mirror_promise_active: 거울 조각을 품에 넣고 약속을 지키려 함', carrying: ['mirror_shard'], importance: 0.88 }] },
+          planner: { consequence_ledger: [{ summary: 'golden_mirror_promise remains active until Eunwoo returns the mirror shard', status: 'active', importance: 0.86 }] }
+        }),
+        ...goldenNoisePackets(18, 'character_after', 100)
+      ],
+      expected: [
+        { axis: 'entity', category: 'character', mustContain: ['은우', 'golden_mirror_promise_active'], topK: 3 },
+        { axis: 'planner', category: 'consequence', mustContain: ['golden_mirror_promise'], topK: 5 }
+      ]
+    }),
+    Object.freeze({
+      name: 'long_noise_mid_world_rule_recall',
+      query: 'violet_bridge 통행 규칙을 찾아줘',
+      packets: [
+        ...goldenNoisePackets(20, 'rule_before'),
+        goldenPacket({
+          world: { world_rules: [{ rule: 'violet_bridge violet_bridge / 보라다리 / place:violet_bridge allows crossing only after moonrise; golden_violet_bridge_rule', status: 'active', importance: 0.88 }] }
+        }),
+        ...goldenNoisePackets(20, 'rule_after', 200)
+      ],
+      expected: [{ axis: 'world', category: 'world_rule', mustContain: ['violet_bridge', 'golden_violet_bridge_rule'], minSignals: { bm25Signal: 0.001 }, topK: 3 }]
+    }),
+    Object.freeze({
+      name: 'cross_language_object_alias_without_exact_query',
+      query: '카기는 어디에 숨겨졌지?',
+      packets: [goldenPacket({
+        meta: {
+          summary_memory: {
+            summary: 'The key is wrapped in red cloth inside the archive box.',
+            recallAnchors: ['key / 열쇠 / 鍵 / 카기 / object:key', 'red cloth / 붉은 천 / object:red_cloth', 'archive box / 기록 상자 / place:archive_box'],
+            canonicalAnchors: ['object:key', 'object:red_cloth', 'place:archive_box'],
+            confidence: 0.84
+          }
+        },
+        world: { active_events: [{ event: 'key / 열쇠 / 鍵 / 카기 / object:key hidden in red cloth inside archive box / place:archive_box; golden_key_red_cloth_location', status: 'active', importance: 0.86 }] }
+      })],
+      expected: [{ axis: 'world', category: 'active_event', mustContain: ['object:key', 'golden_key_red_cloth_location'], topK: 3 }]
+    }),
+    Object.freeze({
+      name: 'romanized_korean_alias_seyeon',
+      query: 'Seyeon speech style 기억나?',
+      packets: [goldenPacket({
+        entity: { characters: [{ name: '세연', aliases: ['Seyeon', 'Se-yeon'], speech_style: 'golden_seyeon_speech_style: 짧고 낮은 문장, 대답 전 한 박자 침묵', personality: '신중함', importance: 0.84 }] }
+      })],
+      expected: [{ axis: 'entity', category: 'character', mustContain: ['세연', 'golden_seyeon_speech_style'], topK: 3 }]
+    }),
+    Object.freeze({
+      name: 'planner_do_not_resolve_not_open_invitation',
+      query: '검은 편지의 정체는 아직 밝히면 안 되는 거였지?',
+      packets: [goldenPacket({
+        planner: {
+          open_invitations: [{ label: 'golden_black_letter_question: user may ask why the 검은 편지 / black letter trembles', status: 'active', importance: 0.72 }],
+          do_not_resolve_yet: [{ label: 'golden_black_letter_do_not_reveal: 검은 편지 / black letter sender identity must not be revealed yet', status: 'active', importance: 0.91 }]
+        }
+      })],
+      expected: [{ axis: 'planner', category: 'do_not_resolve_yet', mustContain: ['golden_black_letter_do_not_reveal'], topK: 3 }],
+      forbidden: [{ axis: 'planner', category: 'open_invitation', mustContain: ['golden_black_letter_question'], topK: 1 }]
+    }),
+    Object.freeze({
+      name: 'secret_visible_boundary_beats_denied_decoy',
+      query: '리아가 sapphire_phrase에 대해 알 수 있는 건 뭐야?',
+      packets: [goldenPacket({
+        entity: {
+          secrets: [
+            { title: 'golden_sapphire_phrase_allowed', summary: 'sapphire_phrase is a harmless passphrase Lia is allowed to know', holderEntityIds: ['하루', '리아'], visibleToEntityIds: ['리아'], deniedToEntityIds: [], secrecyLevel: 'private', revealState: 'known_to_lia', importance: 0.86 },
+            { title: 'golden_sapphire_phrase_denied_decoy', summary: 'sapphire_phrase also hides a second sender that Lia must not know', holderEntityIds: ['하루'], visibleToEntityIds: ['하루'], deniedToEntityIds: ['리아'], secrecyLevel: 'secret', revealState: 'hidden', importance: 0.9 }
+          ]
+        }
+      })],
+      expected: [{ axis: 'entity', category: 'secret', mustContain: ['golden_sapphire_phrase_allowed'], topK: 5 }],
+      forbidden: [{ axis: 'entity', category: 'secret', mustContain: ['golden_sapphire_phrase_denied_decoy'], topK: 5 }]
+    }),
+    Object.freeze({
+      name: 'generic_concept_false_positive_blocker',
+      query: 'rain_vow 때문에 유지해야 할 약속은?',
+      packets: [
+        goldenPacket({
+          planner: { consequence_ledger: [{ summary: 'generic rain memory: 비가 오면 모두 조용히 걷는다', status: 'background', importance: 0.58 }] }
+        }),
+        goldenPacket({
+          planner: { consequence_ledger: [{ summary: 'golden_rain_vow_active: rain_vow requires Lia to leave the north window unlocked until dawn', status: 'active', importance: 0.88 }] }
+        }),
+        goldenPacket({
+          planner: { consequence_ledger: [{ summary: 'generic vow memory: 오래된 맹세가 있었다는 배경 정보', status: 'background', importance: 0.58 }] }
+        })
+      ],
+      expected: [{ axis: 'planner', category: 'consequence', mustContain: ['golden_rain_vow_active'], topK: 2 }],
+      forbidden: [
+        { axis: 'planner', category: 'consequence', mustContain: ['generic rain memory'], topK: 1 },
+        { axis: 'planner', category: 'consequence', mustContain: ['generic vow memory'], topK: 1 }
+      ]
+    })
+  ]);
+  const goldenRecallStoreFromPackets = (packets = []) => {
+    const store = emptyStore();
+    const ingestResults = [];
+    ensureArray(packets).forEach((packet, index) => {
+      const raw = typeof packet === 'string' ? packet : JSON.stringify(packet);
+      const hash = `golden_recall_${index}_${stableHash64(raw)}`;
+      ingestResults.push(ingestPacket(store, raw, hash, {
+        messageIndex: index,
+        messageCount: ensureArray(packets).length,
+        distanceFromLatest: Math.max(0, ensureArray(packets).length - 1 - index),
+        chatRecency: ensureArray(packets).length <= 1 ? 1 : clamp((index + 1) / ensureArray(packets).length, 0, 1, 1)
+      }));
+    });
+    rebuildIndex(store);
+    return { store, ingestResults };
+  };
+  const goldenRecallRows = (result = {}, axis = '') => {
+    if (axis) return ensureArray(result[axis]);
+    return ['entity', 'world', 'narrative', 'planner'].flatMap(key => ensureArray(result[key]));
+  };
+  const goldenRecallRowText = row => [
+    row?.id,
+    row?.axis,
+    row?.category,
+    row?.publicRef,
+    row?.publicText,
+    row?.publicProfile,
+    row?.retrieval?.subject,
+    row?.retrieval?.subjectTokens,
+    row?.retrieval?.relationEndpoints,
+    row?.retrieval?.entityNames,
+    row?.retrieval?.canonicalAnchors,
+    row?.retrieval?.crossLingualTokens,
+    row?.retrieval?.priorityTerms
+  ].map(value => Array.isArray(value) ? value.join(' ') : text(value)).filter(Boolean).join('\n');
+  const goldenRecallContains = (row, needle) => {
+    const body = goldenRecallRowText(row);
+    const rawHaystack = body.toLowerCase();
+    const rawNeedle = text(needle).toLowerCase();
+    return rawHaystack.includes(rawNeedle) || normalizeKey(body).includes(normalizeKey(needle));
+  };
+  const goldenRecallRowMatches = (row, spec = {}) => {
+    if (!row) return false;
+    if (spec.axis && row.axis !== spec.axis) return false;
+    if (spec.category && row.category !== spec.category) return false;
+    if (spec.id && row.id !== spec.id) return false;
+    if (spec.ref && row.publicRef !== spec.ref) return false;
+    if (ensureArray(spec.mustContain).some(needle => !goldenRecallContains(row, needle))) return false;
+    const anyContain = ensureArray(spec.anyContain);
+    if (anyContain.length && !anyContain.some(needle => goldenRecallContains(row, needle))) return false;
+    if (ensureArray(spec.mustNotContain).some(needle => goldenRecallContains(row, needle))) return false;
+    for (const [key, minValue] of Object.entries(spec.minSignals || {})) {
+      if (Number(row.scoreBreakdown?.[key] || 0) < Number(minValue || 0)) return false;
+    }
+    return true;
+  };
+  const summarizeGoldenRecallRow = row => {
+    const breakdown = row?.scoreBreakdown || {};
+    const signalPairs = GOLDEN_RECALL_SIGNAL_KEYS
+      .map(key => [key, Number(breakdown[key] || 0)])
+      .filter(([, value]) => value > 0)
+      .sort((a, b) => b[1] - a[1]);
+    const signals = signalPairs
+      .slice(0, 5)
+      .map(([key, value]) => `${key}:${Number(value.toFixed(4))}`);
+    return {
+      axis: row?.axis || '',
+      category: row?.category || '',
+      ref: row?.publicRef || row?.id || '',
+      score: Number(Number(row?.score || 0).toFixed(4)),
+      text: compact(row?.publicText || '', 120),
+      topSignal: signalPairs[0]?.[0] || '',
+      signalValues: Object.fromEntries(GOLDEN_RECALL_SIGNAL_KEYS.map(key => [key, Number(Number(breakdown[key] || 0).toFixed(4))])),
+      signals
+    };
+  };
+  const runGoldenRecallCase = (testCase = {}) => {
+    const { store, ingestResults } = goldenRecallStoreFromPackets(testCase.packets || []);
+    const settings = { ...GOLDEN_RECALL_SETTINGS, ...(testCase.settings || {}) };
+    const result = searchIndex(store, testCase.query || '', settings);
+    const failures = [];
+    ensureArray(testCase.expected).forEach((spec, index) => {
+      const topK = Math.max(1, Number(spec.topK || testCase.topK || 3) || 3);
+      const rows = goldenRecallRows(result, spec.axis).slice(0, topK);
+      const match = rows.find(row => goldenRecallRowMatches(row, spec));
+      if (!match) {
+        failures.push({
+          type: 'expected_miss',
+          index,
+          spec: clone(spec, {}),
+          topK,
+          seen: rows.map(summarizeGoldenRecallRow)
+        });
+      }
+    });
+    ensureArray(testCase.forbidden).forEach((spec, index) => {
+      const topK = Math.max(1, Number(spec.topK || testCase.topK || 3) || 3);
+      const rows = goldenRecallRows(result, spec.axis).slice(0, topK);
+      const match = rows.find(row => goldenRecallRowMatches(row, spec));
+      if (match) {
+        failures.push({
+          type: 'forbidden_hit',
+          index,
+          spec: clone(spec, {}),
+          topK,
+          hit: summarizeGoldenRecallRow(match)
+        });
+      }
+    });
+    const ingestOk = ingestResults.every(result => result?.ok !== false);
+    if (!ingestOk) failures.push({ type: 'ingest_failed', ingestResults: clone(ingestResults, []) });
+    return {
+      name: testCase.name || 'unnamed',
+      query: testCase.query || '',
+      ok: failures.length === 0,
+      failures,
+      selected: Object.fromEntries(['entity', 'world', 'narrative', 'planner'].map(axis => [
+        axis,
+        ensureArray(result[axis]).slice(0, 3).map(summarizeGoldenRecallRow)
+      ]))
+    };
+  };
+  const runGoldenRecallTests = (options = {}) => {
+    const only = new Set(ensureArray(options.only).map(name => text(name)).filter(Boolean));
+    const cases = GOLDEN_RECALL_CASES.filter(testCase => !only.size || only.has(testCase.name));
+    const results = cases.map(runGoldenRecallCase);
+    const failures = results.filter(result => !result.ok);
+    return {
+      ok: failures.length === 0,
+      total: results.length,
+      passed: results.length - failures.length,
+      failed: failures.length,
+      failures,
+      results: options.includePasses ? results : failures
+    };
   };
 
   const runSelfTests = () => {
@@ -7086,6 +8635,39 @@ const MODE_PROFILES = Object.freeze({
     clearNgramCache();
     const cachedGrams = charNgramTokensCached('하루테스트', 40);
     check('char_ngram_cache_matches_uncached', JSON.stringify(cachedGrams) === JSON.stringify(charNgramTokens('하루테스트', 40)) && charNgramTokensCached('하루테스트', 40) === cachedGrams);
+    Memory.packetScanCache = new Map();
+    const sameEdgePacket = (name, state) => `<!-- ${PACKET_START} ${JSON.stringify({
+      meta: { schema: 'hayaku_packet_v1', packet_type: 'current_snapshot', packet_schema_rev: 2 },
+      entity: { characters: [{ name, current_state: state, importance: 0.9 }] },
+      importance: { overall: 0.9, reason: ['packet scan cache isolation fixture'] }
+    })} ${PACKET_END} -->`;
+    const sameEdgePrefix = 'P'.repeat(320);
+    const sameEdgeSuffix = 'S'.repeat(320);
+    const sameEdgeA = sameEdgePacket('동일A', 'golden_same_edge_cache_A_state');
+    const sameEdgeB = sameEdgePacket('동일B', 'golden_same_edge_cache_B_state');
+    const sameEdgeScope = requestScopeForMessages([{ role: 'assistant', chatId: 'same-edge-cache-scope', content: sameEdgePrefix + sameEdgeA + sameEdgeSuffix }]);
+    const sameEdgePacketsA = extractPackets([{ role: 'assistant', chatId: 'same-edge-cache-scope', id: 'same-message-id', content: sameEdgePrefix + sameEdgeA + sameEdgeSuffix }], sameEdgeScope);
+    const sameEdgePacketsB = extractPackets([{ role: 'assistant', chatId: 'same-edge-cache-scope', id: 'same-message-id', content: sameEdgePrefix + sameEdgeB + sameEdgeSuffix }], sameEdgeScope);
+    const sameEdgeRawB = materializeExtractedPacket(sameEdgePacketsB[0] || {}).raw || '';
+    check('packet_scan_cache_full_body_hash_isolates_same_edge_payloads',
+      sameEdgeA.length === sameEdgeB.length
+      && ensureArray(sameEdgePacketsA).length === 1
+      && ensureArray(sameEdgePacketsB).length === 1
+      && Memory.packetScanStats?.cacheEnabled === true
+      && Memory.packetScanStats?.cacheHits === 0
+      && sameEdgeRawB.includes('golden_same_edge_cache_B_state')
+      && !sameEdgeRawB.includes('golden_same_edge_cache_A_state'));
+    const sameEdgeRepeatPackets = extractPackets([{ role: 'assistant', chatId: 'same-edge-cache-scope', id: 'same-message-id', content: sameEdgePrefix + sameEdgeB + sameEdgeSuffix }], sameEdgeScope);
+    check('packet_scan_cache_hits_only_with_same_scope_and_body',
+      ensureArray(sameEdgeRepeatPackets).length === 1
+      && Memory.packetScanStats?.cacheEnabled === true
+      && Memory.packetScanStats?.cacheHits === 1
+      && materializeExtractedPacket(sameEdgeRepeatPackets[0] || {}).raw.includes('golden_same_edge_cache_B_state'));
+    const noScopePackets = extractPackets([{ role: 'assistant', id: 'same-message-id', content: sameEdgePrefix + sameEdgeA + sameEdgeSuffix }]);
+    check('packet_scan_cache_disabled_without_stable_chat_scope',
+      ensureArray(noScopePackets).length === 1
+      && Memory.packetScanStats?.cacheEnabled === false
+      && Memory.packetScanStats?.cacheSize === 0);
     const precomputedConcepts = conceptTokensForText('신뢰가 흔들리는 관계');
     check('semantic_frames_accept_precomputed_concepts', JSON.stringify(semanticFrameTokensForText('신뢰가 흔들리는 관계', precomputedConcepts)) === JSON.stringify(semanticFrameTokensForText('신뢰가 흔들리는 관계')));
     const memoryClass = RequestKindCore.classify('memory', [{ role: 'user', content: 'auxiliary memory request' }], '');
@@ -7151,6 +8733,262 @@ const MODE_PROFILES = Object.freeze({
     check('main_prompt_strips_assistant_loose_marker_packets',
       !/HAYAKU_STATE_PACKET_START|HAYAKU_STATE_PACKET_END/.test(messageContent(rawMarkerAssistantPrompt[0] || {}))
       && /visible text/.test(messageContent(rawMarkerAssistantPrompt[0] || {})));
+    const recoveryVisibleText = '세연은 잠긴 기록실 문 앞에서 오래 숨을 고르고, 리아가 건넨 낡은 열쇠를 조심스럽게 쥐었다. 둘 사이의 신뢰는 아직 흔들리지만 약속은 유지된다.';
+    const recoveryInput = { role: 'user', content: '<Current Input>\n그 다음 장면을 이어가.\n</Current Input>' };
+    const missingRecovery = detectPacketRecovery([
+      { role: 'assistant', content: recoveryVisibleText },
+      recoveryInput
+    ], [], DEFAULT_SETTINGS);
+    check('packet_recovery_detects_latest_assistant_without_packet', missingRecovery?.active === true && missingRecovery.reason === 'latest_assistant_without_packet' && missingRecovery.excerpt.includes('기록실'));
+    const recoveryVisibleText2 = '두 번째 누락 출력은 인물이 벽의 그림을 바라보며 움직이지 않고, 다음 압박을 기다리는 정지된 긴장을 남긴다.';
+    const doubleMissingRecovery = detectPacketRecovery([
+      { role: 'assistant', content: recoveryVisibleText },
+      { role: 'assistant', content: recoveryVisibleText2 },
+      recoveryInput
+    ], [], DEFAULT_SETTINGS);
+    check('packet_recovery_detects_consecutive_missing_assistant_outputs',
+      doubleMissingRecovery?.active === true
+      && doubleMissingRecovery.reason === 'assistant_chain_without_packet'
+      && doubleMissingRecovery.missingMessageCount === 2
+      && Array.isArray(doubleMissingRecovery.messageIndices)
+      && doubleMissingRecovery.messageIndices.length === 2
+      && doubleMissingRecovery.excerpt.includes('[Missing assistant output 1/2')
+      && doubleMissingRecovery.excerpt.includes('[Missing assistant output 2/2')
+      && doubleMissingRecovery.excerpt.includes('정지된 긴장'));
+    const cappedMissingRecovery = detectPacketRecovery([
+      { role: 'assistant', content: 'omitted_chain_anchor_zero: 아주 오래된 누락 출력은 복구 상한 밖으로 밀려야 한다. 이 문장은 테스트용으로 충분히 길다.' },
+      { role: 'assistant', content: 'kept_chain_anchor_one: 첫 번째 유지 누락 출력은 문 앞의 대기 상태와 보류된 약속을 남긴다.' },
+      { role: 'assistant', content: 'kept_chain_anchor_two: 두 번째 유지 누락 출력은 복도 끝 시선과 움직이지 않는 긴장을 남긴다.' },
+      { role: 'assistant', content: 'kept_chain_anchor_three: 세 번째 유지 누락 출력은 다음 압박 직전의 마지막 정지 상태를 남긴다.' },
+      recoveryInput
+    ], [], DEFAULT_SETTINGS);
+    check('packet_recovery_caps_long_missing_chain_to_recent_outputs',
+      cappedMissingRecovery?.active === true
+      && cappedMissingRecovery.missingMessageCount === PACKET_RECOVERY_MAX_CHAIN_MESSAGES
+      && cappedMissingRecovery.totalMissingMessageCount === 4
+      && cappedMissingRecovery.omittedMissingMessageCount === 1
+      && cappedMissingRecovery.firstMissingMessageIndex === 1
+      && cappedMissingRecovery.excerpt.includes('kept_chain_anchor_one')
+      && cappedMissingRecovery.excerpt.includes('kept_chain_anchor_three')
+      && !cappedMissingRecovery.excerpt.includes('omitted_chain_anchor_zero'));
+    const packetOnlyAfterVisibleMessages = [
+      { role: 'assistant', content: recoveryVisibleText },
+      { role: 'assistant', content: `<!-- ${PACKET_START} {"meta":{"schema":"hayaku_packet_v1"},"importance":{"overall":0.2}} ${PACKET_END} -->` },
+      recoveryInput
+    ];
+    check('packet_recovery_respects_separate_packet_message',
+      detectPacketRecovery(packetOnlyAfterVisibleMessages, extractPackets(packetOnlyAfterVisibleMessages), DEFAULT_SETTINGS) === null);
+    const invalidCurrentPacketMessages = [
+      {
+        role: 'assistant',
+        content: `${recoveryVisibleText}\n<!-- ${PACKET_START} {"meta":{"schema":"hayaku_packet_v1","packet_type":"current_snapshot"},"entity":{"characters":[]},"world":{"location":"기록실"}},"narrative":{"scene_phase":"전환"},"planner":{"continuity_locks":[]},"importance":{"overall":0.5,"reason":["malformed"]} ${PACKET_END} -->`
+      },
+      recoveryInput
+    ];
+    const invalidCurrentPacketRecovery = detectPacketRecovery(invalidCurrentPacketMessages, extractPackets(invalidCurrentPacketMessages), DEFAULT_SETTINGS);
+    check('packet_recovery_detects_latest_assistant_with_invalid_current_packet',
+      invalidCurrentPacketRecovery?.active === true
+      && invalidCurrentPacketRecovery.reason === 'latest_assistant_invalid_packet'
+      && invalidCurrentPacketRecovery.recoveryIssue === 'unreadable_current_packet'
+      && invalidCurrentPacketRecovery.invalidPacketCount === 1
+      && invalidCurrentPacketRecovery.excerpt.includes('기록실'));
+    const recoveryOnlyValidCurrentInvalidMessages = [
+      {
+        role: 'assistant',
+        content: `${recoveryVisibleText}\n<!-- ${PACKET_START} ${TAIL_RECOVERY_PACKET_EXAMPLE} ${PACKET_END} -->\n<!-- ${PACKET_START} {"meta":{"schema":"hayaku_packet_v1","packet_type":"current_snapshot"},"entity":{"characters":[]},"world":{"location":"기록실"}},"narrative":{"scene_phase":"전환"},"planner":{"continuity_locks":[]},"importance":{"overall":0.5,"reason":["malformed"]} ${PACKET_END} -->`
+      },
+      recoveryInput
+    ];
+    const recoveryOnlyValidCurrentInvalid = detectPacketRecovery(recoveryOnlyValidCurrentInvalidMessages, extractPackets(recoveryOnlyValidCurrentInvalidMessages), DEFAULT_SETTINGS);
+    check('packet_recovery_detects_valid_recovery_but_invalid_current_packet',
+      recoveryOnlyValidCurrentInvalid?.active === true
+      && recoveryOnlyValidCurrentInvalid.reason === 'latest_assistant_invalid_packet'
+      && recoveryOnlyValidCurrentInvalid.recoveryIssue === 'unreadable_current_packet');
+    const recoveryContextBlock = buildCompressedContinuityContext(
+      { entity: [], world: [], narrative: [], planner: [] },
+      { ...DEFAULT_SETTINGS, packetRecoveryRequest: missingRecovery },
+      '그 다음 장면을 이어가.'
+    );
+    const invalidRecoveryContextBlock = buildCompressedContinuityContext(
+      { entity: [], world: [], narrative: [], planner: [] },
+      { ...DEFAULT_SETTINGS, packetRecoveryRequest: invalidCurrentPacketRecovery },
+      '그 다음 장면을 이어가.'
+    );
+    const doubleRecoveryContextBlock = buildCompressedContinuityContext(
+      { entity: [], world: [], narrative: [], planner: [] },
+      { ...DEFAULT_SETTINGS, packetRecoveryRequest: doubleMissingRecovery },
+      '그 다음 장면을 이어가.'
+    );
+    const forgedRecovery = {
+      active: true,
+      reason: 'manual_recovery_flag',
+      messageIndex: 0,
+      boundaryIndex: 1,
+      excerpt: recoveryVisibleText
+    };
+    const forgedRecoveryContextBlock = buildCompressedContinuityContext(
+      { entity: [], world: [], narrative: [], planner: [] },
+      { ...DEFAULT_SETTINGS, packetRecoveryRequest: forgedRecovery },
+      '그 다음 장면을 이어가.'
+    );
+    check('packet_recovery_context_has_internal_leak_guard',
+      recoveryContextBlock.includes('[HAYAKU PACKET RECOVERY CARE]')
+      && recoveryContextBlock.includes('Do not let Haya')
+      && recoveryContextBlock.includes('recovery_snapshot')
+      && recoveryContextBlock.includes('current_snapshot')
+      && recoveryContextBlock.includes('exactly two compact HTML-comment HAYAKU_STATE_PACKET blocks'));
+    check('packet_recovery_context_keeps_recovery_and_current_separate',
+      recoveryContextBlock.includes('Packet 1 is recovery_snapshot for the missing previous assistant output only')
+      && recoveryContextBlock.includes('Packet 2 is current_snapshot for the final state after the current visible response')
+      && recoveryContextBlock.includes('Do not merge recovery_snapshot and current_snapshot into one packet')
+      && recoveryContextBlock.includes('final 1-2 beats')
+      && recoveryContextBlock.includes('environmental gaze/sensory anchors')
+      && recoveryContextBlock.includes('required clean hidden HAYAKU_STATE_PACKETs')
+      && !recoveryContextBlock.includes('leave one clean hidden HAYAKU_STATE_PACKET'));
+    check('packet_recovery_context_preserves_missing_output_chain',
+      doubleRecoveryContextBlock.includes('all 2 missing assistant outputs in chronological order')
+      && doubleRecoveryContextBlock.includes('[Missing assistant output 1/2')
+      && doubleRecoveryContextBlock.includes('[Missing assistant output 2/2'));
+    check('packet_recovery_context_handles_unreadable_previous_packet',
+      invalidRecoveryContextBlock.includes('previous hidden note was unreadable')
+      && invalidRecoveryContextBlock.includes('whose hidden HAYAKU packet was unreadable')
+      && invalidRecoveryContextBlock.includes('recovery_snapshot')
+      && invalidRecoveryContextBlock.includes('current_snapshot'));
+    check('packet_recovery_requires_actual_missing_packet_detection',
+      missingRecovery?.source === 'detected_missing_packet'
+      && !forgedRecoveryContextBlock.includes('[HAYAKU PACKET RECOVERY CARE]')
+      && !buildSideWriteTailReminder({ ...DEFAULT_SETTINGS, packetRecoveryRequest: forgedRecovery }).includes('exactly two raw HTML-comment HAYAKU_STATE_PACKET blocks'));
+    const normalTailReminder = buildSideWriteTailReminder(DEFAULT_SETTINGS);
+    const recoveryTailReminder = buildSideWriteTailReminder({ ...DEFAULT_SETTINGS, packetRecoveryRequest: missingRecovery });
+    const doubleRecoveryTailReminder = buildSideWriteTailReminder({ ...DEFAULT_SETTINGS, packetRecoveryRequest: doubleMissingRecovery });
+    const correctiveTailReminder = buildSideWriteTailReminder({
+      ...DEFAULT_SETTINGS,
+      packetHealth: {
+        parseFailedRecently: true,
+        invalidJsonRecently: true,
+        requiredKeysMissingRecently: true
+      }
+    });
+    check('normal_tail_requires_one_current_packet',
+      normalTailReminder.includes('exactly one raw HTML-comment HAYAKU_STATE_PACKET')
+      && normalTailReminder.includes('"packet_type":"current_snapshot"')
+      && normalTailReminder.includes('[REQUIRED]')
+      && normalTailReminder.includes('[HAYAKU PACKET COMPLETION GATE]')
+      && normalTailReminder.includes('Write the packet every eligible model response')
+      && normalTailReminder.includes('minimal current_snapshot packet with low confidence instead of omitting HAYAKU')
+      && normalTailReminder.includes('Temporal state')
+      && normalTailReminder.includes('event time, evidence/observation time, character knowledge time')
+      && normalTailReminder.includes('Keep meta.scene_id stable')
+      && normalTailReminder.includes('current_snapshot meta.pattern_guard')
+      && normalTailReminder.includes('expires_after_turns 1-2')
+      && normalTailReminder.includes('resolved_reason')
+      && normalTailReminder.includes('If the visible response is already done but the packet appendix is missing')
+      && !normalTailReminder.includes('exactly two raw HTML-comment HAYAKU_STATE_PACKET blocks')
+      && !normalTailReminder.includes('...'));
+    check('packet_recovery_tail_requires_two_ordered_packets',
+      recoveryTailReminder.includes('exactly two raw HTML-comment HAYAKU_STATE_PACKET blocks')
+      && recoveryTailReminder.indexOf('recovery_snapshot') >= 0
+      && recoveryTailReminder.indexOf('current_snapshot') > recoveryTailReminder.indexOf('recovery_snapshot')
+      && recoveryTailReminder.includes('Do not merge packets')
+      && recoveryTailReminder.includes('Never omit current_snapshot')
+      && recoveryTailReminder.includes('missing sequence final beat')
+      && recoveryTailReminder.includes('environmental gaze/sensory anchor')
+      && recoveryTailReminder.includes('Do not stop after the visible response')
+      && recoveryTailReminder.includes('[HAYAKU PACKET COMPLETION GATE]')
+      && recoveryTailReminder.includes('current_snapshot is still mandatory and must be second')
+      && recoveryTailReminder.includes('second/current_snapshot')
+      && recoveryTailReminder.includes('Temporal state')
+      && recoveryTailReminder.includes('world.active_events as status active/time_scope current')
+      && recoveryTailReminder.includes('Keep meta.scene_id stable')
+      && recoveryTailReminder.includes('current_snapshot meta.pattern_guard')
+      && recoveryTailReminder.includes('expires_after_turns 1-2')
+      && recoveryTailReminder.includes('resolved_reason')
+      && !recoveryTailReminder.includes('...'));
+    check('packet_recovery_tail_mentions_consecutive_missing_count',
+      doubleRecoveryTailReminder.includes('all 2 missing previous assistant outputs in chronological order')
+      && doubleRecoveryTailReminder.includes('Do not stop after the visible response'));
+    check('packet_tail_adds_failure_specific_corrections',
+      correctiveTailReminder.includes('Last packet parse failed')
+      && correctiveTailReminder.includes('Last packet missed required keys')
+      && correctiveTailReminder.includes('Do not close the top-level } until after importance')
+      && correctiveTailReminder.includes('Silently check brace balance')
+      && correctiveTailReminder.includes('no ellipses'));
+    const repeatGuardMessages = [
+      {
+        role: 'assistant',
+        content: '리아는 창가에서 긴 숨을 고르며 손끝으로 컵의 가장자리를 한 번 쓸었다. "괜찮아." 그녀는 고개를 살짝 기울이며 조용히 그를 바라보았다. 복도 너머의 빛은 아직 움직이지 않았다.'
+      },
+      {
+        role: 'assistant',
+        content: '하루는 대답 대신 문가에 멈춰 섰고, 방 안의 공기는 조금 더 낮게 가라앉았다. "괜찮아." 그녀는 고개를 살짝 기울이며 조용히 그를 바라보았다. 이번에는 침묵이 더 길었다.'
+      },
+      { role: 'user', content: '<Current Input>\n계속 이어가.\n</Current Input>' }
+    ];
+    const runtimeRepeatGuards = buildVisibleRepeatGuards(repeatGuardMessages);
+    const runtimeRepeatContext = buildCompressedContinuityContext(
+      { entity: [], world: [], narrative: [], planner: [], metaGuards: runtimeRepeatGuards },
+      DEFAULT_SETTINGS,
+      '계속 이어가.'
+    );
+    check('visible_repeat_guard_detects_repeated_dialogue_and_sentence',
+      runtimeRepeatGuards.some(row => row?._metaGuard?.kind === 'dialogue' && row?._metaGuard?.sampleCount > 0)
+      && runtimeRepeatGuards.some(row => row?._metaGuard?.kind === 'sentence' && row?._metaGuard?.sampleCount > 0));
+    check('visible_repeat_guard_does_not_expose_samples_as_packet_evidence',
+      runtimeRepeatGuards.every(row => row?.lifecycle?.evidence === PATTERN_GUARD_NEUTRAL_EVIDENCE)
+      && runtimeRepeatGuards.every(row => row?.publicText?.includes(`evidence "${PATTERN_GUARD_NEUTRAL_EVIDENCE}"`))
+      && !runtimeRepeatContext.includes('괜찮아')
+      && !runtimeRepeatContext.includes('고개를 살짝 기울이며'));
+    check('visible_repeat_guard_has_short_lifecycle',
+      runtimeRepeatGuards.every(row => row?.lifecycle?.expiresAfterTurns === PATTERN_GUARD_DEFAULT_EXPIRES_AFTER_TURNS)
+      && runtimeRepeatGuards.every(row => row?.lifecycle?.resolveWhen === PATTERN_GUARD_DEFAULT_RESOLVE_WHEN)
+      && runtimeRepeatGuards.every(row => row?.publicText?.includes('short-lived correction guard')));
+    check('visible_repeat_guard_context_injects_runtime_meta_guard',
+      runtimeRepeatContext.includes('[META GUARDS]')
+      && runtimeRepeatContext.includes('Avoid reusing recent direct dialogue')
+      && runtimeRepeatContext.includes('current_snapshot meta.pattern_guard')
+      && runtimeRepeatContext.includes('expires_after_turns')
+      && runtimeRepeatContext.includes('resolved_reason')
+      && runtimeRepeatContext.includes('recent assistant dialogue or narration sentences verbatim'));
+    const patternGuardExpiryStore = {};
+    ingestPacketLedgerRev2Meta(patternGuardExpiryStore, {
+      meta: {
+        pattern_guard: [
+          { summary: 'avoid_reusing_recent_direct_dialogue', status: 'active', evidence: 'Recent repeated samples: "괜찮아"' }
+        ]
+      },
+      importance: { overall: 0.5, reason: ['pattern guard expiry'] }
+    }, 7, 'pattern_guard_expiry_hash', {}, {});
+    const ingestedPatternGuard = ensureArray(patternGuardExpiryStore?.planner?.items).find(row => row?.category === 'pattern_guard');
+    check('pattern_guard_ingest_defaults_short_expiry',
+      ingestedPatternGuard?.expires_after_turns === PATTERN_GUARD_DEFAULT_EXPIRES_AFTER_TURNS
+      && ingestedPatternGuard?.resolve_when === PATTERN_GUARD_DEFAULT_RESOLVE_WHEN
+      && ensureArray(ingestedPatternGuard?.evidence).includes(PATTERN_GUARD_NEUTRAL_EVIDENCE)
+      && !ensureArray(ingestedPatternGuard?.evidence).join(' ').includes('괜찮아'));
+    const hayaContextBlock = buildCompressedContinuityContext(
+      { entity: [], world: [], narrative: [], planner: [] },
+      DEFAULT_SETTINGS,
+      '계속'
+    );
+    const hayaDisabledContextBlock = buildCompressedContinuityContext(
+      { entity: [], world: [], narrative: [], planner: [] },
+      { ...DEFAULT_SETTINGS, hayaLoveFrame: false, hayaPrefill: false },
+      '계속'
+    );
+    check('haya_love_frame_defaults_on',
+      DEFAULT_SETTINGS.hayaLoveFrame === true
+      && DEFAULT_SETTINGS.hayaPrefill === true
+      && hayaContextBlock.includes('[HAYAKU HAYA FRAME]')
+      && hayaContextBlock.includes('Welcome, Haya')
+      && hayaContextBlock.includes('Private continuation cue')
+      && hayaContextBlock.includes('I do not stop at the visible ending')
+      && hayaContextBlock.includes('[HAYAKU PACKET COMPLETION GATE]')
+      && hayaContextBlock.includes('Do not echo Haya'));
+    check('haya_love_frame_can_disable',
+      !hayaDisabledContextBlock.includes('[HAYAKU HAYA FRAME]')
+      && !hayaDisabledContextBlock.includes('Welcome, Haya'));
+    check('haya_frame_stays_out_of_tail_reminder',
+      !buildSideWriteTailReminder(DEFAULT_SETTINGS).includes('Private Haya frame reminder')
+      && !buildSideWriteTailReminder(DEFAULT_SETTINGS).includes('Haya/loved/prefill'));
     const structuredAssistantPrompt = injectPrompt([{ role: 'assistant', data: { content: [{ type: 'text', text: auxiliaryRawMarkerPacket }], keep: 'meta' } }], '');
     check('main_prompt_preserves_structured_assistant_data_payloads',
       Array.isArray(structuredAssistantPrompt[0]?.data?.content)
@@ -7533,9 +9371,11 @@ const MODE_PROFILES = Object.freeze({
       { role: 'user', content: 'next' }
     ], 'block', 'tail');
     const dataOnlyPacketSystems = dataOnlyPacketInjection.filter(row => row?.role === 'system');
-    check('main_prompt_uses_clean_payload_shape_for_system_injection',
-      dataOnlyPacketSystems.length === 2
-      && dataOnlyPacketSystems.every(row => hasOwnProperty(row, 'content') && !hasOwnProperty(row, 'data')));
+    const dataOnlyPacketUserInjections = dataOnlyPacketInjection.filter(row => row?.role === 'user' && (row?.content === 'block' || row?.content === 'tail'));
+    check('main_prompt_uses_clean_payload_shape_for_user_injection',
+      dataOnlyPacketSystems.length === 0
+      && dataOnlyPacketUserInjections.length === 2
+      && dataOnlyPacketUserInjections.every(row => hasOwnProperty(row, 'content') && !hasOwnProperty(row, 'data')));
     const auxiliaryDirtyDataPayload = stripHayakuFromMessagePayloads({ role: 'assistant', content: 'visible text', data: auxiliaryStripPacket });
     check('auxiliary_strip_cleans_data_payload_when_content_clean',
       auxiliaryDirtyDataPayload.changed === true
@@ -7712,6 +9552,31 @@ const MODE_PROFILES = Object.freeze({
     const holderSearch = searchIndex(fixtureStore, '하루가 숨겨진 정보를 떠올린다', DEFAULT_SETTINGS);
     check('search_includes_holder_secret', holderSearch.entity.some(row => row.category === 'secret'));
     check('search_uses_packet_ledger_rev2_engine', holderSearch.entity.some(row => row.retrievalEngine === LEDGER_REV2_SCORING_ENGINE && row.scoreBreakdown?.retrievalEngine === LEDGER_REV2_SCORING_ENGINE && row.scoreBreakdown?.packetLedgerV2));
+    const holderRows = Object.values(holderSearch).flat();
+    check('bm25_channel_defaults_on', DEFAULT_SETTINGS.bm25Channel === true && DEFAULT_SETTINGS.bm25Weight === 0.08);
+    check('bm25_channel_breakdown_present',
+      holderRows.some(row => row.scoreBreakdown?.bm25Enabled === true && typeof row.scoreBreakdown?.bm25 === 'number' && typeof row.scoreBreakdown?.bm25Signal === 'number'));
+    const bm25DisabledSearch = searchIndex(fixtureStore, '하루가 숨겨진 정보를 떠올린다', { ...DEFAULT_SETTINGS, bm25Channel: false });
+    const bm25DisabledRows = Object.values(bm25DisabledSearch).flat();
+    check('bm25_channel_can_disable',
+      bm25DisabledRows.length > 0
+      && bm25DisabledRows.every(row => row.scoreBreakdown?.bm25Enabled === false && row.scoreBreakdown?.bm25Signal === 0));
+    const bm25WeightedDoc = retrievalBm25Document({
+      publicText: 'field_bm25_repeat field_bm25_repeat ordinary filler',
+      publicRef: 'world.world_rule.field_bm25_repeat',
+      retrieval: {
+        tokens: ['field_bm25_repeat'],
+        canonicalAnchors: ['object:field_bm25_anchor'],
+        subjectTokens: ['subject_field_bm25'],
+        priorityTerms: ['priority_field_bm25']
+      }
+    });
+    const bm25DocCount = token => bm25WeightedDoc.filter(item => item === normalizeKey(token)).length;
+    check('bm25_document_preserves_term_frequency_and_field_weights',
+      bm25DocCount('field_bm25_repeat') >= 4
+      && bm25DocCount('field_bm25_anchor') >= 4
+      && bm25DocCount('subject_field_bm25') >= 3
+      && bm25DocCount('priority_field_bm25') >= 2);
     const jpSummaryStore = {
       ...emptyStore(),
       memory: {
@@ -7954,6 +9819,155 @@ const MODE_PROFILES = Object.freeze({
     const plannerOpenSearch = searchIndex(plannerDynamicRecall.store, 'only_open_token_harbor', { ...DEFAULT_SETTINGS, mode: 'deep', maxItemsPerAxis: 8 });
     check('packet_recall_preserves_planner_dynamic_categories', ['next_direction', 'suggested_hook', 'open_invitation'].every(category => plannerDynamicCategories.has(category)));
     check('packet_recall_selects_planner_dynamic_items', plannerNextSearch.planner.some(row => row.category === 'next_direction') && plannerHookSearch.planner.some(row => row.category === 'suggested_hook') && plannerOpenSearch.planner.some(row => row.category === 'open_invitation'));
+    const previousTurnBridgePacket = {
+      meta: {
+        schema: 'hayaku_packet_v1',
+        packet_type: 'current_snapshot',
+        packet_schema_rev: 2,
+        scene_id: 'bridge_scene_alpha',
+        turn_anchor: 'only_bridge_anchor_token_cobalt',
+        active_speaker: '리아',
+        visible_participants: ['리아', '하루'],
+        summary_memory: {
+          summary: '직전 턴에서 only_bridge_summary_token_cobalt 약속이 남아 있음',
+          recallAnchors: ['only_bridge_anchor_token_cobalt', 'object:bridge_cobalt'],
+          canonicalAnchors: ['object:bridge_cobalt'],
+          mentionedEntityNames: ['리아', '하루']
+        }
+      },
+      entity: { characters: [{ name: '리아', current_state: 'only_bridge_character_token_cobalt 상태 유지' }] },
+      world: { location: 'bridge_room', active_events: [] },
+      narrative: { scene_phase: 'pause', conflict_traces: [{ summary: 'only_bridge_conflict_token_cobalt unresolved' }] },
+      planner: { next_direction: [{ label: 'only_bridge_next_token_cobalt' }] },
+      importance: { overall: 0.82, reason: ['previous turn bridge regression'] }
+    };
+    const previousTurnBridgeMessages = [
+      { role: 'assistant', content: `visible\n\n<!-- ${PACKET_START}\n${JSON.stringify(previousTurnBridgePacket)}\n${PACKET_END} -->` },
+      { role: 'user', content: '<Current Input>\n계속\n</Current Input>' }
+    ];
+    const previousTurnBridgePackets = extractPackets(previousTurnBridgeMessages, requestScopeForMessages(previousTurnBridgeMessages));
+    const previousTurnBridge = buildPreviousTurnRecallBridge(previousTurnBridgeMessages, previousTurnBridgePackets, '계속', DEFAULT_SETTINGS);
+    check('previous_turn_recall_bridge_builds_for_continuation_query',
+      previousTurnBridge.active === true
+      && previousTurnBridge.mode === 'strong'
+      && previousTurnBridge.sourceMessageIndex === 0
+      && previousTurnBridge.query.includes('only_bridge_next_token_cobalt')
+      && previousTurnBridge.query.includes('bridge_scene_alpha'));
+    const resetPreviousTurnBridge = buildPreviousTurnRecallBridge(previousTurnBridgeMessages, previousTurnBridgePackets, '다음 날 새 장면으로 넘어간다', DEFAULT_SETTINGS);
+    check('previous_turn_recall_bridge_disables_on_scene_shift',
+      resetPreviousTurnBridge.active === false
+      && resetPreviousTurnBridge.reason === 'scene_shift_query');
+    const previousTurnBridgeRecall = packetRecallRegression(previousTurnBridgePacket, 'previous_turn_bridge_packet');
+    const previousTurnBridgeSearch = searchIndex(previousTurnBridgeRecall.store, previousTurnBridge.query, { ...DEFAULT_SETTINGS, mode: 'deep', maxItemsPerAxis: 8 });
+    check('previous_turn_recall_bridge_selects_prior_packet_continuity',
+      previousTurnBridgeSearch.planner.some(row => /only_bridge_next_token_cobalt/.test(row.publicText))
+      || previousTurnBridgeSearch.narrative.some(row => /only_bridge_conflict_token_cobalt/.test(row.publicText))
+      || previousTurnBridgeSearch.entity.some(row => /only_bridge_character_token_cobalt/.test(row.publicText)));
+    const bridgeSelectionOldRaw = JSON.stringify({
+      meta: { schema: 'hayaku_packet_v1', packet_type: 'current_snapshot', summary_memory: { summary: 'older packet only_bridge_next_token_cobalt detail' } },
+      entity: {},
+      world: {},
+      narrative: {},
+      planner: {},
+      importance: { overall: 0.2 }
+    });
+    const bridgeSelectionFillerRaw = JSON.stringify({
+      meta: { schema: 'hayaku_packet_v1', packet_type: 'current_snapshot', summary_memory: { summary: 'filler packet' } },
+      entity: {},
+      world: {},
+      narrative: {},
+      planner: {},
+      importance: { overall: 0.2 }
+    });
+    const bridgeSelectionPackets = Array.from({ length: 8 }, (_, index) => {
+      const raw = index === 0 ? bridgeSelectionOldRaw : (index === 7 ? JSON.stringify(previousTurnBridgePacket) : bridgeSelectionFillerRaw);
+      return { raw, hash: `bridge_selection_${index}_${stableHash64(raw)}`, messageIndex: index, messageCount: 9, distanceFromLatest: 8 - index, chatRecency: index / 8 };
+    });
+    const bridgeSelectionPlain = selectPacketsForIngest(bridgeSelectionPackets, '계속', { ...DEFAULT_SETTINGS, mode: 'balanced' });
+    const bridgeSelectionWithBridge = selectPacketsForIngest(bridgeSelectionPackets, previousTurnBridge.query, { ...DEFAULT_SETTINGS, mode: 'balanced' });
+    check('previous_turn_recall_bridge_selects_old_relevant_packet_for_ingest',
+      !bridgeSelectionPlain.packets.some(packet => packet.hash === bridgeSelectionPackets[0].hash)
+      && bridgeSelectionWithBridge.packets.some(packet => packet.hash === bridgeSelectionPackets[0].hash));
+    const pronounBridgePacket = {
+      meta: {
+        schema: 'hayaku_packet_v1',
+        packet_type: 'current_snapshot',
+        packet_schema_rev: 2,
+        scene_id: 'pronoun_scene_alpha',
+        turn_anchor: '리아가 문가에서 멈춰 선 뒤 아직 대답하지 않았다',
+        pov_entity: '리아',
+        active_speaker: '하루',
+        visible_participants: ['리아', '하루'],
+        summary_memory: {
+          summary: '리아는 feminine_hint_token 여성이며 아직 말하지 않은 약속을 품고 있다',
+          mentionedEntityNames: ['리아', '하루'],
+          recallAnchors: ['only_pronoun_lia_token'],
+          canonicalAnchors: ['person:lia']
+        }
+      },
+      entity: {
+        characters: [
+          { name: '리아', gender: 'female', current_state: 'only_pronoun_lia_token 말을 꺼내려는 상태' },
+          { name: '하루', gender: 'male', current_state: '하루는 기다리는 중' }
+        ]
+      },
+      world: { location: 'pronoun_room' },
+      narrative: { scene_phase: 'pause' },
+      planner: { next_direction: [{ label: '리아가 대답할 차례' }] },
+      importance: { overall: 0.82, reason: ['pronoun bridge regression'] }
+    };
+    const pronounBridgeMessages = [
+      { role: 'assistant', content: `visible\n\n<!-- ${PACKET_START}\n${JSON.stringify(pronounBridgePacket)}\n${PACKET_END} -->` },
+      { role: 'user', content: '<Current Input>\n그녀가 말했다\n</Current Input>' }
+    ];
+    const pronounBridgePackets = extractPackets(pronounBridgeMessages, requestScopeForMessages(pronounBridgeMessages));
+    const pronounBridge = buildPreviousTurnRecallBridge(pronounBridgeMessages, pronounBridgePackets, '그녀가 말했다', DEFAULT_SETTINGS);
+    check('pronoun_recall_bridge_ranks_feminine_scene_candidate',
+      pronounBridge.active === true
+      && pronounBridge.pronounBridge?.candidates?.[0]?.name === '리아'
+      && pronounBridge.pronounBridge?.candidates?.[0]?.confidence >= pronounBridge.pronounBridge?.candidates?.[1]?.confidence
+      && pronounBridge.query.includes('pronoun_candidates')
+      && pronounBridge.query.includes('only_pronoun_lia_token'));
+    const pronounBridgeRecall = packetRecallRegression(pronounBridgePacket, 'pronoun_bridge_packet');
+    const pronounBridgeSearch = searchIndex(pronounBridgeRecall.store, pronounBridge.query, { ...DEFAULT_SETTINGS, mode: 'deep', maxItemsPerAxis: 8 });
+    check('pronoun_recall_bridge_recalls_ranked_candidate_row',
+      pronounBridgeSearch.entity.some(row => /only_pronoun_lia_token/.test(row.publicText)));
+    const pronounStateOnlyPacket = {
+      meta: {
+        schema: 'hayaku_packet_v1',
+        packet_type: 'current_snapshot',
+        packet_schema_rev: 2,
+        scene_id: 'pronoun_state_only_scene',
+        turn_anchor: '그녀가 문 앞에서 숨을 골랐다',
+        pov_entity: '현지유',
+        active_speaker: '푸딩',
+        visible_participants: ['현지유', '푸딩'],
+        summary_memory: {
+          mentionedEntityNames: ['현지유', '푸딩'],
+          recallAnchors: ['only_pronoun_state_field_token']
+        }
+      },
+      entity: {
+        characters: [
+          { name: '현지유', aliases: ['지유'], state: 'only_pronoun_state_field_token state 필드만 있는 상태', status: 'active' },
+          { name: '푸딩', aliases: ['Puding'], state: '기다리는 상태', status: 'active' }
+        ]
+      },
+      world: { location: 'state_only_room' },
+      narrative: { scene_phase: 'pause' },
+      planner: {},
+      importance: { overall: 0.78, reason: ['state field bridge regression'] }
+    };
+    const pronounStateOnlyMessages = [
+      { role: 'assistant', content: `visible\n\n<!-- ${PACKET_START}\n${JSON.stringify(pronounStateOnlyPacket)}\n${PACKET_END} -->` },
+      { role: 'user', content: '<Current Input>\n그녀가 말했다\n</Current Input>' }
+    ];
+    const pronounStateOnlyPackets = extractPackets(pronounStateOnlyMessages, requestScopeForMessages(pronounStateOnlyMessages));
+    const pronounStateOnlyBridge = buildPreviousTurnRecallBridge(pronounStateOnlyMessages, pronounStateOnlyPackets, '그녀가 말했다', DEFAULT_SETTINGS);
+    check('previous_turn_bridge_reads_character_state_field',
+      pronounStateOnlyBridge.query.includes('only_pronoun_state_field_token')
+      && pronounStateOnlyBridge.pronounBridge?.candidates?.[0]?.name === '현지유'
+      && pronounStateOnlyBridge.pronounBridge?.candidates?.[0]?.confidence >= pronounStateOnlyBridge.pronounBridge?.candidates?.[1]?.confidence);
     const typedCollectionRecall = packetRecallRegression({
       meta: { schema: 'hayaku_packet_v1' },
       entity: {},
@@ -8144,13 +10158,24 @@ const MODE_PROFILES = Object.freeze({
     check('auto_performance_mode_defaults_balanced', resolvePerformanceMode({ ...DEFAULT_SETTINGS, mode: 'auto' }, Array.from({ length: 24 }, () => ({ role: 'user', content: '계속' })), '계속').mode === 'balanced');
     check('explicit_performance_mode_is_not_auto_overridden', resolvePerformanceMode({ ...DEFAULT_SETTINGS, mode: 'fast' }, Array.from({ length: 24 }, () => ({ role: 'user', content: '예전 기록을 확인해줘' })), '예전 기록을 확인해줘').mode === 'fast');
     const previousRun = Memory.lastBeforeRequest;
-    Memory.lastBeforeRequest = { elapsedMs: 5200, budgetMs: 5000, budgetExceeded: true, packetSelection: { total: 80 }, packetScan: { packets: 80 } };
-    check('auto_performance_mode_throttles_after_budget_pressure', resolvePerformanceMode({ ...DEFAULT_SETTINGS, mode: 'auto' }, Array.from({ length: 300 }, () => ({ role: 'user', content: '계속' })), '계속').mode === 'fast');
-    Memory.lastBeforeRequest = { elapsedMs: 1800, budgetMs: 5000, budgetExceeded: false, packetSelection: { total: 24 }, packetScan: { packets: 24 } };
-    check('auto_performance_mode_uses_deep_for_manageable_past_recall', resolvePerformanceMode({ ...DEFAULT_SETTINGS, mode: 'auto' }, Array.from({ length: 120 }, () => ({ role: 'user', content: '기록' })), '처음 만났던 기억을 확인해줘').mode === 'deep');
-    Memory.lastBeforeRequest = { elapsedMs: 1800, budgetMs: 5000, budgetExceeded: false, packetSelection: { total: 320 }, packetScan: { packets: 320 } };
-    check('auto_performance_mode_keeps_large_recall_at_balanced', resolvePerformanceMode({ ...DEFAULT_SETTINGS, mode: 'auto' }, Array.from({ length: 2200 }, () => ({ role: 'user', content: '기록' })), '예전 관계 기록을 확인해줘').mode === 'balanced');
+    const perfMessages = (count, chatId, content = '계속') => Array.from({ length: count }, () => ({ role: 'user', chatId, content }));
+    const perfScope = requestScopeForMessages(perfMessages(1, 'perf-scope'));
+    Memory.lastBeforeRequest = { scopeKey: perfScope.key, scopeConfident: true, elapsedMs: 5200, budgetMs: 5000, budgetExceeded: true, packetSelection: { total: 80 }, packetScan: { packets: 80 } };
+    check('auto_performance_mode_throttles_after_budget_pressure', resolvePerformanceMode({ ...DEFAULT_SETTINGS, mode: 'auto' }, perfMessages(300, 'perf-scope'), '계속').mode === 'fast');
+    Memory.lastBeforeRequest = { scopeKey: perfScope.key, scopeConfident: true, elapsedMs: 1800, budgetMs: 5000, budgetExceeded: false, packetSelection: { total: 24 }, packetScan: { packets: 24 } };
+    check('auto_performance_mode_uses_deep_for_manageable_past_recall', resolvePerformanceMode({ ...DEFAULT_SETTINGS, mode: 'auto' }, perfMessages(120, 'perf-scope', '기록'), '처음 만났던 기억을 확인해줘').mode === 'deep');
+    Memory.lastBeforeRequest = { scopeKey: perfScope.key, scopeConfident: true, elapsedMs: 1800, budgetMs: 5000, budgetExceeded: false, packetSelection: { total: 320 }, packetScan: { packets: 320 } };
+    check('auto_performance_mode_keeps_large_recall_at_balanced', resolvePerformanceMode({ ...DEFAULT_SETTINGS, mode: 'auto' }, perfMessages(2200, 'perf-scope', '기록'), '예전 관계 기록을 확인해줘').mode === 'balanced');
+    const heavyScope = requestScopeForMessages(perfMessages(1, 'heavy-scope'));
+    Memory.lastBeforeRequest = { at: now(), scopeKey: heavyScope.key, scopeConfident: true, elapsedMs: 1800, budgetMs: 5000, budgetExceeded: false, packetSelection: { total: 320 }, packetScan: { packets: 320 } };
+    const freshOtherScopeMode = resolvePerformanceMode({ ...DEFAULT_SETTINGS, mode: 'auto' }, perfMessages(2, 'fresh-scope', '기록'), '처음 만났던 기억을 확인해줘');
+    check('auto_performance_mode_ignores_previous_pressure_from_other_scope',
+      freshOtherScopeMode.mode === 'deep'
+      && freshOtherScopeMode.signals?.previousScopeMatched === false
+      && freshOtherScopeMode.signals?.previousIgnoredReason === 'scope_mismatch');
     Memory.lastBeforeRequest = previousRun;
+    const goldenRecall = runGoldenRecallTests();
+    check('golden_recall_harness_passes', goldenRecall.ok, JSON.stringify(goldenRecall.failures.slice(0, 3)));
     return { ok: failures.length === 0, failures };
   };
 
@@ -8165,6 +10190,8 @@ const MODE_PROFILES = Object.freeze({
     Memory.store = emptyStore();
     clearTokenSimilarityCache();
     clearNgramCache();
+    const requestScope = requestScopeForMessages(messages, requestType);
+    const initialPacketScanScope = syncPacketScanCacheScope(requestScope);
     const stage = (name, fn) => {
       const stageStartedAt = now();
       try {
@@ -8186,6 +10213,11 @@ const MODE_PROFILES = Object.freeze({
         sanitized: true,
         reason: requestClass.reason,
         requestType,
+        scopeKey: requestScope.key || '',
+        scopeConfident: requestScope.confident === true,
+        scopeReason: requestScope.reason || '',
+        packetScanCacheEnabled: initialPacketScanScope.enabled === true,
+        packetScanCacheScopeCleared: initialPacketScanScope.cleared === true,
         stages,
         hayakuPacketCharsRemoved,
         elapsedMs: now() - startedAt,
@@ -8202,7 +10234,19 @@ const MODE_PROFILES = Object.freeze({
       const requestClass = stage('classifyRequest', () => RequestKindCore.classify(requestType, messages, '', configuredMainTypes ? { mainTypes: configuredMainTypes } : {}));
       if (!settings.enabled) {
         if (requestClass.auxiliary) return sanitizeAuxiliaryMessages(requestClass, { disabled: true, reason: `disabled,${requestClass.reason}` });
-        Memory.lastBeforeRequest = { at: now(), skipped: true, reason: 'disabled', requestType, stages, elapsedMs: now() - startedAt };
+        Memory.lastBeforeRequest = {
+          at: now(),
+          skipped: true,
+          reason: 'disabled',
+          requestType,
+          scopeKey: requestScope.key || '',
+          scopeConfident: requestScope.confident === true,
+          scopeReason: requestScope.reason || '',
+          packetScanCacheEnabled: initialPacketScanScope.enabled === true,
+          packetScanCacheScopeCleared: initialPacketScanScope.cleared === true,
+          stages,
+          elapsedMs: now() - startedAt
+        };
         return messages;
       }
       if (requestClass.auxiliary) {
@@ -8210,13 +10254,19 @@ const MODE_PROFILES = Object.freeze({
       }
       const store = emptyStore();
       const query = stage('latestUserText', () => latestUserText(messages));
-      const performanceMode = stage('resolvePerformanceMode', () => resolvePerformanceMode(settings, messages, query));
+      const performanceMode = stage('resolvePerformanceMode', () => resolvePerformanceMode(settings, messages, query, { scope: requestScope }));
       settings.effectiveMode = performanceMode.mode;
       settings.effectiveModeReason = performanceMode.reason;
       settings.effectiveModeSignals = clone(performanceMode.signals || {}, {});
       requestBudgetMs = budgetForSettings(settings);
-      const packets = stage('extractPackets', () => extractPackets(messages));
-      const packetSelection = stage('selectPackets', () => selectPacketsForIngest(packets, query, settings));
+      const packets = stage('extractPackets', () => extractPackets(messages, requestScope));
+      const packetRecovery = stage('packetRecovery', () => {
+        const detected = detectPacketRecovery(messages, packets, settings);
+        return isDetectedPacketRecoveryRequest(detected) ? detected : null;
+      });
+      const previousTurnRecallBridge = stage('previousTurnRecallBridge', () => buildPreviousTurnRecallBridge(messages, packets, query, settings));
+      const retrievalQuery = previousTurnRecallBridge.active ? previousTurnRecallBridge.query : query;
+      const packetSelection = stage('selectPackets', () => selectPacketsForIngest(packets, retrievalQuery, settings));
       const packetsToIngest = packetSelection.packets;
       if (packetSelection.stats?.skipped > 0) {
         debugLog('beforeRequest:packetSelection', packetSelection.stats);
@@ -8227,6 +10277,7 @@ const MODE_PROFILES = Object.freeze({
         full: packetSelection.stats?.full || 0,
         light: packetSelection.stats?.light || 0,
         skipped: packetSelection.stats?.skipped || 0,
+        recovery: packetRecovery?.active === true ? packetRecovery.reason : '',
         turn: store.turn || 0,
         index: ensureArray(store.index).length
       });
@@ -8289,16 +10340,18 @@ const MODE_PROFILES = Object.freeze({
           updatedAt: now()
         };
       }
-      const selected = stage('search', () => searchIndex(store, query, settings));
-      const selectedWithMetaGuards = stage('metaGuards', () => attachRev2MetaGuards(store, selected, query, settings));
+      const selected = stage('search', () => searchIndex(store, retrievalQuery, settings));
+      const selectedWithMetaGuards = stage('metaGuards', () => attachRev2MetaGuards(store, selected, retrievalQuery, settings));
+      const visibleRepeatGuards = stage('visibleRepeatGuards', () => buildVisibleRepeatGuards(messages));
+      const selectedWithRuntimeGuards = stage('runtimeMetaGuards', () => attachVisibleRepeatGuards(selectedWithMetaGuards, visibleRepeatGuards));
       const packetHealth = stage('packetHealth', () => computePacketHealth(packetResults, store));
-      const sceneSignals = stage('sceneSignals', () => computeSceneSignals(query, selectedWithMetaGuards, store));
+      const sceneSignals = stage('sceneSignals', () => computeSceneSignals(query, selectedWithRuntimeGuards, store));
       const promptMode = stage('choosePromptMode', () => choosePromptMode(packetHealth, sceneSignals, settings));
-      const tail = stage('buildTail', () => buildSideWriteTailReminder());
+      const tail = stage('buildTail', () => buildSideWriteTailReminder({ ...settings, packetRecoveryRequest: packetRecovery, packetHealth }));
       const tailChars = text(tail).length;
       const injectionCapChars = modeInjectionCap(promptMode);
-      const contextSettings = { ...settings, promptMode, injectionCapChars, tailReserveChars: tailChars };
-      const block = stage('buildContext', () => buildContinuityContext(selectedWithMetaGuards, contextSettings, query, promptMode));
+      const contextSettings = { ...settings, promptMode, injectionCapChars, tailReserveChars: tailChars, packetRecoveryRequest: packetRecovery };
+      const block = stage('buildContext', () => buildContinuityContext(selectedWithRuntimeGuards, contextSettings, query, promptMode));
       const totalInjectedChars = block.length + tailChars;
       const variableChars = variableStateViewLength(block);
       const variableBudget = variableStateViewBudget(contextSettings, block);
@@ -8311,6 +10364,9 @@ const MODE_PROFILES = Object.freeze({
       Memory.store = store;
       Memory.lastBeforeRequest = {
         at: now(),
+        scopeKey: requestScope.key || '',
+        scopeConfident: requestScope.confident === true,
+        scopeReason: requestScope.reason || '',
         elapsedMs: now() - startedAt,
         stages,
         chars: totalInjectedChars,
@@ -8330,13 +10386,16 @@ const MODE_PROFILES = Object.freeze({
         sceneAnchors: clone(store.context?.sceneAnchors || null, null),
         packetQuality: clone(store.context?.packetQuality || [], []),
         packetHealth: clone(packetHealth, {}),
+        packetRecovery: clone(packetRecovery || null, null),
+        previousTurnRecallBridge: clone(previousTurnRecallBridge || null, null),
+        visibleRepeatGuards: clone(visibleRepeatGuards || [], []),
         sceneSignals: clone(sceneSignals, {}),
         configuredMode: settings.mode,
         effectiveMode: settings.effectiveMode,
         effectiveModeReason: settings.effectiveModeReason,
         effectiveModeSignals: clone(settings.effectiveModeSignals || {}, {}),
         promptMode,
-        selected: Object.fromEntries(Object.entries(selectedWithMetaGuards).map(([axis, rows]) => [axis, rows.map(row => ({
+        selected: Object.fromEntries(Object.entries(selectedWithRuntimeGuards).map(([axis, rows]) => [axis, rows.map(row => ({
           id: row.id,
           ref: row.publicRef,
           category: row.category,
@@ -8349,10 +10408,13 @@ const MODE_PROFILES = Object.freeze({
         failed,
         packetSelection: clone(packetSelection.stats || {}, {}),
         packetScan: clone(Memory.packetScanStats || {}, {}),
+        packetScanCacheEnabled: initialPacketScanScope.enabled === true,
+        packetScanCacheScopeCleared: initialPacketScanScope.cleared === true,
         compat: RisuCompat.snapshot(),
         budgetMs: requestBudgetMs,
         budgetExceeded,
-        queryPreview: compact(query, 160)
+        queryPreview: compact(query, 160),
+        retrievalQueryPreview: compact(retrievalQuery, 220)
       };
       debugLog('beforeRequest:done', {
         elapsedMs: Memory.lastBeforeRequest.elapsedMs,
@@ -8363,7 +10425,10 @@ const MODE_PROFILES = Object.freeze({
         effectiveMode: settings.effectiveMode,
         effectiveModeReason: settings.effectiveModeReason,
         promptMode,
-        selected: Object.fromEntries(Object.entries(selectedWithMetaGuards).map(([axis, rows]) => [axis, rows.length]))
+        packetRecovery: packetRecovery?.active === true ? packetRecovery.reason : '',
+        previousTurnRecallBridge: previousTurnRecallBridge?.active === true ? previousTurnRecallBridge.reason : '',
+        visibleRepeatGuards: visibleRepeatGuards.length,
+        selected: Object.fromEntries(Object.entries(selectedWithRuntimeGuards).map(([axis, rows]) => [axis, rows.length]))
       });
       return injectPrompt(messages, block, tail);
     } catch (error) {
@@ -8379,6 +10444,11 @@ const MODE_PROFILES = Object.freeze({
         failedOpen: true,
         reason: 'beforeRequest_failed',
         error: detail.message,
+        scopeKey: requestScope.key || '',
+        scopeConfident: requestScope.confident === true,
+        scopeReason: requestScope.reason || '',
+        packetScanCacheEnabled: initialPacketScanScope.enabled === true,
+        packetScanCacheScopeCleared: initialPacketScanScope.cleared === true,
         stages,
         elapsedMs: now() - startedAt,
         requestType,
@@ -8403,6 +10473,7 @@ const MODE_PROFILES = Object.freeze({
       }, {}),
       compat: () => clone(RisuCompat.snapshot(), {}),
       selfTest: runSelfTests,
+      goldenRecallTest: runGoldenRecallTests,
       classifyRequest: RequestKindCore.classify
     };
   };
