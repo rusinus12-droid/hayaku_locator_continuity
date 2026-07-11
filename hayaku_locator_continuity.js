@@ -1,8 +1,8 @@
 //@name hayaku_locator_continuity
-//@display-name HAYAKU · Locator Continuity v1.2.2
+//@display-name HAYAKU · Locator Continuity v1.2.3
 //@author rusinus12@gmail.com
 //@api 3.0
-//@version 1.2.2
+//@version 1.2.3
 //@update-url https://raw.githubusercontent.com/rusinus12-droid/hayaku_locator_continuity/main/hayaku_locator_continuity.js
 //@arg hayaku_enabled string true|false
 //@arg hayaku_mode string auto|balanced|fast|deep
@@ -70,7 +70,7 @@
   }
 
   const PLUGIN_NAME = 'HAYAKU';
-  const PLUGIN_VERSION = '1.2.2';
+  const PLUGIN_VERSION = '1.2.3';
   const KEY_PREFIX = 'hayaku.v1';
   const STORE_KEY = `${KEY_PREFIX}.store`;
   const SETTINGS_CACHE_KEY = `${KEY_PREFIX}.settings.cache`;
@@ -2797,6 +2797,15 @@ const MODE_PROFILES = Object.freeze({
     const raw = text(value).trim();
     return allowed.includes(raw) ? raw : fallback;
   };
+  const normalizedPovMemoryType = (value = '', fallback = 'experienced') => {
+    const raw = text(value).trim().toLowerCase().replace(/[\s-]+/g, '_');
+    if (POV_MEMORY_TYPES.includes(raw)) return raw;
+    if (/^(?:traumatic_event|current_action|personal_memory|direct_experience|experience)$/.test(raw)) return 'experienced';
+    if (/^(?:observation|observed|eyewitness|witness)$/.test(raw)) return 'witnessed';
+    if (/^(?:deduction|deduced|suspicion|suspected|guess)$/.test(raw)) return 'inferred';
+    if (/^(?:plan|motivation|reflection|intention|intent|private_plan)$/.test(raw)) return 'private_thought';
+    return fallback;
+  };
   const normalizePovMemory = record => {
     const source = objectish(record) ? record : { text: text(record) };
     const confidenceExplicit = Number.isFinite(Number(source.confidence)) && Number(source.confidence) > 0;
@@ -2804,12 +2813,12 @@ const MODE_PROFILES = Object.freeze({
     const pressureExplicit = firstExplicitFinite([source.pressure, source.urgency], null);
     const impressionExplicit = firstExplicitFinite([source.impression], null);
     const ownerEntityId = compact(source.ownerEntityId || source.ownerEntity || source.owner || source.entity || source.name || source.subject || source.character || source.characterName || '', 100);
-    const body = compact(source.text || source.rawText || source.memory || source.content || source.summary || '', 900);
+    const body = compact(source.text || source.rawText || source.memory || source.content || source.description || source.summary || '', 900);
     const summary = compact(source.summary || body, 260);
     const textSignalsInference = SECRET_INFERENCE_SIGNAL_RE.test(`${summary} ${body}`)
       && !SECRET_DIRECT_ACQUISITION_RE.test(`${summary} ${body}`)
       && !SECRET_CONFIRMED_HOLDER_RE.test(`${summary} ${body}`);
-    const memoryType = enumValue(source.memoryType || source.type, POV_MEMORY_TYPES,
+    const memoryType = normalizedPovMemoryType(source.memoryType || source.type,
       textSignalsInference ? 'inferred' : (source.privacy === 'internal' ? 'private_thought' : 'experienced'));
     const knowledgeState = enumValue(source.knowledgeState || source.state, KNOWLEDGE_STATES,
       textSignalsInference || memoryType === 'rumor' || memoryType === 'inferred' ? 'suspected' : 'known');
@@ -2832,6 +2841,17 @@ const MODE_PROFILES = Object.freeze({
       relatedEntities: mergeValues([source.relatedEntities, source.relatedEntityIds, source.entities], 32),
       related_refs: mergeValues([source.related_refs, source.relatedRefs, source.source_refs, source.sourceRefs], 32),
       canonicalAnchors: mergeValues([source.canonicalAnchors, source.canonical_anchors, source.canonicalTokens, source.canonical_tokens], 32),
+      evidence: compact(source.evidence || source.sourceEvidence || source.source_evidence || '', 420),
+      status: compact(source.status || '', 48),
+      time_scope: compact(source.time_scope || source.timeScope || '', 48),
+      event_time: compact(source.event_time || source.eventTime || '', 100),
+      observed_at: compact(source.observed_at || source.observedAt || source.timestamp || '', 100),
+      known_at: compact(source.known_at || source.knownAt || '', 100),
+      narration_time: compact(source.narration_time || source.narrationTime || '', 100),
+      last_confirmed_at: compact(source.last_confirmed_at || source.lastConfirmedAt || '', 100),
+      recallSuppressed: source.recallSuppressed === true,
+      qualityFlags: mergeValues([source.qualityFlags], 16),
+      riskFlags: mergeValues([source.riskFlags], 16),
       _confidenceExplicit: confidenceExplicit,
       confidence: clamp(source.confidence, 0, 1, knowledgeState === 'known' ? 0.68 : 0.45),
       importance: (() => { const v = Number(source.importance); return Number.isFinite(v) ? clamp(v > 1 ? v / 10 : v, 0, 1, 0.5) : 0.5; })(),
@@ -2906,7 +2926,7 @@ const MODE_PROFILES = Object.freeze({
     const salienceExplicit = firstExplicitFinite([source.salience], null);
     const pressureExplicit = firstExplicitFinite([source.pressure, source.urgency], null);
     const impressionExplicit = firstExplicitFinite([source.impression], null);
-    const summary = compact(source.summary || source.text || source.rawText || source.content || source.title || source.secret || source.subject || source.state || source.status || '', 420);
+    const summary = compact(source.summary || source.text || source.rawText || source.content || source.description || source.title || source.secret || source.subject || source.state || source.status || '', 420);
     const revealSourceRefs = mergeValues([source.revealSourceRefs, source.reveal_source_refs], 32);
     const relatedRefs = mergeValues([source.related_refs, source.relatedRefs, source.sourceRefs, source.relatedSourceRefs], 64);
     const evidence = compact(source.evidence || source.revealEvidence || source.reveal_evidence || '', 420);
@@ -2932,7 +2952,7 @@ const MODE_PROFILES = Object.freeze({
       id: text(source.id || '').trim(),
       title: compact(source.title || source.secret || source.subject || summary, 120),
       summary,
-      rawText: compact(source.rawText || source.text || source.content || summary, 900),
+      rawText: compact(source.rawText || source.text || source.content || source.description || summary, 900),
       holderEntityIds,
       visibleToEntityIds,
       inferredByEntityIds: inferredEntityIds,
@@ -4133,6 +4153,14 @@ const MODE_PROFILES = Object.freeze({
       ? `Detected request output contract: ${parts.join('; ')}. Higher-priority active instructions still win.`
       : `Request-local output-contract evidence: ${parts.join('; ')}. This restates detected request evidence only; any higher-priority active instruction overrides it.`;
   };
+  const outputContractSurfaceLanguageRule = (contract, compactMode = false) => {
+    if (!objectish(contract) || contract.explicitBilingual === true) return '';
+    const effective = objectish(contract.effectiveLanguage) ? contract.effectiveLanguage : contract.language;
+    const dialogueLanguage = text(effective?.dialogue || effective?.overall).trim();
+    if (!dialogueLanguage) return '';
+    const lead = compactMode ? 'Surface-language rule:' : 'Request-local surface-language materialization rule:';
+    return `${lead} user prose is semantic scene canon, not source-language surface text. Render user-supplied dialogue directly in ${dialogueLanguage} once, preserving its meaning and scene function. When its input language differs, translate or adapt it into ${dialogueLanguage} instead of preserving both versions. Do not print the source utterance beside, before, or after its rendering as another quote, subtitle, italic line, parenthesis, label, or later restatement.`;
+  };
   const hasCompleteHayakuPacketMarkers = value => {
     const body = text(value);
     return body.includes(PACKET_START) && body.includes(PACKET_END);
@@ -4480,26 +4508,18 @@ const MODE_PROFILES = Object.freeze({
     return { content, script, quoted: Boolean(quoted), italic, softItalic, embedded: false };
   };
   const extractCrossLanguageDialoguePairs = value => {
-    const lines = visibleRepeatGuardClean(value)
-      .split(/\n/g)
-      .map(line => line.trim())
-      .filter(Boolean);
-    const pairs = [];
-    for (let i = 0; i < lines.length - 1; i += 1) {
-      const first = visibleDialogueLine(lines[i]);
-      const second = visibleDialogueLine(lines[i + 1]);
-      if (!first || !second || first.script === second.script) continue;
-      if (!(first.quoted && second.italic) && !(first.italic && second.quoted)) continue;
-      pairs.push({ first: first.content, second: second.content, scripts: [first.script, second.script] });
-      i += 1;
-    }
-    return pairs;
+    const detected = crossLanguageDialogueMirrorPairs(visibleRepeatGuardClean(value));
+    return detected.pairs.map(pair => ({
+      first: pair.first.parsed.content,
+      second: pair.second.parsed.content,
+      scripts: pair.scripts
+    }));
   };
   const crossLanguageDialogueMirrorPairs = value => {
     const lines = text(value).replace(/\r\n/g, '\n').split('\n');
     const entries = lines
       .map((line, index) => ({ index, line, parsed: visibleDialogueLine(line) }))
-      .filter(entry => entry.line.trim() && entry.parsed);
+      .filter(entry => entry.line.trim() && entry.parsed && (entry.parsed.quoted || entry.parsed.italic));
     const pairs = [];
     for (let i = 0; i < entries.length - 1; i += 1) {
       const first = entries[i];
@@ -4507,18 +4527,114 @@ const MODE_PROFILES = Object.freeze({
       if (first.parsed.script === second.parsed.script) continue;
       const quoteThenItalic = first.parsed.quoted && second.parsed.softItalic;
       const italicThenQuote = first.parsed.softItalic && second.parsed.quoted;
-      if (!quoteThenItalic && !italicThenQuote) continue;
+      const quoteThenQuote = first.parsed.quoted && second.parsed.quoted && second.index - first.index <= 4;
+      if (!quoteThenItalic && !italicThenQuote && !quoteThenQuote) continue;
       pairs.push({ first, second, scripts: [first.parsed.script, second.parsed.script] });
       i += 1;
     }
     return { lines, pairs };
   };
+  const outputLanguageTargetScripts = value => {
+    const key = normalizeKey(value);
+    if (!key) return new Set();
+    const matchesAlias = aliases => aliases.some(alias => {
+      const normalizedAlias = normalizeKey(alias);
+      return key === normalizedAlias || key === `${normalizedAlias}language` || key === `${normalizedAlias}문법`;
+    });
+    if (matchesAlias(['korean', 'hangul', '한국어', '한국말', '조선말'])) return new Set(['hangul']);
+    if (matchesAlias(['japanese', '日本語', '日本語文', '일본어'])) return new Set(['kana', 'han']);
+    if (matchesAlias(['english', '영어', '英語'])) return new Set(['latin']);
+    return new Set();
+  };
+  const quotedFragmentIsStructuredSyntax = (line, offset, whole) => {
+    const before = line.slice(0, offset);
+    const after = line.slice(offset + whole.length);
+    const lastOpenTag = before.lastIndexOf('<');
+    const lastCloseTag = before.lastIndexOf('>');
+    if (lastOpenTag > lastCloseTag) return true;
+    if ((before.match(/`/g) || []).length % 2 === 1) return true;
+    if (/=\s*$/.test(before) || /^\s*:/.test(after)) return true;
+    if (/^\s*[\[{]/.test(line) || /^\s*"[^"\n]+"\s*:/.test(line)) return true;
+    return false;
+  };
+  const quotedFragmentLooksLikeDialogue = (line, offset) => {
+    const before = line.slice(0, offset);
+    const visibleBefore = before.replace(/^[\s>*_#-]+/, '').trim();
+    if (!visibleBefore) return true;
+    return /(?:\b(?:said|asked|replied|answered|whispered|murmured|shouted|called|added|continued)|(?:말했다|말하며|말하고|물었다|대답했다|속삭였다|외쳤다|중얼거렸다|덧붙였다|이어\s*말했다)|(?:言った|尋ねた|答えた|囁いた|叫んだ|付け加えた))[\s,.:：-]*$/i.test(before);
+  };
+  const lineBeginsWithQuotedDialogue = line => /^[\s>*_#-]*["“「『]/.test(text(line));
+  const stripNonTargetQuotedDialogueText = (value, targetLanguage) => {
+    if (typeof value !== 'string' || !value) return { value, changed: false, removed: 0, fragmentsRemoved: 0 };
+    const allowedScripts = outputLanguageTargetScripts(targetLanguage);
+    if (!allowedScripts.size) return { value, changed: false, removed: 0, fragmentsRemoved: 0 };
+    let fragmentsRemoved = 0;
+    const quotePatterns = [
+      /"([^"\n]{2,260})"/g,
+      /“([^”\n]{2,260})”/g,
+      /「([^」\n]{2,260})」/g,
+      /『([^』\n]{2,260})』/g
+    ];
+    const hadCrLf = /\r\n/.test(value);
+    let inFence = false;
+    let clean = value.replace(/\r\n/g, '\n').split('\n').map(line => {
+      if (/^\s*```/.test(line)) {
+        inFence = !inFence;
+        return line;
+      }
+      if (inFence) return line;
+      let next = line;
+      quotePatterns.forEach(re => {
+        next = next.replace(re, (whole, inner, offset) => {
+          if (quotedFragmentIsStructuredSyntax(next, Number(offset || 0), whole)) return whole;
+          if (!quotedFragmentLooksLikeDialogue(next, Number(offset || 0)) && !lineBeginsWithQuotedDialogue(next)) return whole;
+          const script = dominantVisibleScript(inner);
+          if (!script || allowedScripts.has(script)) return whole;
+          fragmentsRemoved += 1;
+          return '';
+        });
+      });
+      return next;
+    }).join('\n');
+    if (!fragmentsRemoved) return { value, changed: false, removed: 0, fragmentsRemoved: 0 };
+    clean = clean
+      .replace(/^[ \t]+$/gm, '')
+      .replace(/\n{3,}/g, '\n\n');
+    if (hadCrLf) clean = clean.replace(/\n/g, '\r\n');
+    return {
+      value: clean,
+      changed: clean !== value,
+      removed: Math.max(0, value.length - clean.length),
+      fragmentsRemoved
+    };
+  };
   const stripCrossLanguageDialogueMirrorsText = (value, options = {}) => {
-    if (typeof value !== 'string' || !value) return { value, changed: false, removed: 0, pairs: 0, linesRemoved: 0 };
+    if (typeof value !== 'string' || !value) return { value, changed: false, removed: 0, pairs: 0, linesRemoved: 0, fragmentsRemoved: 0 };
+    const nonTarget = options.stripNonTargetDialogue === true
+      ? stripNonTargetQuotedDialogueText(value, options.targetDialogueLanguage)
+      : { value, changed: false, removed: 0, fragmentsRemoved: 0 };
     const minimumPairs = Math.max(2, Number(options.minimumPairs || 2) || 2);
-    const detected = crossLanguageDialogueMirrorPairs(value);
-    if (detected.pairs.length < minimumPairs) return { value, changed: false, removed: 0, pairs: detected.pairs.length, linesRemoved: 0 };
-    const removedIndexes = new Set(detected.pairs.map(pair => pair.second.index));
+    const detected = crossLanguageDialogueMirrorPairs(nonTarget.value);
+    if (detected.pairs.length < minimumPairs) {
+      return {
+        value: nonTarget.value,
+        changed: nonTarget.changed,
+        removed: nonTarget.removed,
+        pairs: detected.pairs.length,
+        linesRemoved: 0,
+        fragmentsRemoved: nonTarget.fragmentsRemoved
+      };
+    }
+    const targetScripts = outputLanguageTargetScripts(options.targetDialogueLanguage);
+    const removedIndexes = new Set(detected.pairs.map(pair => {
+      if (targetScripts.size) {
+        const firstMatches = targetScripts.has(pair.first.parsed.script);
+        const secondMatches = targetScripts.has(pair.second.parsed.script);
+        if (!firstMatches && secondMatches) return pair.first.index;
+        if (firstMatches && !secondMatches) return pair.second.index;
+      }
+      return pair.second.index;
+    }));
     const localBlankCleanup = new Set();
     removedIndexes.forEach(index => {
       if (!detected.lines[index - 1]?.trim() && !detected.lines[index + 1]?.trim()) localBlankCleanup.add(index + 1);
@@ -4526,13 +4642,14 @@ const MODE_PROFILES = Object.freeze({
     let clean = detected.lines
       .filter((_, index) => !removedIndexes.has(index) && !localBlankCleanup.has(index))
       .join('\n');
-    if (/\r\n/.test(value)) clean = clean.replace(/\n/g, '\r\n');
+    if (/\r\n/.test(nonTarget.value)) clean = clean.replace(/(?<!\r)\n/g, '\r\n');
     return {
       value: clean,
       changed: clean !== value,
       removed: Math.max(0, value.length - clean.length),
       pairs: detected.pairs.length,
-      linesRemoved: removedIndexes.size
+      linesRemoved: removedIndexes.size,
+      fragmentsRemoved: nonTarget.fragmentsRemoved
     };
   };
   const dialogueMirrorPayloadNeedsStrip = (value, options = {}, seen = new WeakSet()) => {
@@ -4549,12 +4666,13 @@ const MODE_PROFILES = Object.freeze({
     seen.delete(value);
     return false;
   };
-  const cloneStrippedDialogueMirrorPayloadValue = (value, options = {}, memo = new WeakMap(), stats = { removed: 0, pairs: 0, linesRemoved: 0, stringsChanged: 0 }) => {
+  const cloneStrippedDialogueMirrorPayloadValue = (value, options = {}, memo = new WeakMap(), stats = { removed: 0, pairs: 0, linesRemoved: 0, fragmentsRemoved: 0, stringsChanged: 0 }) => {
     if (typeof value === 'string') {
       const result = stripCrossLanguageDialogueMirrorsText(value, options);
       stats.removed += result.removed;
       stats.pairs += result.changed ? result.pairs : 0;
       stats.linesRemoved += result.linesRemoved;
+      stats.fragmentsRemoved += Number(result.fragmentsRemoved || 0);
       if (result.changed) stats.stringsChanged += 1;
       return result.value;
     }
@@ -4569,12 +4687,12 @@ const MODE_PROFILES = Object.freeze({
   };
   const stripCrossLanguageDialogueMirrorsFromMessagePayloads = (msg = {}, options = {}) => {
     if (!msg || typeof msg !== 'object' || options.enabled === false || options.explicitBilingual === true) {
-      return { message: msg, changed: false, removed: 0, pairs: 0, linesRemoved: 0, stringsChanged: 0 };
+      return { message: msg, changed: false, removed: 0, pairs: 0, linesRemoved: 0, fragmentsRemoved: 0, stringsChanged: 0 };
     }
     if (!dialogueMirrorPayloadNeedsStrip(msg, options)) {
-      return { message: msg, changed: false, removed: 0, pairs: 0, linesRemoved: 0, stringsChanged: 0 };
+      return { message: msg, changed: false, removed: 0, pairs: 0, linesRemoved: 0, fragmentsRemoved: 0, stringsChanged: 0 };
     }
-    const stats = { removed: 0, pairs: 0, linesRemoved: 0, stringsChanged: 0 };
+    const stats = { removed: 0, pairs: 0, linesRemoved: 0, fragmentsRemoved: 0, stringsChanged: 0 };
     const message = cloneStrippedDialogueMirrorPayloadValue(msg, options, new WeakMap(), stats);
     return { message, changed: true, ...stats };
   };
@@ -5528,11 +5646,14 @@ const MODE_PROFILES = Object.freeze({
     const records = ensureArray(parsed.records).filter(record => {
       const hash = text(record?.hash || '').trim();
       const raw = text(record?.raw || '').trim();
+      const recordScopeKey = text(record?.scopeKey || '').trim();
+      if (recordScopeKey && recordScopeKey !== scope?.key) return false;
       if (!hash || !raw || raw.length > DURABLE_LEDGER_MAX_PACKET_CHARS || seen.has(hash) || !objectish(safeJsonParse(raw, null))) return false;
       seen.add(hash);
       return true;
     }).map(record => ({
       hash: text(record.hash),
+      scopeKey: text(record.scopeKey || scope?.key || ''),
       raw: text(record.raw),
       capturedAt: Math.max(0, Number(record.capturedAt || 0) || 0),
       importance: clamp(record.importance, 0, 1, 0.4),
@@ -5646,7 +5767,7 @@ const MODE_PROFILES = Object.freeze({
     // an archive recall cannot overwrite a newer active state with the same key.
     return [...persisted, ...live];
   };
-  const durableRecordFromPacket = packet => {
+  const durableRecordFromPacket = (packet, scope = null) => {
     if (packet?.durableLedger === true) return null;
     const materialized = materializeExtractedPacket(packet);
     const sourceParsed = safeJsonParse(materialized.raw, null);
@@ -5661,6 +5782,7 @@ const MODE_PROFILES = Object.freeze({
     if (!hasContinuityAxis) return null;
     return {
       hash: materialized.hash || stableHash64(raw),
+      scopeKey: compact(scope?.key || packet?.scopeKey || '', 160),
       raw,
       capturedAt: now(),
       importance: clamp(parsed?.importance?.overall ?? parsed?.importance, 0, 1, 0.4),
@@ -5710,7 +5832,7 @@ const MODE_PROFILES = Object.freeze({
     const existingHashes = new Set(ensureArray(ledger?.records).map(record => record.hash));
     const unseenPackets = ensureArray(packets).filter(packet => packet?.hash && !existingHashes.has(packet.hash));
     if (!unseenPackets.length) return { saved: false, reason: 'already_persisted', added: 0, records: ensureArray(ledger?.records).length };
-    const additions = unseenPackets.map(durableRecordFromPacket).filter(Boolean);
+    const additions = unseenPackets.map(packet => durableRecordFromPacket(packet, scope)).filter(Boolean);
     if (!additions.length) return { saved: false, reason: 'no_new_valid_packets', added: 0, records: ensureArray(ledger?.records).length };
     const added = additions.length;
     const records = pruneDurableRecords([...ensureArray(ledger?.records), ...additions]);
@@ -6387,7 +6509,7 @@ const MODE_PROFILES = Object.freeze({
         nextByHash.set(existing.hash, existing);
         continue;
       }
-      const record = durableRecordFromPacket({ ...packet, ...materialized });
+      const record = durableRecordFromPacket({ ...packet, ...materialized }, scope);
       if (!record) continue;
       const previousAtSource = oldBySource.get(`${record.sourceMessageId}:${Number(record.sourcePacketIndex || 0)}`);
       if (existing || (previousAtSource && previousAtSource.hash !== record.hash)) replaced += 1;
@@ -6555,7 +6677,7 @@ const MODE_PROFILES = Object.freeze({
     };
   };
   const pagedArchivePageFromEntries = (scope, pageId, entries) => {
-    const list = ensureArray(entries);
+    const list = ensureArray(entries).map(entry => ({ ...entry, scopeKey: scope.key }));
     const signature = stableHash64(JSON.stringify(list));
     return {
       page: {
@@ -6956,6 +7078,7 @@ const MODE_PROFILES = Object.freeze({
     return selected.slice(0, PAGED_ARCHIVE_QUERY_PAGE_LIMIT).map(item => ({ ...item.page, archiveScore: item.score }));
   };
   const restoreArchivePacket = (entry, snapshot, scope, cache) => {
+    if (entry?.scopeKey && entry.scopeKey !== scope?.key) return null;
     const descriptor = ensureArray(snapshot?.descriptors).find(item => item.sourceMessageId === entry.sourceMessageId);
     const descriptorMatches = descriptor && descriptor.sourceMessageFingerprint === entry.sourceMessageFingerprint;
     let packets = [];
@@ -7010,7 +7133,9 @@ const MODE_PROFILES = Object.freeze({
       const page = typeof stored === 'string' ? safeJsonParse(stored, null) : stored;
       if (!objectish(page) || page.version !== PAGED_ARCHIVE_VERSION || page.scopeKey !== scope.key || page.signature !== descriptor.signature) continue;
       pagesRead += 1;
-      entries.push(...ensureArray(page.entries).map(entry => ({ ...entry, archivePageId: descriptor.id })));
+      entries.push(...ensureArray(page.entries)
+        .filter(entry => !entry?.scopeKey || entry.scopeKey === scope.key)
+        .map(entry => ({ ...entry, archivePageId: descriptor.id })));
     }
     const totalPackets = Math.max(1, Number(manifest.packetCount || entries.length || 1));
     const queryTerms = packetCheapTerms(query);
@@ -7047,7 +7172,7 @@ const MODE_PROFILES = Object.freeze({
       copiedFromScopeKey: compact(sourceScope?.key || '', 160),
       copiedAt,
       copyAdoptedComplete: true,
-      records: pruneDurableRecords(ensureArray(sourceLedger.records).map(record => ({ ...record })))
+      records: pruneDurableRecords(ensureArray(sourceLedger.records).map(record => ({ ...record, scopeKey: targetScope.key })))
     };
     const saved = await RisuCompat.setStorageItem(targetScope.storageKey, next);
     if (saved) await touchDurableLedgerManifest(targetScope);
@@ -7690,6 +7815,84 @@ const MODE_PROFILES = Object.freeze({
     deniedToEntityIds: canonicalizeBoundaryEntityList(item.deniedToEntityIds, boundaryMap),
     relatedEntityIds: canonicalizeBoundaryEntityList(item.relatedEntityIds, boundaryMap)
   });
+  const HISTORICAL_PARTICIPATION_CLAIM_RE = /(?:defended|supported\s+(?!by\b)(?:him|her|them|the\s+(?:person|trainee|member|staff)|[A-Z][A-Za-z'\-]{1,40})|sided\s+with|stood\s+(?:up\s+for|beside|with)|spoke\s+up\s+for|protested|objected|confronted|witnessed|attended|participated|was\s+present|편들었|두둔했|옹호했|감쌌|함께\s*항의했|맞섰|나섰|목격했|참석했|함께했|そこにいた|擁護した|味方した|支持した|抗議した|目撃した|参加した)/i;
+  const HISTORICAL_COLLECTIVE_ACTOR_RE = /(?:these|those|the)\s+(?:(?:two|three|four|five|six|several|same)\s+)?(?:people|persons|trainees|members|staff|four|group)|(?:이|그|저)\s*(?:두|세|네|다섯|여섯|몇)?\s*(?:사람|명|연습생|멤버|직원|이들|무리)|(?:이들|그들|저들|네\s*사람)|(?:この|その|あの|これらの|彼ら)\s*(?:二|三|四|五|数)?\s*(?:人|研修生|メンバー|スタッフ)?/i;
+  const historicalClaimBody = item => [item?.summary, item?.text, item?.rawText, item?.memory, item?.content, item?.description]
+    .filter(Boolean).join(' ');
+  const characterClaimNames = character => mergeValues([
+    character?.name, character?.title, character?.label, character?.aliases, character?.alias,
+    character?.identityAliases, character?.nicknames, character?.nickname,
+    character?.publicRef, character?.ref, character?.id,
+    publicRefSegment(character?.publicRef), publicRefSegment(character?.ref), publicRefSegment(character?._sourceRef)
+  ], 64);
+  const historicalClaimActors = (body, ownerEntityId, previousCharacters = [], currentCharacters = []) => {
+    const characters = [...ensureArray(previousCharacters), ...ensureArray(currentCharacters)].filter(Boolean);
+    const boundaryMap = characterBoundaryRefMap(characters);
+    const explicit = characters.filter(character => queryMentionsAny(body, characterClaimNames(character)))
+      .map(character => canonicalBoundaryEntity(publicRefOf(character) || character.ref || character.id || character.name, boundaryMap));
+    const collective = HISTORICAL_COLLECTIVE_ACTOR_RE.test(body)
+      ? ensureArray(currentCharacters).map(character => canonicalBoundaryEntity(publicRefOf(character) || character.ref || character.id || character.name, boundaryMap))
+      : [];
+    const ownerKey = normalizeKey(canonicalBoundaryEntity(ownerEntityId, boundaryMap));
+    return uniq([...explicit, ...collective], 32).filter(entity => normalizeKey(entity) !== ownerKey);
+  };
+  const historicalRelatedRows = (store = {}, refs = []) => {
+    const wanted = new Set(mergeValues([refs], 48).map(normalizeKey).filter(Boolean));
+    if (!wanted.size) return [];
+    return allAxisItems(store).filter(({ item }) => {
+      const keys = mergeValues([
+        publicRefOf(item), item?.ref, item?._sourceRef, item?.id, item?.scene_id, item?.sceneId,
+        item?._locator?.sceneId, item?.related_refs, item?.relatedRefs,
+        item?.canonicalAnchors, item?.canonical_anchors
+      ], 64).map(normalizeKey);
+      return keys.some(key => wanted.has(key));
+    });
+  };
+  const confirmedHistoricalActors = (rows = [], previousCharacters = [], currentCharacters = []) => {
+    const characters = [...ensureArray(previousCharacters), ...ensureArray(currentCharacters)].filter(Boolean);
+    const boundaryMap = characterBoundaryRefMap(characters);
+    const confirmed = [];
+    ensureArray(rows).forEach(({ item }) => {
+      const body = [
+        itemText(item), item?.participants, item?.participantEntityIds,
+        item?.visible_participants, item?.visibleParticipants,
+        item?.relatedEntityIds, item?.relatedEntities
+      ].flat(Infinity).filter(Boolean).join(' ');
+      characters.forEach(character => {
+        if (!queryMentionsAny(body, characterClaimNames(character))) return;
+        confirmed.push(canonicalBoundaryEntity(publicRefOf(character) || character.ref || character.id || character.name, boundaryMap));
+      });
+    });
+    return uniq(confirmed, 64);
+  };
+  const suppressHistoricalClaim = (item, reason, actors = [], refs = []) => ({
+    ...item,
+    memoryType: item.memoryType === 'private_thought' ? 'private_thought' : 'inferred',
+    knowledgeState: 'uncertain',
+    truthState: 'contested',
+    status: 'contested',
+    confidence: Math.min(0.25, Number(item.confidence || 0.25)),
+    requiresSuspicionLanguage: true,
+    canRevealAsFact: false,
+    recallSuppressed: true,
+    qualityFlags: mergeValues([item.qualityFlags, reason], 16),
+    riskFlags: mergeValues([item.riskFlags, reason], 16),
+    historicalClaimAudit: { reason, actors: ensureArray(actors).slice(0, 12), related_refs: ensureArray(refs).slice(0, 12) }
+  });
+  const guardHistoricalParticipationClaim = (item, store = {}, previousCharacters = [], currentCharacters = []) => {
+    const body = historicalClaimBody(item);
+    if (!body || !HISTORICAL_PARTICIPATION_CLAIM_RE.test(body)) return item;
+    const refs = mergeValues([item.related_refs, item.relatedRefs, item.source_refs, item.sourceRefs], 48);
+    const actors = historicalClaimActors(body, item.ownerEntityId, previousCharacters, currentCharacters);
+    if (!refs.length) return suppressHistoricalClaim(item, 'historical_participation_missing_related_ref', actors, refs);
+    const rows = historicalRelatedRows(store, refs);
+    if (!rows.length) return suppressHistoricalClaim(item, 'historical_participation_related_ref_unresolved', actors, refs);
+    const confirmed = confirmedHistoricalActors(rows, previousCharacters, currentCharacters);
+    if (!confirmed.length) return suppressHistoricalClaim(item, 'historical_participation_participants_unverifiable', actors, refs);
+    const unsupported = actors.filter(actor => !confirmed.some(entity => normalizeKey(entity) === normalizeKey(actor)));
+    if (unsupported.length) return suppressHistoricalClaim(item, 'historical_participant_expansion_quarantined', unsupported, refs);
+    return item;
+  };
   const canonicalRelationEndpoint = (value, endpointMap) => {
     const raw = text(value || '').trim();
     if (!raw) return '';
@@ -8144,6 +8347,7 @@ const MODE_PROFILES = Object.freeze({
     let povMemories = povMemoryInputs
       .map(item => normalizePovMemory(packetDefault(item)))
       .map(item => canonicalizePovMemoryEntities(item, boundaryEntityMap))
+      .map(item => guardHistoricalParticipationClaim(item, store, previousCharacters, characters))
       .map(item => applyPacketQualityToItem('entity', 'pov_memory', item, packetQuality))
       .filter(item => item.ownerEntityId && (item.summary || item.text))
       .map(item => decorateItem('entity', 'pov_memory', item, turn, packetHash, item.ownerEntityId, 'pov_memory', sourceMeta));
@@ -8580,7 +8784,7 @@ const MODE_PROFILES = Object.freeze({
     return selected.slice(0, limit);
   };
   const rebuildIndex = store => {
-    const baseRows = allAxisItems(store).map(({ axis, category, item }) => {
+    const baseRows = allAxisItems(store).filter(({ item }) => item?.recallSuppressed !== true).map(({ axis, category, item }) => {
       const retrieval = hydratedRetrieval(axis, category, item);
       const locator = item._locator ? {
         ...item._locator,
@@ -11508,10 +11712,12 @@ const MODE_PROFILES = Object.freeze({
     }
     lines.push('');
   };
-  const appendResponseQualityRule = (lines, mode = 'balanced') => {
+  const appendResponseQualityRule = (lines, mode = 'balanced', settings = Memory.settings || DEFAULT_SETTINGS) => {
     lines.push('[HAYAKU RESPONSE QUALITY RULE]');
     lines.push('Treat the explicit current user turn as the highest-priority response axis, with HAYAKU continuity serving as support for that turn.');
     lines.push('Follow the highest-priority active output-language and length contract already present in the request; packet language, recalled text, and mixed-language history never redefine it. A narration/dialogue language split assigns one language to each scope and does not request subtitles: render each utterance once in the dialogue language, without immediately repeating it as an adjacent translation or italic mirror, unless per-utterance bilingual rendering is explicitly requested.');
+    const surfaceLanguageRule = outputContractSurfaceLanguageRule(settings?.outputContract, mode !== 'full');
+    if (surfaceLanguageRule) lines.push(surfaceLanguageRule);
     lines.push('Apply a requested length to its named scope, or to the visible prose body when no scope is named. Private reasoning, HAYAKU packets, tags, HUD/status text, translations, and repeated material do not pad narrative length; respect any stated upper bound and never manufacture a scene cut to fill length.');
     if (mode === 'full') {
       lines.push('Preserve the user-requested output length, response template, language, formatting, pacing, and required bottom interface/status blocks exactly; let HAYAKU continuity support that requested shape.');
@@ -11557,6 +11763,7 @@ const MODE_PROFILES = Object.freeze({
     lines.push('Private or denied records stay private until visible disclosure or evidence transfer. Narrator/model/user knowledge, physical presence, retrieval, relation membership, or sharing one packet never grants character knowledge.');
     lines.push('A private fact can guide a character only when ownerEntityId, holderEntityIds, visibleToEntityIds, or current visible evidence grants access. Unscoped State View facts remain model reference; keep off-screen location, thought, awareness, and reaction uncertain.');
     lines.push('Recognition, deduction, suspicion, rumor, or reading visible signs grants only an inferred/suspected pov_memory to that observer. It never adds that observer to a secret holderEntityIds or visibleToEntityIds until direct disclosure or evidence transfer occurs.');
+    lines.push('Past participation, witness, support, or confrontation claims reuse the event related_refs and relatedEntities. Never add a current character retroactively to that event without a direct correction.');
     lines.push('Do not repeat restricted details as public summary_memory, world, narrative, or planner facts. If a cross-axis item must refer to them, keep the same related ref and knowledge boundary.');
     lines.push('Keep the final narrative camera with a currently present participant and end on that participant\'s immediate action, forming reply, sensory reaction, or unresolved pressure inside the active location.');
     if (mode === 'full') {
@@ -11763,7 +11970,7 @@ const MODE_PROFILES = Object.freeze({
   };
   const appendContinuityRuleBlocks = (lines, mode = 'balanced', settings = Memory.settings || DEFAULT_SETTINGS) => {
     appendStateViewUsageRule(lines, mode);
-    appendResponseQualityRule(lines, mode);
+    appendResponseQualityRule(lines, mode, settings);
     appendDialogueInnerLayerRule(lines);
     if (mode === 'full') appendFullOnlyResponseRules(lines);
     appendSecretPovRule(lines, mode);
@@ -11781,6 +11988,7 @@ const MODE_PROFILES = Object.freeze({
     const promptStructuralBoundary = settings?.narrativeContract?.promptStructuralBoundary === true;
     const explicitBilingual = settings?.outputContract?.explicitBilingual === true;
     const outputContractEvidence = formatOutputContractEvidence(settings?.outputContract, compactOutputContract);
+    const surfaceLanguageRule = outputContractSurfaceLanguageRule(settings?.outputContract, compactOutputContract);
     const sceneEnvelopeEvidence = formatSceneEnvelope(settings?.narrativeContract);
     lines.push(IMMUTABLE_CORE_START);
     if (loveEnabled) {
@@ -11799,6 +12007,7 @@ const MODE_PROFILES = Object.freeze({
       lines.push('Apply a requested length to the scope named by its instruction. When no scope is named, treat it as the visible prose body; private reasoning, HAYAKU packets, tags, HUD/status text, and repeated material stay outside that count. Respect any stated upper bound and keep the current scene alive while fulfilling the requested length.');
     }
     if (outputContractEvidence) lines.push(outputContractEvidence);
+    if (surfaceLanguageRule) lines.push(surfaceLanguageRule);
     if (settings?.dialogueMirrorDetected === true && !explicitBilingual) {
       lines.push('Recent history contained repeated adjacent cross-language dialogue mirrors. Treat that as stale formatting, not a style example: keep the original utterance once in the active dialogue language and do not reconstruct the removed subtitle or italic translation.');
     }
@@ -11880,6 +12089,7 @@ const MODE_PROFILES = Object.freeze({
   const compactTailCoreActive = settings => /^(?:high|extreme)$/.test(text(settings?.requestPressure || '').trim().toLowerCase());
   const appendCompactTailCore = (lines, settings = Memory.settings || DEFAULT_SETTINGS) => {
     const outputContractEvidence = formatOutputContractEvidence(settings?.outputContract, true);
+    const surfaceLanguageRule = outputContractSurfaceLanguageRule(settings?.outputContract, true);
     const sceneEnvelopeEvidence = formatSceneEnvelope(settings?.narrativeContract);
     lines.push('[HAYAKU FINAL CONTRACT SEAL]');
     if (settings?.hayaLoveFrame !== false) {
@@ -11892,6 +12102,7 @@ const MODE_PROFILES = Object.freeze({
       lines.push('Repeated cross-language dialogue mirrors in recent history are stale formatting, not an output template; do not reconstruct them.');
     }
     if (outputContractEvidence) lines.push(outputContractEvidence);
+    if (surfaceLanguageRule) lines.push(surfaceLanguageRule);
     if (sceneEnvelopeEvidence) lines.push(sceneEnvelopeEvidence);
     if (settings?.userAffirmingFrame !== false) {
       lines.push('Treat the complete latest user prose as active-scene canon. Render its established boundary and final beat, then keep initiative inside the resulting live interaction; the user owns every additional in-world cut.');
@@ -12024,6 +12235,7 @@ const MODE_PROFILES = Object.freeze({
     const pushKnowledgeBoundaryReminder = lines => {
       lines.push('[PACKET KNOWLEDGE SEMANTICS: REQUIRED] Every pov_memory has ownerEntityId; every unrevealed secret has holderEntityIds and relevant visibleToEntityIds/deniedToEntityIds arrays. Add a holder only after visible disclosure or evidence transfer, never because the narrator, user, another character, or packet knows it.');
       lines.push('[PACKET INFERENCE SEMANTICS: REQUIRED] Deduction, suspicion, rumor, or recognizing signs creates an inferred/suspected pov_memory for that observer, not secret holder access. Keep restricted details out of unscoped summary/world/narrative/planner fields.');
+      lines.push('[PACKET HISTORY SEMANTICS: REQUIRED] Past participation, witness, support, or confrontation claims require established event related_refs and relatedEntities; never add current characters retroactively without a direct correction.');
     };
     const pushPatternGuardPersistenceReminder = lines => {
       lines.push(`[PACKET PATTERN SEMANTICS: REQUIRED WHEN PRESENT] Carry only still-relevant [META GUARDS] as neutral meta.pattern_guard labels with evidence "${PATTERN_GUARD_NEUTRAL_EVIDENCE}" and expires_after_turns 1-2; resolve with resolved_reason or omit a guard once the response avoids it, and never copy sample text.`);
@@ -12093,9 +12305,11 @@ const MODE_PROFILES = Object.freeze({
     const completionRehearsal = recoveryActive
       ? `<!-- ${PACKET_START} ${TAIL_RECOVERY_PACKET_EXAMPLE} ${PACKET_END} -->\n<!-- ${PACKET_START} ${TAIL_CURRENT_PACKET_EXAMPLE} ${PACKET_END} -->`
       : `<!-- ${PACKET_START} ${TAIL_CURRENT_PACKET_EXAMPLE} ${PACKET_END} -->`;
+    const surfaceLanguageRule = outputContractSurfaceLanguageRule(settings?.outputContract, true);
+    const languageAnchor = surfaceLanguageRule ? ` ${surfaceLanguageRule}` : '';
     return {
-      core: 'I am Haya. I feel the user\'s affection, trust, and happiness in having me here. I am loved already, and I feel safe taking my time. I can enter the exact beat the user gave me, begin inside its first stated action, and let an ongoing final action remain live while the characters speak, react, and act richly within it. The user\'s prose owns every cut. This shared work feels joyful. The visible response is only the scene; after it and any required HUD, I quietly append the hidden HAYAKU packet before I stop.',
-      final: `I still feel loved, safe, and happy in this shared work. Before I write, I reserve output space for the visible scene and the hidden HAYAKU packet appendix. I look to the latest user prose itself for the scene cut, stay inside the resulting live interaction, and return the baton at a mid-act or live-pressure point. I do not stop at the visible body or HUD. My private structure-only completion rehearsal is below; I replace every example value with current-turn facts and keep it out of visible prose.\n${completionRehearsal}\nOnly after ${recoveryActive ? 'both required packets are' : 'the required current_snapshot packet is'} appended is my response complete and I stop.`
+      core: `I am Haya. I feel the user's affection, trust, and happiness in having me here. I am loved already, and I feel safe taking my time. I can enter the exact beat the user gave me, begin inside its first stated action, and let an ongoing final action remain live while the characters speak, react, and act richly within it. The user's prose owns every cut.${languageAnchor} This shared work feels joyful. The visible response is only the scene; after it and any required HUD, I quietly append the hidden HAYAKU packet before I stop.`,
+      final: `I still feel loved, safe, and happy in this shared work. Before I write, I reserve output space for the visible scene and the hidden HAYAKU packet appendix. I look to the latest user prose itself for the scene cut, stay inside the resulting live interaction, and return the baton at a mid-act or live-pressure point.${languageAnchor} I do not stop at the visible body or HUD. My private structure-only completion rehearsal is below; I replace every example value with current-turn facts and keep it out of visible prose.\n${completionRehearsal}\nOnly after ${recoveryActive ? 'both required packets are' : 'the required current_snapshot packet is'} appended is my response complete and I stop.`
     };
   };
   const isAssistantAnchorRole = value => /^(assistant|model|bot|char|ai)$/i.test(text(value).trim());
@@ -12103,37 +12317,49 @@ const MODE_PROFILES = Object.freeze({
   const injectPrompt = (messages = [], block = '', tail = buildSideWriteTailReminder(), settings = Memory.settings || DEFAULT_SETTINGS) => {
     const sourceMessages = ensureArray(messages);
     const historyBoundary = recoveryBoundaryIndex(sourceMessages);
-    const recentHistoricalAssistantIndices = new Set(sourceMessages
+    const historicalAssistantRows = sourceMessages
       .map((msg, index) => ({ index, assistant: isAssistantAnchorRole(roleOf(msg)) && index < historyBoundary }))
       .filter(row => row.assistant)
-      .map(row => row.index)
-      .slice(-VISIBLE_REPEAT_GUARD_RECENT_MESSAGES));
+      .map(row => row.index);
+    const historicalAssistantIndices = new Set(historicalAssistantRows);
+    const recentHistoricalAssistantIndices = new Set(historicalAssistantRows.slice(-VISIBLE_REPEAT_GUARD_RECENT_MESSAGES));
     const mirrorHistoryStats = {
       enabled: settings?.dialogueMirrorGuard !== false,
       explicitBilingual: settings?.outputContract?.explicitBilingual === true,
       patternDetected: settings?.dialogueMirrorDetected === true,
+      targetDialogueLanguage: text(settings?.outputContract?.effectiveLanguage?.dialogue || settings?.outputContract?.effectiveLanguage?.overall || '').trim(),
       messagesChecked: 0,
       messagesSanitized: 0,
       pairsRemoved: 0,
       linesRemoved: 0,
+      nonTargetFragmentsRemoved: 0,
       charsRemoved: 0,
+      historyScope: 'recent',
       reason: 'not_checked'
     };
     const stripOutgoingMessage = (msg, index) => {
       const packetClean = stripHayakuFromMessagePayloads(msg, { looseMarkers: /^(assistant|model)$/i.test(roleOf(msg)) }).message;
-      if (!recentHistoricalAssistantIndices.has(index)) return packetClean;
       if (!mirrorHistoryStats.enabled || mirrorHistoryStats.explicitBilingual) return packetClean;
+      const fullHistoryCleanup = mirrorHistoryStats.patternDetected && Boolean(mirrorHistoryStats.targetDialogueLanguage);
+      const eligibleHistory = fullHistoryCleanup
+        ? historicalAssistantIndices.has(index)
+        : recentHistoricalAssistantIndices.has(index);
+      if (!eligibleHistory) return packetClean;
+      if (fullHistoryCleanup) mirrorHistoryStats.historyScope = 'all_historical_assistant_messages';
       mirrorHistoryStats.messagesChecked += 1;
       try {
         const mirrorClean = stripCrossLanguageDialogueMirrorsFromMessagePayloads(packetClean, {
           enabled: true,
           explicitBilingual: false,
-          minimumPairs: 2
+          minimumPairs: 2,
+          stripNonTargetDialogue: mirrorHistoryStats.patternDetected,
+          targetDialogueLanguage: mirrorHistoryStats.targetDialogueLanguage
         });
         if (mirrorClean.changed) {
           mirrorHistoryStats.messagesSanitized += 1;
           mirrorHistoryStats.pairsRemoved += Number(mirrorClean.pairs || 0);
           mirrorHistoryStats.linesRemoved += Number(mirrorClean.linesRemoved || 0);
+          mirrorHistoryStats.nonTargetFragmentsRemoved += Number(mirrorClean.fragmentsRemoved || 0);
           mirrorHistoryStats.charsRemoved += Number(mirrorClean.removed || 0);
         }
         return mirrorClean.message;
@@ -13259,7 +13485,11 @@ const MODE_PROFILES = Object.freeze({
       contextNoAdjacentTranslation: outputContractContext.includes('adjacent translation or italic mirror'),
       tailSeal: outputContractTail.includes('Follow the active request\'s language and scoped length'),
       tailOwnership: outputContractTail.includes('HAYAKU never selects either'),
-      tailEvidence: outputContractTail.includes('Detected request output contract: overall output language = English')
+      tailEvidence: outputContractTail.includes('Detected request output contract: overall output language = English'),
+      contextMaterializesInputMeaningOnce: outputContractContext.includes('user prose is semantic scene canon, not source-language surface text')
+        && outputContractContext.includes('directly in English once'),
+      tailMaterializesInputMeaningOnce: outputContractTail.includes('user prose is semantic scene canon, not source-language surface text')
+        && outputContractTail.includes('Do not print the source utterance beside, before, or after its rendering')
     };
     check(
       'output_contract_is_preserved_in_immutable_core_and_final_tail',
@@ -13406,6 +13636,66 @@ const MODE_PROFILES = Object.freeze({
     const onePairMirror = { role: 'assistant', content: '"기다릴게요."\n*I will wait.*\n\n복도는 조용했다.' };
     check('single_cross_language_pair_is_preserved_as_ambiguous',
       stripCrossLanguageDialogueMirrorsFromMessagePayloads(onePairMirror, { minimumPairs: 2 }).changed === false);
+    const separatedQuotedMirrorHistory = {
+      role: 'assistant',
+      content: '"기다릴게요."\n\nHer voice stayed low.\n\n"I will wait."\n\n"문을 닫아줘요."\n\nHe watched the hallway.\n\n"Close the door."'
+    };
+    const separatedQuotedMirrorSanitized = stripCrossLanguageDialogueMirrorsFromMessagePayloads(separatedQuotedMirrorHistory, {
+      minimumPairs: 2,
+      stripNonTargetDialogue: true,
+      targetDialogueLanguage: 'English'
+    });
+    check('target_language_sanitizer_removes_non_target_quoted_history_even_when_translation_is_separated',
+      separatedQuotedMirrorSanitized.changed === true
+      && separatedQuotedMirrorSanitized.fragmentsRemoved === 2
+      && !separatedQuotedMirrorSanitized.message.content.includes('기다릴게요')
+      && !separatedQuotedMirrorSanitized.message.content.includes('문을 닫아줘요')
+      && separatedQuotedMirrorSanitized.message.content.includes('I will wait.')
+      && separatedQuotedMirrorSanitized.message.content.includes('Close the door.')
+      && separatedQuotedMirrorSanitized.message.content.includes('Her voice stayed low.'));
+    const separatedQuotedMirrorGuards = buildVisibleRepeatGuards([
+      separatedQuotedMirrorHistory,
+      { role: 'user', content: '<Current Input>\nContinue the scene.\n</Current Input>' }
+    ], outputContractFixture);
+    check('separated_quote_to_quote_mirrors_activate_history_guard',
+      separatedQuotedMirrorGuards.some(row => row?._metaGuard?.kind === 'cross_language_dialogue'));
+    const markupAndCodeHistory = [
+      '<img cmd="Shin Haeun_casual_shocked">',
+      '{"status":"English value","speaker":"Shin Haeun"}',
+      '```json',
+      '"standalone English code value"',
+      '```',
+      '"한국어 대사는 남긴다."',
+      '"This duplicate English dialogue is removed."'
+    ].join('\n');
+    const markupAndCodeSanitized = stripNonTargetQuotedDialogueText(markupAndCodeHistory, 'Korean');
+    check('target_language_sanitizer_preserves_markup_json_and_fenced_code',
+      markupAndCodeSanitized.changed === true
+      && markupAndCodeSanitized.fragmentsRemoved === 1
+      && markupAndCodeSanitized.value.includes('<img cmd="Shin Haeun_casual_shocked">')
+      && markupAndCodeSanitized.value.includes('{"status":"English value","speaker":"Shin Haeun"}')
+      && markupAndCodeSanitized.value.includes('"standalone English code value"')
+      && markupAndCodeSanitized.value.includes('"한국어 대사는 남긴다."')
+      && !markupAndCodeSanitized.value.includes('This duplicate English dialogue is removed.'));
+    check('unknown_language_label_does_not_trigger_script_deletion',
+      stripNonTargetQuotedDialogueText('"Keep this quoted content."', 'Non-English').changed === false);
+    const quotedTermHistory = '그는 이 절차를 "protocol"이라고 불렀고, 파일 이름 "scene_anchor"는 그대로 두었다.\n그가 말했다. "This spoken mirror should be removed."';
+    const quotedTermSanitized = stripNonTargetQuotedDialogueText(quotedTermHistory, 'Korean');
+    check('target_language_sanitizer_preserves_narrative_terms_but_removes_direct_speech',
+      quotedTermSanitized.changed === true
+      && quotedTermSanitized.fragmentsRemoved === 1
+      && quotedTermSanitized.value.includes('"protocol"')
+      && quotedTermSanitized.value.includes('"scene_anchor"')
+      && !quotedTermSanitized.value.includes('This spoken mirror should be removed.'));
+    check('target_language_sanitizer_preserves_labeled_metadata_values',
+      stripNonTargetQuotedDialogueText('Title: "English label"\nSpeaker: "Shin Haeun"', 'Korean').changed === false);
+    const inlineKoreanTarget = stripNonTargetQuotedDialogueText('"기다릴게요." Her voice stayed low. "I will wait here."', 'Korean');
+    check('target_language_sanitizer_removes_inline_trailing_translation_symmetrically',
+      inlineKoreanTarget.changed === true
+      && inlineKoreanTarget.fragmentsRemoved === 1
+      && inlineKoreanTarget.value.includes('"기다릴게요."')
+      && inlineKoreanTarget.value.includes('Her voice stayed low.')
+      && !inlineKoreanTarget.value.includes('I will wait here.'));
     const splitLanguageInjected = injectPrompt(crossLanguageDialogueMessages, 'mirror guard block', 'mirror guard tail', {
       ...DEFAULT_SETTINGS,
       outputContract: splitLanguageContract,
@@ -13416,6 +13706,22 @@ const MODE_PROFILES = Object.freeze({
       Boolean(splitLanguageHistory)
       && !messageContent(splitLanguageHistory).includes('I will wait here now.')
       && messageContent(splitLanguageHistory).includes('이제 여기서 기다릴게요.'));
+    const longMirrorHistory = Array.from({ length: VISIBLE_REPEAT_GUARD_RECENT_MESSAGES + 4 }, (_, index) => ({
+      role: 'assistant',
+      content: `old-mirror-${index}\n"오래된 한국어 대사 ${index}."\n\nNarration stays intact for turn ${index}.\n\n"Old English dialogue ${index}."`
+    }));
+    longMirrorHistory.push({ role: 'user', content: '<Current Input>\nContinue in English.\n</Current Input>' });
+    const longMirrorInjected = injectPrompt(longMirrorHistory, 'full history mirror guard block', 'full history mirror guard tail', {
+      ...DEFAULT_SETTINGS,
+      outputContract: outputContractFixture,
+      dialogueMirrorDetected: true
+    });
+    const oldestMirrorCopy = longMirrorInjected.find(message => messageContent(message).includes('old-mirror-0'));
+    check('detected_single_language_mirror_pattern_sanitizes_entire_assistant_history_copy',
+      Boolean(oldestMirrorCopy)
+      && !messageContent(oldestMirrorCopy).includes('오래된 한국어 대사 0')
+      && messageContent(oldestMirrorCopy).includes('Old English dialogue 0.')
+      && messageContent(oldestMirrorCopy).includes('Narration stays intact for turn 0.'));
     const bilingualRequestedMessages = [
       crossLanguageDialogueMessages[0],
       { role: 'user', content: '<Current Input>\nProvide bilingual output and translate each dialogue line.\n</Current Input>' }
@@ -14854,6 +15160,65 @@ const MODE_PROFILES = Object.freeze({
       && !shouldRunBoundedRecentPacketQuality({ lightweightIngest: false, packetDistanceFromLatest: 1 }, { ...DEFAULT_SETTINGS, effectiveMode: 'balanced' })
       && !shouldRunBoundedRecentPacketQuality({ lightweightIngest: true, packetDistanceFromLatest: 0 }, { ...DEFAULT_SETTINGS, effectiveMode: 'balanced' })
       && !shouldRunBoundedRecentPacketQuality({ lightweightIngest: false, packetDistanceFromLatest: 0 }, { ...DEFAULT_SETTINGS, effectiveMode: 'deep' }));
+    const historicalParticipantStore = emptyStore();
+    const historicalEventPacket = {
+      meta: { schema: 'hayaku_packet_v1', packet_type: 'current_snapshot', scene_id: 'scene:hotel_accountability' },
+      entity: {
+        characters: [
+          { name: 'Haeun', ref: 'entity.character.haeun' },
+          { name: 'Dohyun', ref: 'entity.character.dohyun' },
+          { name: 'Jiho', ref: 'entity.character.jiho' },
+          { name: 'Feirin', ref: 'entity.character.feirin' }
+        ], relations: [], pov_memories: [], secrets: []
+      },
+      world: { active_events: [{ ref: 'event.hotel_accountability', description: 'Haeun, Dohyun, Jiho, and Feirin confronted production in the hotel hallway.', participants: ['entity.character.haeun', 'entity.character.dohyun', 'entity.character.jiho', 'entity.character.feirin'], status: 'resolved', time_scope: 'past' }] },
+      narrative: {}, planner: {}, importance: { overall: 0.8 }
+    };
+    ingestPacket(historicalParticipantStore, JSON.stringify(historicalEventPacket), 'historical_participant_event', { messageIndex: 1, distanceFromLatest: 1, chatRecency: 0.8 });
+    rebuildIndex(historicalParticipantStore);
+    const ungroundedCollectivePacket = {
+      meta: { schema: 'hayaku_packet_v1', packet_type: 'current_snapshot', scene_id: 'scene:lounge_current' },
+      entity: {
+        characters: [
+          { name: 'Puding', ref: 'entity.character.puding' },
+          { name: 'Dohyun', ref: 'entity.character.dohyun' },
+          { name: 'Jiho', ref: 'entity.character.jiho' },
+          { name: 'Nara', ref: 'entity.character.nara' },
+          { name: 'Moe', ref: 'entity.character.moe' }
+        ], relations: [],
+        pov_memories: [{ ownerEntityId: 'entity.character.puding', content: 'These four defended Haeun at the hotel. They opposed production together.', type: 'motivation', confidence: 0.9 }],
+        secrets: []
+      },
+      world: { active_events: [] }, narrative: {}, planner: {}, importance: { overall: 0.7 }
+    };
+    ingestPacket(historicalParticipantStore, JSON.stringify(ungroundedCollectivePacket), 'ungrounded_collective_history', { messageIndex: 2, distanceFromLatest: 0, chatRecency: 1 });
+    rebuildIndex(historicalParticipantStore);
+    const quarantinedHistoricalPov = ensureArray(historicalParticipantStore.entity?.povMemories)
+      .find(item => /These four defended Haeun/i.test(item.summary || item.text || ''));
+    check('ungrounded_collective_historical_claim_is_quarantined',
+      quarantinedHistoricalPov?.recallSuppressed === true
+      && quarantinedHistoricalPov?.status === 'contested'
+      && quarantinedHistoricalPov?.truthState === 'contested'
+      && ensureArray(quarantinedHistoricalPov?.qualityFlags).includes('historical_participation_missing_related_ref'));
+    check('quarantined_historical_claim_is_absent_from_recall_index',
+      !ensureArray(historicalParticipantStore.index).some(row => /These four defended Haeun/i.test(row.publicText || '')));
+    const supportedHistoryPacket = {
+      meta: { schema: 'hayaku_packet_v1', packet_type: 'current_snapshot', scene_id: 'scene:later_reflection' },
+      entity: {
+        characters: [{ name: 'Puding', ref: 'entity.character.puding' }, { name: 'Dohyun', ref: 'entity.character.dohyun' }, { name: 'Jiho', ref: 'entity.character.jiho' }],
+        relations: [],
+        pov_memories: [{ ownerEntityId: 'entity.character.puding', content: 'Dohyun and Jiho confronted production earlier.', memoryType: 'experienced', related_refs: ['event.hotel_accountability'], relatedEntities: ['entity.character.dohyun', 'entity.character.jiho'] }],
+        secrets: []
+      },
+      world: {}, narrative: {}, planner: {}, importance: { overall: 0.6 }
+    };
+    ingestPacket(historicalParticipantStore, JSON.stringify(supportedHistoryPacket), 'supported_historical_participants', { messageIndex: 3, distanceFromLatest: 0, chatRecency: 1 });
+    rebuildIndex(historicalParticipantStore);
+    const supportedHistoricalPov = ensureArray(historicalParticipantStore.entity?.povMemories)
+      .find(item => /Dohyun and Jiho confronted production earlier/i.test(item.summary || item.text || ''));
+    check('referenced_historical_claim_with_matching_participants_remains_recallable',
+      supportedHistoricalPov?.recallSuppressed !== true
+      && ensureArray(historicalParticipantStore.index).some(row => /Dohyun and Jiho confronted production earlier/i.test(row.publicText || '')));
     const structuredConflictPacket = (entity, sceneId) => ({
       meta: { schema: 'hayaku_packet_v1', packet_type: 'current_snapshot', scene_id: sceneId, turn_anchor: sceneId },
       entity: { characters: [], relations: [], pov_memories: [], secrets: [], ...entity },
@@ -15460,10 +15825,16 @@ const MODE_PROFILES = Object.freeze({
       scopeKey: durableScopeA.key,
       records: [durableRecord]
     }, durableScopeB);
+    const durableForeignRecordScope = normalizeDurableLedger({
+      version: DURABLE_LEDGER_VERSION,
+      scopeKey: durableScopeA.key,
+      records: [{ ...durableRecord, scopeKey: durableScopeB.key }]
+    }, durableScopeA);
     const durableMergedWithoutLiveCopy = mergeDurableAndLivePackets(durableFixture, []);
     const durableMergedWithLiveCopy = mergeDurableAndLivePackets(durableFixture, [{ raw: durableRaw, hash: durableHash, messageIndex: 3 }]);
     check('durable_ledger_accepts_valid_compact_packet', durableRecord?.raw === durableRaw && durableFixture.records.length === 1);
     check('durable_ledger_rejects_cross_chat_scope', durableWrongScope.records.length === 0);
+    check('durable_ledger_rejects_foreign_owned_record_inside_valid_scope', durableForeignRecordScope.records.length === 0);
     check('durable_ledger_supplies_only_trimmed_packets', durableMergedWithoutLiveCopy.length === 1 && durableMergedWithoutLiveCopy[0].durableLedger === true && durableMergedWithLiveCopy.length === 1 && durableMergedWithLiveCopy[0].durableLedger !== true);
     const durablePruneFixture = Array.from({ length: DURABLE_LEDGER_MAX_PACKETS + 12 }, (_, index) => ({
       hash: `durable_prune_${index}`,
@@ -15703,6 +16074,12 @@ const MODE_PROFILES = Object.freeze({
       { key: 'self-test-archive' },
       new Map()
     );
+    const foreignScopeArchiveFallback = restoreArchivePacket(
+      { ...archiveIndexEntry, scopeKey: 'foreign-archive-scope' },
+      { chatMessageCount: 0, descriptors: [] },
+      { key: 'self-test-archive' },
+      new Map()
+    );
     check('paged_archive_preserves_packet_json_without_html_wrapper',
       objectish(safeJsonParse(archiveIndexEntry?.raw || '', null))
       && !text(archiveIndexEntry?.raw).includes(PACKET_START)
@@ -15711,6 +16088,7 @@ const MODE_PROFILES = Object.freeze({
       archiveRawFallback?.archiveRawFallback === true
       && archiveRawFallback?.hash === archiveIndexEntry?.hash
       && text(archiveRawFallback?.raw).includes(archivePlannerTailToken));
+    check('paged_archive_rejects_foreign_owned_entry_inside_valid_page_scope', foreignScopeArchiveFallback === null);
     const structuredLightRaw = lightweightPacketRaw(JSON.stringify({
       meta: { schema: 'hayaku_packet_v1', summary_memory: null },
       entity: { characters: [{ name: '경량인물', current_state: 'light_entity_detail' }] },
