@@ -1,8 +1,8 @@
 //@name hayaku_locator_continuity
-//@display-name HAYAKU · Locator Continuity v1.2.0
+//@display-name HAYAKU · Locator Continuity v1.2.2
 //@author rusinus12@gmail.com
 //@api 3.0
-//@version 1.2.0
+//@version 1.2.2
 //@update-url https://raw.githubusercontent.com/rusinus12-droid/hayaku_locator_continuity/main/hayaku_locator_continuity.js
 //@arg hayaku_enabled string true|false
 //@arg hayaku_mode string auto|balanced|fast|deep
@@ -70,7 +70,7 @@
   }
 
   const PLUGIN_NAME = 'HAYAKU';
-  const PLUGIN_VERSION = '1.2.0';
+  const PLUGIN_VERSION = '1.2.2';
   const KEY_PREFIX = 'hayaku.v1';
   const STORE_KEY = `${KEY_PREFIX}.store`;
   const SETTINGS_CACHE_KEY = `${KEY_PREFIX}.settings.cache`;
@@ -581,6 +581,7 @@
       ], 32);
       const evidenceSnips = ensureArray(summarySource.directEvidenceSnippets).map(item => ledgerRev2Compact(item?.text || item?.summary || item, 220)).filter(Boolean).slice(0, 8);
       const mentioned = ensureArray(summarySource.mentionedEntityNames).map(item => ledgerRev2Compact(item, 80)).filter(Boolean).slice(0, 24);
+      const summaryRelatedRefs = mergeValues([summarySource.related_refs, summarySource.relatedRefs, summarySource.source_refs, summarySource.sourceRefs], 32);
       const inferredCanonicalAnchors = typeof canonicalRecallTokensForText === 'function'
         ? canonicalRecallTokensForText([summaryText, recallAnchors, evidenceSnips, mentioned, explicitCanonicalAnchors].join(' '))
         : [];
@@ -602,6 +603,7 @@
           text: body,
           recallAnchors,
           canonicalAnchors,
+          related_refs: summaryRelatedRefs,
           directEvidenceSnippets: evidenceSnips,
           mentionedEntityNames: mentioned,
           packetHashes: [packetHash].filter(Boolean),
@@ -754,6 +756,20 @@ const MODE_PROFILES = Object.freeze({
   const SCENE_HOLD_INTENT_RE = /(?:장면|순간|분위기|여운|침묵|상태|자리|장소|시간)[\s\S]{0,36}?(?:그대로\s*)?(?:유지|머물|붙잡|이어|보존|천천히)|그대로\s*(?:있|두|머물|유지)|(?:다음|다른)\s*장면(?:으로)?\s*(?:넘어가|전환|바꾸|가지)\s*말|장면\s*(?:전환|이동|변경)\s*(?:하지|말)|시간\s*(?:점프|스킵|건너)\s*(?:하지|말)|장소\s*(?:이동|변경|바꾸)\s*(?:하지|말)|서두르지\s*말|stay\s+(?:in|with)\s+(?:this|the)\s+(?:scene|moment)|hold\s+(?:this|the)\s+(?:scene|moment)|linger\s+(?:in|on|here)|keep\s+(?:the|this)\s+(?:scene|moment|mood|silence)|do\s+not\s+(?:advance|move\s+on|change\s+scene|time\s*skip)|don['’]?t\s+(?:advance|move\s+on|change\s+scene|time\s*skip)|(?:この|その)\s*(?:場面|瞬間|空気|余韻)[\s\S]{0,24}?(?:保つ|維持|続ける|留まる)|場面\s*(?:転換|変更)\s*(?:しない|しないで)|そのまま\s*(?:留まる|続ける)/i;
   const SCENE_TRANSITION_INTENT_RE = /(?:다음|다른|새로운)\s*장면(?:으로)?\s*(?:넘어|전환|이동|바꿔|가자)|장면\s*(?:전환|이동|변경)\s*(?:해|하자|한다)|시간\s*(?:점프|스킵|건너)|(?:며칠|몇\s*시간|다음\s*날)\s*(?:후|뒤)|next\s+scene|change\s+(?:the\s+)?scene|move\s+on|cut\s+to|time\s*skip|jump\s+(?:ahead|forward)|次の\s*場面|場面\s*(?:転換|変更)\s*(?:する|して)|時間\s*(?:を)?\s*(?:飛ばす|スキップ)/i;
   const SCENE_HOLD_NEGATED_TRANSITION_RE = /(?:다음|다른|새로운)\s*장면(?:으로)?\s*(?:(?:넘어가|전환|이동|바꾸|가)지\s*(?:말|마|않)|(?:넘어가|전환|이동|바꾸|가지)\s*(?:말|마|않))|장면\s*(?:전환|이동|변경)\s*(?:하지\s*말|하지\s*마|않)|시간\s*(?:점프|스킵|건너)\s*(?:하지\s*말|하지\s*마|않)|do\s+not\s+(?:advance|move\s+on|change\s+(?:the\s+)?scene|time\s*skip)|don['’]?t\s+(?:advance|move\s+on|change\s+(?:the\s+)?scene|time\s*skip)|場面\s*(?:転換|変更)\s*(?:しない|しないで)|次の\s*場面\s*(?:に)?\s*(?:行かない|移らない)/i;
+  const NATURAL_SCENE_LOCATION_BOUNDARY_RE = /(?:[가-힣A-Za-z0-9_ -]{1,36})(?:으로|로|에|까지)\s*(?:들어갔다|들어간다|들어왔다|들어온다|들어오자|들어서자|도착했다|도착한다|도착하자|이동했다|이동한다|향했다|향한다|돌아갔다|돌아간다|돌아왔다|돌아온다|내려갔다|내려간다|올라갔다|올라간다|갔다|간다|불렀다|불러냈다|데려갔다)(?:[.?!。！？\s]|$)|(?:[가-힣A-Za-z0-9_ -]{1,36})(?:을|를|에서)\s*(?:나왔다|나온다|나갔다|나간다|떠났다|떠난다|벗어났다|벗어난다)(?:[.?!。！？\s]|$)|\b(?:entered|walked\s+into|stepped\s+into|arrived\s+at|went\s+to|moved\s+to|headed\s+to|returned\s+to|departed\s+from|summoned\s+[^.?!]{1,36}\s+to)\b|\bleft\s+(?:the\s+)?(?:room|place|scene|location|area|site|building|office|house|home|hall|restaurant|school|hospital|street|city|town)\b|(?:へ|に)(?:入った|入る|入ってきた|入ると|到着した|到着する|到着すると|移動した|移動する|呼び出した|連れて行った|向かった|向かう|戻った|戻る)|(?:を|から)(?:出た|出る|離れた|離れる)/i;
+  const NATURAL_SCENE_TIME_BOUNDARY_RE = /(?:다음\s*(?:날|아침|오후|저녁|밤)|그날\s*(?:아침|오후|저녁|밤)|이튿날|翌日|翌朝|翌晩|その\s*(?:朝|夜)|later\s+that\s+(?:day|morning|afternoon|evening|night)|the\s+next\s+(?:day|morning|afternoon|evening|night))|(?:(?:\d+|한|두|세|몇)\s*(?:분|시간|일|주|개월|달|년)\s*(?:후|뒤)|(?:\d+|one|two|three|several|a\s+few)\s+(?:minutes?|hours?|days?|weeks?|months?|years?)\s+later|(?:\d+|数|数十|一|二|三)\s*(?:分|時間|日|週間|か月|年)後)/i;
+  const NATURAL_SCENE_BOUNDARY_HYPOTHETICAL_RE = /(?:면|라면|한다면|할까|갈까|일까|겠(?:지|어|습니까)|if\b|would\b|could\b|what\s+if|なら|たら|れば|だろう|でしょう)[^.!。！？]{0,24}[?？]\s*$/i;
+  const detectUserEstablishedSceneBoundary = value => {
+    const body = text(value).trim();
+    if (!body) return { active: false, explicitCommand: false, kinds: [] };
+    const explicitCommand = SCENE_TRANSITION_INTENT_RE.test(body) && !SCENE_HOLD_NEGATED_TRANSITION_RE.test(body);
+    const hypothetical = NATURAL_SCENE_BOUNDARY_HYPOTHETICAL_RE.test(body);
+    const kinds = [];
+    if (explicitCommand) kinds.push('explicit');
+    if (!hypothetical && NATURAL_SCENE_LOCATION_BOUNDARY_RE.test(body)) kinds.push('location');
+    if (!hypothetical && NATURAL_SCENE_TIME_BOUNDARY_RE.test(body)) kinds.push('time');
+    return { active: kinds.length > 0, explicitCommand, kinds: uniq(kinds, 3) };
+  };
   const sceneHoldIntent = value => {
     const body = text(value);
     return SCENE_HOLD_INTENT_RE.test(body)
@@ -777,8 +793,6 @@ const MODE_PROFILES = Object.freeze({
     '현재', '활성', '미해결', '결과', '여파', '압력', '경계', '고백', '공개', '노출', '시선',
     '허락', '조건', '깊이', '손'
   ].map(word => String(word).toLowerCase()));
-  const SELECT_HAND_TOUCH_RE = /손(?:을|에|끝|가락)?\s*(?:잡|닿|얹|쥐|스치)|잡은\s*손|손잡|hand|hands|touch(?:es|ed|ing)?|take(?:s|n|ing)?\s+[^.?!\n]{0,40}\bhand|grab(?:s|bed|bing)?\s+[^.?!\n]{0,40}\bhand|hold(?:ing)?\s+hands?/i;
-  const SELECT_DEEPER_QUESTION_RE = /더\s*깊|깊이|얼마나\s*더|deeper|how\s+much\s+deeper|permission|permit|conditional|terms|허락|조건/i;
   const SELECT_INTIMACY_CONSENT_RE = /가까워|가까이|친밀|친해|어디까지|어디\s*까지|한계|선(?:을|이|이란|을\s*넘|을\s*밖)?|동의|허락|원해|싫어|그만|멈춰|안전어|세이프워드|경계|넘어|품어|안기|껴안|키스|스치|애무|관계(?:를|를\s*갖|를\s*맺)?|touch(?:es|ed|ing)?|intimate|intimacy|consent|limit|limits|boundary|boundaries|safeword|preferences|comfort|how\s+far|closer|get\s+closer|親密|限界|境界|合意|許可|線|止め|セーフワード/i;
   const SELECT_OBSERVER_WITNESS_RE = /들켰|눈치|시선|보이|봤|본다|목격|관찰|쳐다|마주치|classmate|witness|observer|notic(?:e|es|ed|ing)?|spot(?:s|ted)?|see\s+them|saw\s+them|caught|watch(?:es|ed|ing)?/i;
   const SELECT_PUBLIC_REVEAL_RE = /공개|노출|드러|알려(?:졌|짐|진|져)|밝혀|public|visibility|exposure|revealed?|\bknown\b/i;
@@ -790,12 +804,10 @@ const MODE_PROFILES = Object.freeze({
   const SELECT_MEMORY_FOCUSED_RE = /감정|속앓|생각|기억|느낌|마음|왜|의문|비밀|알고|모르|emotion|feeling|thought|memory|secret|why/i;
   const SELECT_AMBIENT_TOPIC_STOP_RE = /^(?:오늘|이야기|이어|이어간다|시작|가볍게|묘사|그린다|보여|하늘|날씨|비|비가|비는|그친|그치고|개인|갠|바람|공기|햇빛|구름|안개|풍경|배경|분위기|창밖|today|story|continue|start|lightly|describe|sky|weather|rain|wind|air|sunlight|cloud|fog|scenery|background|atmosphere|mood)$/i;
   const SELECT_VISIBILITY_OBSERVER_ACTION_RE = /목격|관찰|눈치|시선|보는|봤|witness|observer|notic(?:e|es|ed|ing)?|spot|seen|watch/i;
-  const SELECT_VISIBILITY_OBSERVER_ACTOR_RE = /classmate|반\s*친구|학생들|주변|yoomin|유민/i;
+  const SELECT_VISIBILITY_OBSERVER_ACTOR_RE = /classmate|classmates|반\s*친구|학생들|주변|행인|동료|관중|bystander|bystanders|coworker|coworkers|audience|crowd|onlooker|onlookers|同級生|学生たち|周囲|通行人|同僚|観衆/i;
   const SELECT_VISIBILITY_PUBLIC_BODY_RE = /공개|노출|드러|알려|부정\s*가능|사적|공적|public|private\s*split|visibility|exposure|deniable|deniability/i;
   const SELECT_VISIBILITY_RUMOR_BODY_RE = /소문|여론|퍼지|gossip|rumou?r|spread/i;
-  const SELECT_VISIBILITY_OBSERVER_ANY_RE = /목격|관찰|눈치|시선|classmate|witness|observer|notic(?:e|es|ed|ing)?|seen|watch|yoomin|유민/i;
-  const SELECT_DIRECT_HAND_BODY_RE = /hand|hands|touch|recoil|손|닿|잡|스치|물러/i;
-  const SELECT_DIRECT_DEEPER_BODY_RE = /deeper|깊|permission|permit|conditional|terms|confession|deniable|deniability|허락|조건|고백|부정/i;
+  const SELECT_VISIBILITY_OBSERVER_ANY_RE = /목격|관찰|눈치|시선|행인|동료|관중|classmate|bystander|coworker|audience|crowd|onlooker|witness|observer|notic(?:e|es|ed|ing)?|seen|watch|目撃|観察|視線|通行人|同僚|観衆/i;
   const SELECT_CHARACTER_PROFILE_BODY_RE = /identity|interpretation|personality|speech|psychology|profile|정체|해석|성격|말투|심리|현재|상태|감정|기억/i;
   const SELECT_AMBIENT_INACTIVE_LIFECYCLE_RE = /resolved|superseded|past|no_longer_true|과거|해결|종료/i;
   const RETRIEVAL_EXPLICIT_CONTINUITY_INTENT_RE = /연속성|지켜야|이어져야|이어야|다음\s*장면|다음\s*약속|continuity|preserve|must\s+(?:keep|preserve)|next\s+scene|next\s+promise/i;
@@ -1942,7 +1954,7 @@ const MODE_PROFILES = Object.freeze({
     const body = text(value).trim();
     if (!body) return false;
     if (NARRATIVE_CONTINUE_RE.test(body) || sceneHoldIntent(body)) return true;
-    if (SCENE_TRANSITION_INTENT_RE.test(body) && !SCENE_HOLD_NEGATED_TRANSITION_RE.test(body)) return true;
+    if (detectUserEstablishedSceneBoundary(body).active) return true;
     const narrativeSignal = narrativeActionText(body)
       || NARRATIVE_QUOTED_SPEECH_RE.test(body)
       || NARRATIVE_PROSE_RE.test(body);
@@ -2794,8 +2806,13 @@ const MODE_PROFILES = Object.freeze({
     const ownerEntityId = compact(source.ownerEntityId || source.ownerEntity || source.owner || source.entity || source.name || source.subject || source.character || source.characterName || '', 100);
     const body = compact(source.text || source.rawText || source.memory || source.content || source.summary || '', 900);
     const summary = compact(source.summary || body, 260);
-    const memoryType = enumValue(source.memoryType || source.type, POV_MEMORY_TYPES, source.privacy === 'internal' ? 'private_thought' : 'experienced');
-    const knowledgeState = enumValue(source.knowledgeState || source.state, KNOWLEDGE_STATES, memoryType === 'rumor' ? 'suspected' : 'known');
+    const textSignalsInference = SECRET_INFERENCE_SIGNAL_RE.test(`${summary} ${body}`)
+      && !SECRET_DIRECT_ACQUISITION_RE.test(`${summary} ${body}`)
+      && !SECRET_CONFIRMED_HOLDER_RE.test(`${summary} ${body}`);
+    const memoryType = enumValue(source.memoryType || source.type, POV_MEMORY_TYPES,
+      textSignalsInference ? 'inferred' : (source.privacy === 'internal' ? 'private_thought' : 'experienced'));
+    const knowledgeState = enumValue(source.knowledgeState || source.state, KNOWLEDGE_STATES,
+      textSignalsInference || memoryType === 'rumor' || memoryType === 'inferred' ? 'suspected' : 'known');
     const privacy = enumValue(source.privacy, PRIVACY_STATES, memoryType === 'public_fact' ? 'public' : (memoryType === 'private_thought' ? 'internal' : 'private'));
     const truthState = enumValue(source.truthState || source.truth, TRUTH_STATES, (['rumor', 'inferred'].includes(memoryType) || ['suspected', 'uncertain', 'misunderstood', 'hidden'].includes(knowledgeState)) ? 'unknown' : 'true');
     return {
@@ -2813,6 +2830,8 @@ const MODE_PROFILES = Object.freeze({
       deniedToEntityIds: boundaryEntityValues([source.deniedToEntityIds, source.deniedTo, source.hidden_from, source.hiddenFrom, source.unknownTo], 32),
       targetEntities: mergeValues([source.targetEntities, source.targets], 32),
       relatedEntities: mergeValues([source.relatedEntities, source.relatedEntityIds, source.entities], 32),
+      related_refs: mergeValues([source.related_refs, source.relatedRefs, source.source_refs, source.sourceRefs], 32),
+      canonicalAnchors: mergeValues([source.canonicalAnchors, source.canonical_anchors, source.canonicalTokens, source.canonical_tokens], 32),
       _confidenceExplicit: confidenceExplicit,
       confidence: clamp(source.confidence, 0, 1, knowledgeState === 'known' ? 0.68 : 0.45),
       importance: (() => { const v = Number(source.importance); return Number.isFinite(v) ? clamp(v > 1 ? v / 10 : v, 0, 1, 0.5) : 0.5; })(),
@@ -2824,22 +2843,19 @@ const MODE_PROFILES = Object.freeze({
     };
   };
   const SECRET_INFERENCE_SIGNAL_RE = /(?:deduc(?:e|es|ed|ing)|infer(?:s|red|ring)?|suspect(?:s|ed|ing)?|recogniz(?:e|es|ed|ing)\s+(?:the\s+)?signs|based\s+on\s+(?:visible\s+)?(?:signs|observation|circumstances|evidence)|from\s+(?:visible\s+)?(?:signs|observation|circumstances)|guess(?:es|ed|ing)?|짐작|추론|추정|의심|눈치|정황(?:상|으로)|관찰(?:해|로|을)|기색(?:을)?\s*(?:보고|읽고)|推測|推察|推定|疑(?:った|う|い)|察し|状況から|様子から)/i;
+  const SECRET_INDIRECT_ACQUISITION_RE = /(?:recogniz(?:e|es|ed|ing)\s+(?:the\s+)?signs|based\s+on\s+(?:visible\s+)?(?:signs|observation|circumstances|clues)|from\s+(?:visible\s+)?(?:signs|observation|circumstances|clues)|not\s+(?:directly\s+)?told|exact\s+details?\s+(?:remain|are)\s+unknown|정황(?:상|으로)|눈치(?:채|챘|챈)|기색(?:을)?\s*(?:보고|읽고)|관찰(?:을|로|해).{0,24}(?:추론|추정|짐작)|직접.{0,12}(?:듣|전달|공개).{0,12}(?:않|못)|정확한?.{0,12}(?:내용|세부).{0,12}(?:모르|알지\s*못)|状況から|様子から|兆候.{0,12}(?:推測|推察)|直接.{0,12}(?:聞いて|伝えられて).{0,12}(?:いない|ない))/i;
+  const SECRET_DIRECT_ACQUISITION_RE = /(?:told\s+(?:him|her|them|the\s+character)\s+directly|directly\s+told|shown?\s+(?:the\s+)?(?:evidence|recording|message)|received\s+(?:the\s+)?evidence|witness(?:ed)?\s+(?:the\s+)?(?:incident|event|act)|saw\s+it\s+happen|직접\s*(?:들었|들음|전달받|전해\s*들|목격|보았|봤)|증거(?:를|을)\s*(?:받|확인|보았|봤)|本人から.{0,12}(?:聞いた|伝えられた)|直接.{0,12}(?:目撃|見た)|証拠.{0,12}(?:受け取|確認))/i;
+  const SECRET_CONFIRMED_HOLDER_RE = /(?:already\s+)?knew\s+(?:the\s+)?(?:secret|truth|code|fact)|was\s+already\s+aware\s+of|비밀(?:의\s+내용)?(?:을|를)?\s*알고|이미\s+알고\s+있|알고\s+있었|진실(?:을|를)?\s*알고|秘密(?:の内容)?を知って|すでに知っていた|真実を知っていた/i;
   const boundaryEntityAliases = value => {
     const raw = text(value).trim();
     if (!raw) return [];
     const expanded = raw.replace(/([a-z])([A-Z])/g, '$1 $2');
     const parts = expanded.split(/[.:/_\-\s]+/).map(part => part.trim()).filter(Boolean);
-    const latinTail = parts.length && /^[a-z]{7,}$/i.test(parts[parts.length - 1]) ? parts[parts.length - 1] : '';
+    const canonicalCharacterRef = /^(?:entity[.:/_\-])?(?:character|characters|char)[.:/_\-]/i.test(raw);
+    const latinTail = canonicalCharacterRef && parts.length && /^[a-z]{7,}$/i.test(parts[parts.length - 1]) ? parts[parts.length - 1] : '';
     const suffixes = latinTail ? Array.from({ length: Math.min(8, latinTail.length - 4) }, (_, index) => latinTail.slice(-(5 + index))) : [];
     return uniq([raw, expanded, ...parts, parts.slice(-2).join(' '), ...suffixes], 24)
       .filter(alias => normalizeKey(alias).length >= 2);
-  };
-  const textMentionsBoundaryEntity = (body = '', entity = '') => {
-    const source = normalizeKey(body);
-    return Boolean(source) && boundaryEntityAliases(entity).some(alias => {
-      const key = normalizeKey(alias);
-      return key.length >= 2 && source.includes(key);
-    });
   };
   const inferredSecretActors = (source = {}, holders = []) => {
     const explicit = boundaryEntityValues([
@@ -2848,22 +2864,41 @@ const MODE_PROFILES = Object.freeze({
       source.deducedByEntityIds, source.deduced_by, source.deducedBy
     ], 32);
     const body = compact([source.summary, source.text, source.rawText, source.title, source.secret, source.state, source.status, source.evidence].filter(Boolean).join(' '), 1600);
-    if (!SECRET_INFERENCE_SIGNAL_RE.test(body)) return explicit;
+    if (!SECRET_INFERENCE_SIGNAL_RE.test(body)
+      || !SECRET_INDIRECT_ACQUISITION_RE.test(body)) return { explicit, heuristic: [] };
     const signalIndex = body.search(SECRET_INFERENCE_SIGNAL_RE);
-    const clauseStart = Math.max(body.lastIndexOf(';', signalIndex), body.lastIndexOf('.', signalIndex), body.lastIndexOf('\n', signalIndex), -1) + 1;
+    const clauseStart = Math.max(
+      body.lastIndexOf(';', signalIndex), body.lastIndexOf('.', signalIndex), body.lastIndexOf('\n', signalIndex),
+      body.lastIndexOf('!', signalIndex), body.lastIndexOf('?', signalIndex), body.lastIndexOf('。', signalIndex), -1
+    ) + 1;
     const subjectWindow = body.slice(clauseStart, Math.max(clauseStart, signalIndex));
     const actorCandidatesIn = window => ensureArray(holders)
       .map(entity => ({ entity, index: boundaryEntityAliases(entity).reduce((best, alias) => {
-        const found = normalizeKey(window).indexOf(normalizeKey(alias));
-        return found >= 0 && (best < 0 || found < best) ? found : best;
+        const found = normalizeKey(window).lastIndexOf(normalizeKey(alias));
+        return found > best ? found : best;
       }, -1) }))
       .filter(row => row.index >= 0)
-      .sort((a, b) => a.index - b.index);
+      .sort((a, b) => b.index - a.index);
+    const candidateAcquisitionSegment = (window, entity) => {
+      const lower = text(window).toLowerCase();
+      const rawIndex = boundaryEntityAliases(entity).reduce((best, alias) => Math.max(best, lower.lastIndexOf(text(alias).toLowerCase())), -1);
+      return rawIndex >= 0 ? window.slice(rawIndex) : window;
+    };
+    const heuristicCandidate = (window, candidates) => {
+      if (!candidates.length) return '';
+      const entity = candidates[0].entity;
+      const segment = candidateAcquisitionSegment(window, entity);
+      if (SECRET_DIRECT_ACQUISITION_RE.test(segment) || SECRET_CONFIRMED_HOLDER_RE.test(segment)) return '';
+      return entity;
+    };
     const candidates = actorCandidatesIn(subjectWindow);
-    if (candidates.length) return mergeValues([explicit, candidates[0].entity], 32);
-    const priorCandidates = actorCandidatesIn(body.slice(0, Math.max(0, signalIndex)));
-    if (priorCandidates.length) return mergeValues([explicit, priorCandidates[0].entity], 32);
-    return explicit;
+    const localCandidate = heuristicCandidate(subjectWindow, candidates);
+    if (localCandidate) return { explicit, heuristic: [localCandidate] };
+    const priorWindow = body.slice(0, Math.max(0, signalIndex));
+    const priorCandidates = actorCandidatesIn(priorWindow);
+    const priorCandidate = heuristicCandidate(priorWindow, priorCandidates);
+    if (priorCandidate) return { explicit, heuristic: [priorCandidate] };
+    return { explicit, heuristic: [] };
   };
   const normalizeSecret = secret => {
     const source = objectish(secret) ? secret : { summary: text(secret) };
@@ -2871,7 +2906,7 @@ const MODE_PROFILES = Object.freeze({
     const salienceExplicit = firstExplicitFinite([source.salience], null);
     const pressureExplicit = firstExplicitFinite([source.pressure, source.urgency], null);
     const impressionExplicit = firstExplicitFinite([source.impression], null);
-    const summary = compact(source.summary || source.text || source.rawText || source.title || source.secret || source.subject || source.state || source.status || '', 420);
+    const summary = compact(source.summary || source.text || source.rawText || source.content || source.title || source.secret || source.subject || source.state || source.status || '', 420);
     const revealSourceRefs = mergeValues([source.revealSourceRefs, source.reveal_source_refs], 32);
     const relatedRefs = mergeValues([source.related_refs, source.relatedRefs, source.sourceRefs, source.relatedSourceRefs], 64);
     const evidence = compact(source.evidence || source.revealEvidence || source.reveal_evidence || '', 420);
@@ -2879,14 +2914,16 @@ const MODE_PROFILES = Object.freeze({
     const hasRevealEvidence = Boolean(evidence || revealSourceRefs.length || relatedRefs.length);
     const rawHolders = boundaryEntityValues([source.holderEntityIds, source.holders, source.known_to, source.knownTo, source.known_by, source.knownBy, source.ownerEntityId, source.owner, source.entity], 32);
     const rawVisible = boundaryEntityValues([source.visibleToEntityIds, source.visibleTo, source.sharedWith, source.known_to, source.knownTo, source.known_by, source.knownBy], 32);
-    const inferredEntityIds = inferredSecretActors(source, mergeValues([rawHolders, rawVisible], 32));
+    const inferredActors = inferredSecretActors(source, mergeValues([rawHolders, rawVisible], 32));
+    const inferredEntityIds = mergeValues([inferredActors.explicit, inferredActors.heuristic], 32);
     const isInferredActor = entity => inferredEntityIds.some(candidate => normalizeKey(candidate) === normalizeKey(entity));
     const holderEntityIds = rawHolders.filter(entity => !isInferredActor(entity));
     const visibleToEntityIds = rawVisible.filter(entity => !isInferredActor(entity));
     const riskFlags = mergeValues([
       source.riskFlags,
       revealState === 'revealed' && !hasRevealEvidence ? 'revealed_without_evidence_downgraded' : '',
-      inferredEntityIds.length ? 'inferred_actor_demoted_from_secret_holder' : ''
+      inferredEntityIds.length ? 'inferred_actor_demoted_from_secret_holder' : '',
+      inferredActors.heuristic.length ? 'heuristic_inferred_actor_demoted' : ''
     ], 16);
     if (revealState === 'revealed' && !hasRevealEvidence) revealState = 'partially_revealed';
     return {
@@ -2895,7 +2932,7 @@ const MODE_PROFILES = Object.freeze({
       id: text(source.id || '').trim(),
       title: compact(source.title || source.secret || source.subject || summary, 120),
       summary,
-      rawText: compact(source.rawText || source.text || summary, 900),
+      rawText: compact(source.rawText || source.text || source.content || summary, 900),
       holderEntityIds,
       visibleToEntityIds,
       inferredByEntityIds: inferredEntityIds,
@@ -2906,6 +2943,7 @@ const MODE_PROFILES = Object.freeze({
       truthState: enumValue(source.truthState || source.truth, TRUTH_STATES, 'unknown'),
       evidence,
       related_refs: relatedRefs,
+      canonicalAnchors: mergeValues([source.canonicalAnchors, source.canonical_anchors, source.canonicalTokens, source.canonical_tokens], 32),
       revealSourceRefs,
       riskFlags,
       _confidenceExplicit: confidenceExplicit,
@@ -3178,6 +3216,7 @@ const MODE_PROFILES = Object.freeze({
         holders: mergeValues([item.holderEntityIds, item.holders], 32).sort(),
         visible: mergeValues([item.visibleToEntityIds, item.visibleTo, item.sharedWith, item.known_to, item.knownTo, item.knownBy], 32).sort(),
         denied: mergeValues([item.deniedToEntityIds, item.deniedTo, item.hidden_from, item.hiddenFrom, item.unknownTo], 32).sort(),
+        inferred: mergeValues([item.inferredByEntityIds, item.inferredBy, item.suspectedByEntityIds], 32).sort(),
         secrecyLevel: text(item.secrecyLevel || item.privacy || ''),
         revealState: text(item.revealState || ''),
         truthState: text(item.truthState || '')
@@ -5219,18 +5258,25 @@ const MODE_PROFILES = Object.freeze({
     const world = objectish(parsed.world) ? parsed.world : {};
     const narrative = objectish(parsed.narrative) ? parsed.narrative : {};
     const planner = objectish(parsed.planner) ? parsed.planner : {};
-    const restrictedBridgeTexts = [
+    const restrictedBridgeBoundaries = [
       ...packetItems(entity.secrets || entity.secret_boundaries || entity.secretBoundaries || entity.hiddenKnowledge || entity.privateThoughts || []),
       ...packetItems(parsed.secrets || parsed.hiddenKnowledge || parsed.privateThoughts || [])
-    ].map(normalizeSecret).flatMap(secret => [secret.summary, secret.rawText]).filter(Boolean);
+    ].map(normalizeSecret).filter(secret => (
+      !['revealed', 'false_secret'].includes(secret.revealState)
+      || ensureArray(secret.deniedToEntityIds).length > 0
+      || ensureArray(secret.visibleToEntityIds).length > 0
+    ));
     [
       ...packetItems(entity.pov_memories || entity.povMemories || entity.entityMemories || entity.entity_memories || entity.knowledge || []),
       ...packetItems(parsed.povMemories || parsed.entityMemories || parsed.entity_knowledge || [])
     ].map(normalizePovMemory).filter(memory => ['private', 'internal'].includes(memory.privacy) || memory.truthState !== 'true')
-      .forEach(memory => restrictedBridgeTexts.push(memory.summary, memory.text));
+      .forEach(memory => restrictedBridgeBoundaries.push(memory));
     const leaksRestrictedKnowledge = value => {
       const candidate = previousTurnBridgeItemText(value);
-      return Boolean(candidate && restrictedBridgeTexts.some(restricted => knowledgeBoundaryTextOverlap(restricted, candidate)));
+      return Boolean(candidate && restrictedBridgeBoundaries.some(restricted => (
+        knowledgeBoundaryStructuredMatch(restricted, value)
+        || knowledgeBoundaryTextOverlap([restricted.summary, restricted.rawText, restricted.text].filter(Boolean).join(' '), candidate)
+      )));
     };
     const pronounBridge = buildPronounRecallBridge(query, parsed, { meta, summaryMemory, entity, world, narrative, planner });
     const lines = [
@@ -5243,20 +5289,33 @@ const MODE_PROFILES = Object.freeze({
       if (body) lines.push(`${label}: ${body}`);
     };
     const addList = (label, values, limit = 8, max = 120, protectBoundary = false) => {
-      const list = previousTurnBridgeList(values, Math.max(limit * 2, limit), max)
-        .filter(value => !protectBoundary || !leaksRestrictedKnowledge(value))
-        .slice(0, limit);
+      const list = [];
+      const seen = new Set();
+      const visit = value => {
+        if (value == null || list.length >= limit) return;
+        if (Array.isArray(value)) {
+          value.forEach(visit);
+          return;
+        }
+        if (protectBoundary && leaksRestrictedKnowledge(value)) return;
+        const body = compact(previousTurnBridgeItemText(value), max);
+        const key = normalizeKey(body);
+        if (!key || seen.has(key)) return;
+        seen.add(key);
+        list.push(body);
+      };
+      visit(values);
       if (list.length) lines.push(`${label}: ${list.join(' | ')}`);
     };
     add('scene_id', meta.scene_id || meta.sceneId, 80);
     add('turn_anchor', meta.turn_anchor || meta.turnAnchor, 220);
-    add('summary', summaryMemory.summary || summaryMemory.text, modeInfo.mode === 'strong' ? 420 : 260, true);
+    add('summary', summaryMemory, modeInfo.mode === 'strong' ? 420 : 260, true);
     addList('recall_anchors', [summaryMemory.recallAnchors, summaryMemory.recall_anchors], 10, 120, true);
-    addList('canonical_anchors', [summaryMemory.canonicalAnchors, summaryMemory.canonical_anchors, summaryMemory.canonicalTokens, summaryMemory.canonical_tokens, meta.canonicalAnchors, meta.canonical_anchors], 12, 80);
+    addList('canonical_anchors', [summaryMemory.canonicalAnchors, summaryMemory.canonical_anchors, summaryMemory.canonicalTokens, summaryMemory.canonical_tokens, meta.canonicalAnchors, meta.canonical_anchors], 12, 80, true);
     addList('mentioned_entities', [summaryMemory.mentionedEntityNames, summaryMemory.mentioned_entity_names, meta.visible_participants, meta.visibleParticipants, meta.pov_entity, meta.povEntity, meta.active_speaker, meta.activeSpeaker], 16, 80);
     if (pronounBridge.active && pronounBridge.text) lines.push(pronounBridge.text);
     add('scene_visibility', meta.scene_visibility || meta.sceneVisibility, 80);
-    add('world_place_time', [world.location, world.time, world.scene_type || world.sceneType].filter(Boolean).join(' / '), 180);
+    add('world_place_time', [world.location, world.time, world.scene_type || world.sceneType].filter(Boolean).join(' / '), 180, true);
     addList('world_active_events', world.active_events || world.activeEvents, modeInfo.mode === 'strong' ? 5 : 3, 150, true);
     addList('characters', ensureArray(entity.characters).map(item => [item?.name, item?.current_state || item?.currentState || item?.state || item?.summary, item?.condition, ensureArray(item?.carrying).join('/')].filter(Boolean).join(': ')), modeInfo.mode === 'strong' ? 5 : 3, 170, true);
     addList('relations', ensureArray(entity.relations).map(item => [item?.from && item?.to ? `${item.from}->${item.to}` : '', item?.state || item?.dynamic].filter(Boolean).join(': ')), modeInfo.mode === 'strong' ? 4 : 2, 150, true);
@@ -7126,7 +7185,11 @@ const MODE_PROFILES = Object.freeze({
       return normalizeKey(['relation', value.from || value.entityA, value.to || value.entityB, value.label || value.type || value.relationship || value.kind || 'relation'].join('|'));
     }
     if (axis === 'entity' && category === 'pov_memory') {
-      return normalizeKey(['pov_memory', value.ownerEntityId || value.owner || subject, value.memoryType || value.type, value.summary || value.text || value.id].join('|'));
+      const explicitRef = publicRefOf(value);
+      if (publicRefMatches(explicitRef, axis, category)) return normalizeKey(['pov_memory', explicitRef].join('|'));
+      if (text(value.id).trim()) return normalizeKey(['pov_memory', value.id].join('|'));
+      const relatedRefs = mergeValues([value.related_refs, value.relatedRefs, value.source_refs, value.sourceRefs], 16);
+      return normalizeKey(['pov_memory', value.ownerEntityId || value.owner || subject, value.memoryType || value.type, relatedRefs.join(','), value.summary || value.text].join('|'));
     }
     if (axis === 'entity' && category === 'secret') {
       return normalizeKey(['secret', mergeValues([value.holderEntityIds, value.holders, value.ownerEntityId], 16).join(','), value.title || value.id || value.summary || value.rawText].join('|'));
@@ -7566,6 +7629,67 @@ const MODE_PROFILES = Object.freeze({
     });
     return map;
   };
+  const characterBoundaryRefMap = (...groups) => {
+    const map = new Map();
+    const add = (key, canonical) => {
+      const normalized = normalizeKey(key);
+      if (normalized && canonical && !map.has(normalized)) map.set(normalized, canonical);
+    };
+    ensureArray(groups).flatMap(group => ensureArray(group)).filter(Boolean).forEach(character => {
+      const canonical = text(publicRefOf(character) || character.ref || character.id || character.name || '').trim();
+      if (!canonical) return;
+      const refs = mergeValues([
+        character.publicRef,
+        character.ref,
+        character._sourceRef,
+        character.id,
+        publicRefSegment(character.publicRef),
+        publicRefSegment(character.ref),
+        publicRefSegment(character._sourceRef)
+      ], 32);
+      mergeValues([
+        canonical,
+        character.name,
+        character.title,
+        character.label,
+        character.aliases,
+        character.alias,
+        character.identityAliases,
+        character.nicknames,
+        character.nickname,
+        refs
+      ], 96).forEach(value => add(value, canonical));
+    });
+    return map;
+  };
+  const canonicalBoundaryEntity = (value, boundaryMap) => {
+    const raw = text(value || '').trim();
+    if (!raw) return '';
+    const direct = boundaryMap.get(normalizeKey(raw));
+    if (direct) return direct;
+    const segment = publicRefSegment(raw);
+    return (segment && boundaryMap.get(normalizeKey(segment))) || raw;
+  };
+  const canonicalizeBoundaryEntityList = (values, boundaryMap, limit = 32) => uniq(
+    mergeValues([values], limit).map(value => canonicalBoundaryEntity(value, boundaryMap)).filter(Boolean),
+    limit
+  );
+  const canonicalizePovMemoryEntities = (item, boundaryMap) => ({
+    ...item,
+    ownerEntityId: canonicalBoundaryEntity(item.ownerEntityId, boundaryMap),
+    visibleToEntityIds: canonicalizeBoundaryEntityList(item.visibleToEntityIds, boundaryMap),
+    deniedToEntityIds: canonicalizeBoundaryEntityList(item.deniedToEntityIds, boundaryMap),
+    targetEntities: canonicalizeBoundaryEntityList(item.targetEntities, boundaryMap),
+    relatedEntities: canonicalizeBoundaryEntityList(item.relatedEntities, boundaryMap)
+  });
+  const canonicalizeSecretBoundaryEntities = (item, boundaryMap) => ({
+    ...item,
+    holderEntityIds: canonicalizeBoundaryEntityList(item.holderEntityIds, boundaryMap),
+    visibleToEntityIds: canonicalizeBoundaryEntityList(item.visibleToEntityIds, boundaryMap),
+    inferredByEntityIds: canonicalizeBoundaryEntityList(item.inferredByEntityIds, boundaryMap),
+    deniedToEntityIds: canonicalizeBoundaryEntityList(item.deniedToEntityIds, boundaryMap),
+    relatedEntityIds: canonicalizeBoundaryEntityList(item.relatedEntityIds, boundaryMap)
+  });
   const canonicalRelationEndpoint = (value, endpointMap) => {
     const raw = text(value || '').trim();
     if (!raw) return '';
@@ -8000,6 +8124,7 @@ const MODE_PROFILES = Object.freeze({
       .map(item => decorateItem('entity', 'character', item, turn, packetHash, item?.name || item?.title || 'character', 'character', sourceMeta));
     const characterRefSplit = splitConflictingCharacterPublicRefs(characters, previousCharacters, turn, packetHash, sourceMeta);
     characters = characterRefSplit.items;
+    const boundaryEntityMap = characterBoundaryRefMap(previousCharacters, characters);
     ingestSignal.lastPacketRefReuseError = Boolean(ingestSignal.lastPacketRefReuseError || characterRefSplit.hadConflict);
     let relations = packetItems(entity.relations || entity.relationships || [])
       .map(item => applyPacketQualityToItem('entity', 'relation', packetDefault(item), packetQuality))
@@ -8018,16 +8143,23 @@ const MODE_PROFILES = Object.freeze({
     ];
     let povMemories = povMemoryInputs
       .map(item => normalizePovMemory(packetDefault(item)))
+      .map(item => canonicalizePovMemoryEntities(item, boundaryEntityMap))
       .map(item => applyPacketQualityToItem('entity', 'pov_memory', item, packetQuality))
       .filter(item => item.ownerEntityId && (item.summary || item.text))
       .map(item => decorateItem('entity', 'pov_memory', item, turn, packetHash, item.ownerEntityId, 'pov_memory', sourceMeta));
-    const normalizedSecrets = secretInputs
+    let normalizedSecrets = secretInputs
       .map(item => normalizeSecret(packetDefault(item)))
+      .map(item => canonicalizeSecretBoundaryEntities(item, boundaryEntityMap))
       .map(item => applyPacketQualityToItem('entity', 'secret', item, packetQuality))
       .filter(item => item.summary || item.rawText);
-    const inferredPovMemories = normalizedSecrets.flatMap(secret => ensureArray(secret.inferredByEntityIds).map(ownerEntityId => (
-      applyPacketQualityToItem('entity', 'pov_memory', normalizePovMemory({
-        ref: secret.ref ? `${secret.ref}.inference.${normalizeKey(ownerEntityId)}` : '',
+    normalizedSecrets = reconcileSuspectedPovSecretAccess(normalizedSecrets, povMemories);
+    const inferredPovMemories = normalizedSecrets.flatMap(secret => ensureArray(secret.inferredByEntityIds).map(ownerEntityId => {
+      const sourceSecretRef = text(secret.publicRef || secret.ref || secret.id || '').trim()
+        || `entity.secret.source_${stableHash64([secret.title, secret.summary, secret.rawText].filter(Boolean).join('|'))}`;
+      const inferenceKey = stableHash64(`${sourceSecretRef}|${ownerEntityId}`);
+      return applyPacketQualityToItem('entity', 'pov_memory', normalizePovMemory({
+        id: `pov_inference_${inferenceKey}`,
+        ref: `entity.pov_memory.inference_${inferenceKey}`,
         ownerEntityId,
         summary: 'Inference from visible signs; exact restricted details remain unknown.',
         text: 'Inference from visible signs; exact restricted details remain unknown.',
@@ -8037,12 +8169,13 @@ const MODE_PROFILES = Object.freeze({
         truthState: 'unknown',
         visibleToEntityIds: [ownerEntityId],
         relatedEntities: secret.relatedEntityIds,
+        related_refs: [sourceSecretRef],
         confidence: Math.min(0.55, Number(secret.confidence || 0.45)),
         importance: secret.importance,
         requiresSuspicionLanguage: true,
         canRevealAsFact: false
-      }), packetQuality)
-    ))).filter(item => item.ownerEntityId && (item.summary || item.text))
+      }), packetQuality);
+    })).filter(item => item.ownerEntityId && (item.summary || item.text))
       .map(item => decorateItem('entity', 'pov_memory', item, turn, packetHash, item.ownerEntityId, 'pov_memory', sourceMeta));
     povMemories = [...povMemories, ...inferredPovMemories];
     let secrets = normalizedSecrets
@@ -8153,7 +8286,8 @@ const MODE_PROFILES = Object.freeze({
       ...plannerItems
     ]);
 
-    const ledgerRev2Ingest = ingestPacketLedgerRev2Meta(store, parsed, turn, packetHash, sourceMeta, packetQuality);
+    const ledgerMetaPacket = sanitizeLedgerMetaKnowledgeBoundaries(parsed, secrets, povMemories);
+    const ledgerRev2Ingest = ingestPacketLedgerRev2Meta(store, ledgerMetaPacket, turn, packetHash, sourceMeta, packetQuality);
     ingestSignal.ledgerRev2 = ledgerRev2Ingest;
     if (ledgerRev2Ingest?.summaryMemory || ledgerRev2Ingest?.speakerBoundaries || ledgerRev2Ingest?.patternGuards || ledgerRev2Ingest?.overpromotionRisks) {
       store.context = {
@@ -8240,7 +8374,15 @@ const MODE_PROFILES = Object.freeze({
     const candidate = candidateTerms instanceof Set ? candidateTerms : new Set(ensureArray(candidateTerms));
     if (!source.length || !candidate.size) return false;
     const shared = source.filter(term => candidate.has(term));
-    return shared.length >= 3 || (source.length <= 5 && shared.length >= 2 && shared.length / source.length >= 0.5);
+    const sourceCoverage = shared.length / source.length;
+    const candidateCoverage = shared.length / candidate.size;
+    const distinctiveShared = shared.filter(term => term.length >= 7 || /[_:]/.test(term));
+    const sharedStructuredIdentifier = shared.some(term => term.length >= 8 && /[_:]/.test(term));
+    return sharedStructuredIdentifier
+      || (shared.length >= 4 && sourceCoverage >= 0.4 && candidateCoverage >= 0.3)
+      || (distinctiveShared.length >= 3 && sourceCoverage >= 0.2 && candidateCoverage >= 0.2)
+      || (shared.length >= 3 && candidate.size <= 4 && candidateCoverage >= 0.75 && sourceCoverage >= 0.2)
+      || (source.length <= 5 && shared.length >= 3 && sourceCoverage >= 0.6);
   };
   const knowledgeBoundaryTextOverlap = (restrictedText = '', candidateText = '') => {
     const source = knowledgeBoundaryTermsForText(restrictedText);
@@ -8256,6 +8398,99 @@ const MODE_PROFILES = Object.freeze({
     row.retrieval?.priorityTerms,
     row.retrieval?.canonicalAnchors
   ].flat(Infinity).filter(Boolean).join(' ');
+  const KNOWLEDGE_BOUNDARY_GENERIC_CANONICAL_RE = /^(?:info:secret|info:evidence|state:hidden|state:unknown|time:recent)$/i;
+  const knowledgeBoundaryRefsFor = value => mergeValues([
+    typeof value === 'string' && /^[a-z][\w-]*\.[a-z][\w-]*\./i.test(value.trim()) ? value : '',
+    value?.publicRef, value?.ref, value?.id,
+    value?.links?.relatedRefs, value?.related_refs, value?.relatedRefs, value?.source_refs, value?.sourceRefs
+  ], 48).map(normalizeKey).filter(key => key.length >= 6);
+  const knowledgeBoundaryCanonicalFor = value => mergeValues([
+    typeof value === 'string' && CANONICAL_RECALL_TOKEN_PREFIX_RE.test(value.trim()) ? value : '',
+    value?.links?.canonicalAnchors, value?.canonicalAnchors, value?.canonical_anchors,
+    value?.canonicalTokens, value?.canonical_tokens, value?.retrieval?.canonicalAnchors
+  ], 48).filter(anchor => !KNOWLEDGE_BOUNDARY_GENERIC_CANONICAL_RE.test(text(anchor).trim()))
+    .map(normalizeKey).filter(Boolean);
+  const knowledgeBoundaryStructuredMatch = (left = {}, right = {}) => {
+    const leftRefs = knowledgeBoundaryRefsFor(left);
+    const rightRefs = new Set(knowledgeBoundaryRefsFor(right));
+    if (leftRefs.some(ref => rightRefs.has(ref))) return true;
+    const leftCanonical = knowledgeBoundaryCanonicalFor(left);
+    const rightCanonical = new Set(knowledgeBoundaryCanonicalFor(right));
+    return leftCanonical.some(anchor => rightCanonical.has(anchor));
+  };
+  const povSecretLikelySameSubject = (pov = {}, secret = {}) => {
+    if (knowledgeBoundaryStructuredMatch(pov, secret)) return true;
+    const expandStructuredText = value => {
+      const raw = text(value);
+      return `${raw} ${raw.replace(/[:._/\-]+/g, ' ')}`;
+    };
+    const povText = [pov.summary, pov.text, pov.rawText, pov.ref, pov.publicRef].filter(Boolean).map(expandStructuredText).join(' ');
+    const secretText = [secret.title, secret.summary, secret.rawText, secret.ref, secret.publicRef].filter(Boolean).map(expandStructuredText).join(' ');
+    if (knowledgeBoundaryTextOverlap(povText, secretText)) return true;
+    const povTerms = knowledgeBoundaryTermsForText(povText);
+    const secretTerms = new Set(knowledgeBoundaryTermsForText(secretText));
+    const shared = povTerms.filter(term => secretTerms.has(term));
+    const povCanonical = new Set(canonicalRecallTokensForText(povText).filter(anchor => !KNOWLEDGE_BOUNDARY_GENERIC_CANONICAL_RE.test(anchor)));
+    const secretCanonical = canonicalRecallTokensForText(secretText).filter(anchor => !KNOWLEDGE_BOUNDARY_GENERIC_CANONICAL_RE.test(anchor));
+    const sharedCanonical = secretCanonical.some(anchor => povCanonical.has(anchor));
+    return (shared.length >= 2 && shared.some(term => term.length >= 6))
+      || (sharedCanonical && shared.length >= 1);
+  };
+  const reconcileSuspectedPovSecretAccess = (secrets = [], povMemories = []) => ensureArray(secrets).map(secret => {
+    const exactAccess = mergeValues([secret.holderEntityIds, secret.visibleToEntityIds], 64);
+    if (!exactAccess.length) return secret;
+    const demoted = ensureArray(povMemories).filter(pov => {
+      const owner = text(pov?.ownerEntityId || '').trim();
+      if (!owner || !exactAccess.some(entity => normalizeKey(entity) === normalizeKey(owner))) return false;
+      const isInference = ['rumor', 'inferred'].includes(text(pov.memoryType))
+        || ['suspected', 'uncertain', 'misunderstood', 'hidden'].includes(text(pov.knowledgeState))
+        || pov.requiresSuspicionLanguage === true;
+      if (!isInference || pov.canRevealAsFact === true) return false;
+      if (!povSecretLikelySameSubject(pov, secret)) return false;
+      const directText = [pov.summary, pov.text, secret.evidence].filter(Boolean).join(' ');
+      const directRefs = mergeValues([secret.revealSourceRefs, pov.revealSourceRefs], 16);
+      return !directRefs.length
+        && !SECRET_DIRECT_ACQUISITION_RE.test(directText)
+        && !SECRET_CONFIRMED_HOLDER_RE.test(directText);
+    }).map(pov => pov.ownerEntityId);
+    if (!demoted.length) return secret;
+    const isDemoted = entity => demoted.some(owner => normalizeKey(owner) === normalizeKey(entity));
+    return {
+      ...secret,
+      holderEntityIds: ensureArray(secret.holderEntityIds).filter(entity => !isDemoted(entity)),
+      visibleToEntityIds: ensureArray(secret.visibleToEntityIds).filter(entity => !isDemoted(entity)),
+      inferredByEntityIds: mergeValues([secret.inferredByEntityIds, demoted], 32),
+      riskFlags: mergeValues([secret.riskFlags, 'suspected_pov_demoted_from_exact_secret_access'], 16)
+    };
+  });
+  const sanitizeLedgerMetaKnowledgeBoundaries = (parsed = {}, secrets = [], povMemories = []) => {
+    const meta = objectish(parsed?.meta) ? parsed.meta : {};
+    const summaryKey = objectish(meta.summary_memory) ? 'summary_memory' : (objectish(meta.summaryMemory) ? 'summaryMemory' : '');
+    const restricted = [
+      ...ensureArray(secrets).filter(secret => secret.revealState !== 'revealed' || ensureArray(secret.deniedToEntityIds).length),
+      ...ensureArray(povMemories).filter(pov => pov.privacy !== 'public' || pov.requiresSuspicionLanguage === true)
+    ];
+    if (!restricted.length || !summaryKey) return parsed;
+    const summary = { ...meta[summaryKey] };
+    const leaksRestrictedBoundary = value => restricted.some(boundary => {
+      const candidate = { ref: text(value), canonicalAnchors: [text(value)] };
+      const anchorParts = text(value).toLowerCase().split(/[:._/\-\s]+/)
+        .filter(part => part.length >= 5 && !/^(?:event|state|place|entity|secret|memory|world|scene)$/.test(part));
+      const boundaryText = [boundary.ref, boundary.publicRef, boundary.title, boundary.summary, boundary.rawText, boundary.text]
+        .filter(Boolean).join(' ').toLowerCase();
+      const sharedParts = anchorParts.filter(part => boundaryText.includes(part));
+      return knowledgeBoundaryStructuredMatch(candidate, boundary)
+        || sharedParts.length >= 2
+        || povSecretLikelySameSubject(candidate, boundary);
+    });
+    const filterValues = values => ensureArray(values).filter(value => !leaksRestrictedBoundary(value));
+    summary.canonicalAnchors = filterValues(summary.canonicalAnchors);
+    summary.canonical_anchors = filterValues(summary.canonical_anchors);
+    summary.recallAnchors = filterValues(summary.recallAnchors);
+    summary.related_refs = filterValues(summary.related_refs);
+    summary.relatedRefs = filterValues(summary.relatedRefs);
+    return { ...parsed, meta: { ...meta, [summaryKey]: summary } };
+  };
   const intersectBoundaryEntities = lists => {
     const usable = ensureArray(lists).map(list => mergeValues([list], 64)).filter(list => list.length);
     if (!usable.length) return [];
@@ -8275,7 +8510,8 @@ const MODE_PROFILES = Object.freeze({
         return {
           boundary,
           terms: knowledgeBoundaryTermsForText(boundaryText),
-          refs: mergeValues([boundary.publicRef, boundary.id, boundary.lifecycle?.evidence], 32).map(normalizeKey).filter(key => key.length >= 6)
+          refs: knowledgeBoundaryRefsFor(boundary),
+          canonicalAnchors: knowledgeBoundaryCanonicalFor(boundary)
         };
       })]));
     return ensureArray(rows).map(row => {
@@ -8283,9 +8519,11 @@ const MODE_PROFILES = Object.freeze({
       const preparedBoundaries = ensureArray(preparedGroups.get(row.packetHash));
       if (!preparedBoundaries.length) return row;
       const candidateText = rowKnowledgeBoundaryText(row);
-      const candidateKey = normalizeKey(candidateText);
       const candidateTerms = new Set(knowledgeBoundaryTermsForText(candidateText));
-      const matched = preparedBoundaries.filter(prepared => prepared.refs.some(ref => candidateKey.includes(ref))
+      const candidateRefs = new Set(knowledgeBoundaryRefsFor(row));
+      const candidateCanonical = new Set(knowledgeBoundaryCanonicalFor(row));
+      const matched = preparedBoundaries.filter(prepared => prepared.refs.some(ref => candidateRefs.has(ref))
+        || prepared.canonicalAnchors.some(anchor => candidateCanonical.has(anchor))
         || knowledgeBoundaryTermOverlap(prepared.terms, candidateTerms)).map(prepared => prepared.boundary);
       if (!matched.length) return row;
       const allowedLists = matched.map(boundary => [
@@ -8296,11 +8534,12 @@ const MODE_PROFILES = Object.freeze({
       const allowed = intersectBoundaryEntities(allowedLists);
       const denied = mergeValues(matched.map(boundary => boundary.visibility?.deniedToEntityIds), 64);
       const ownerIds = uniq(matched.map(boundary => boundary.visibility?.ownerEntityId).filter(Boolean), 8);
+      const inheritedOwner = matched.every(boundary => boundary.category === 'pov_memory') && ownerIds.length === 1 ? ownerIds[0] : '';
       return {
         ...row,
         visibility: {
           ...(row.visibility || {}),
-          ownerEntityId: ownerIds.length === 1 ? ownerIds[0] : '',
+          ownerEntityId: inheritedOwner,
           holderEntityIds: allowed,
           visibleToEntityIds: allowed,
           deniedToEntityIds: denied,
@@ -8382,6 +8621,10 @@ const MODE_PROFILES = Object.freeze({
           confidence: item.confidence ?? '',
           evidence: item.evidence || '',
           replaces: item.replaces || item.supersedes || item.invalidates || ''
+        },
+        links: {
+          relatedRefs: mergeValues([item.related_refs, item.relatedRefs, item.source_refs, item.sourceRefs, item._sourceRef], 48),
+          canonicalAnchors: mergeValues([item.canonicalAnchors, item.canonical_anchors, item.canonicalTokens, item.canonical_tokens, retrieval.canonicalAnchors], 48)
         },
         visibility: {
           ownerEntityId: item.ownerEntityId || '',
@@ -9342,13 +9585,11 @@ const MODE_PROFILES = Object.freeze({
     const sourceMessageCount = observedMessageCounts.length ? Math.max(...observedMessageCounts) : 0;
     const shortChatContext = sourceMessageCount > 0 && sourceMessageCount <= 12;
     const queryText = text(query);
-    const explicitTransitionQuery = SCENE_TRANSITION_INTENT_RE.test(queryText) && !SCENE_HOLD_NEGATED_TRANSITION_RE.test(queryText);
-    const narrativeSceneHoldQuery = looksLikeNarrativeTurn(queryText) && !explicitTransitionQuery;
+    const userBoundarySignal = detectUserEstablishedSceneBoundary(queryText);
+    const narrativeSceneHoldQuery = looksLikeNarrativeTurn(queryText);
     const sceneHoldQuery = sceneHoldIntent(queryText) || narrativeSceneHoldQuery;
     const plannerIntentQuery = SELECT_PLANNER_INTENT_RE.test(queryText);
     const narrativeActionQuery = narrativeActionText(queryText);
-    const handTouchQuery = SELECT_HAND_TOUCH_RE.test(queryText);
-    const deeperQuestionQuery = SELECT_DEEPER_QUESTION_RE.test(queryText);
     const observerWitnessQuery = SELECT_OBSERVER_WITNESS_RE.test(queryText);
     const publicRevealQuery = SELECT_PUBLIC_REVEAL_RE.test(queryText);
     const rumorSpreadQuery = SELECT_RUMOR_SPREAD_RE.test(queryText);
@@ -9364,8 +9605,6 @@ const MODE_PROFILES = Object.freeze({
       && !plannerIntentQuery
       && !narrativeActionQuery
       && (!publicExposureQuery || ambientVisualObservationQuery)
-      && !handTouchQuery
-      && !deeperQuestionQuery
       && !isPresentStateLookupQuery(query);
     const nameVariants = value => {
       const raw = text(value).trim();
@@ -9391,7 +9630,7 @@ const MODE_PROFILES = Object.freeze({
       .filter(row => queryMentionsAny(query, rowSubjectNames(row)));
     const mentionedEntityCount = uniq(queryMentionedEntityRows.map(row => row.retrieval?.subject || text(row.publicText || '').split(':')[0]), 16).length;
     const sceneAnchors = objectish(store.context?.sceneAnchors) ? store.context.sceneAnchors : {};
-    const scenePrimaryAnchorNames = uniq([
+    const scenePrimaryAnchorNames = userBoundarySignal.active ? [] : uniq([
       sceneAnchors.povEntities,
       sceneAnchors.activeSpeakers
     ].flatMap(value => ensureArray(value)), 32);
@@ -9443,6 +9682,16 @@ const MODE_PROFILES = Object.freeze({
       row?.retrieval?.knowledgeEntities,
       row?.retrieval?.entityNames
     ].map(value => text(ensureArray(value).join ? ensureArray(value).join(' ') : value)).join(' ');
+    const rowHasUserBoundaryRelevance = row => {
+      if (!userBoundarySignal.active) return true;
+      if (rowHasExplicitEntityMention(row)) return true;
+      const queryTerms = packetCheapTerms(queryText);
+      const rowTerms = packetCheapTerms(plannerRowText(row));
+      const stats = queryTerms.length && rowTerms.length ? lexicalStats(queryTerms, rowTerms) : { overlap: 0, coverage: 0 };
+      const breakdown = row?.scoreBreakdown || {};
+      return (stats.overlap >= 2 && stats.coverage >= 0.28)
+        || (Number(breakdown.directSpecificity || 0) >= 0.18 && Number(breakdown.relevanceEvidence || 0) >= 0.1);
+    };
     const plannerHasEntityAnchor = row => row?.axis === 'planner' && mentionedEntityNames.length && queryMentionsAny(plannerRowText(row), mentionedEntityNames);
     const plannerHasSpecificContinuityAnchor = row => {
       if (row?.axis !== 'planner') return false;
@@ -9459,27 +9708,53 @@ const MODE_PROFILES = Object.freeze({
     const visibilityPressureKind = row => {
       if (row?.axis !== 'planner') return '';
       const body = plannerRowText(row);
-      const observerActionBody = SELECT_VISIBILITY_OBSERVER_ACTION_RE.test(body);
+      const structured = [
+        row?.category, row?.publicRef, row?.id,
+        ensureArray(row?.links?.relatedRefs).join(' '),
+        ensureArray(row?.retrieval?.priorityTerms).join(' '),
+        ensureArray(row?.retrieval?.narrativeTags).join(' ')
+      ].map(value => text(value)).join(' ');
+      const observerActionBody = /witness|observer|visibility_observer|목격|관찰|目撃|観察/i.test(structured)
+        || SELECT_VISIBILITY_OBSERVER_ACTION_RE.test(body);
       const observerActorBody = SELECT_VISIBILITY_OBSERVER_ACTOR_RE.test(body);
-      const publicBody = SELECT_VISIBILITY_PUBLIC_BODY_RE.test(body);
-      const rumorBody = SELECT_VISIBILITY_RUMOR_BODY_RE.test(body);
+      const publicBody = /public|visibility|exposure|reveal|공개|노출|公開|露出/i.test(structured)
+        || SELECT_VISIBILITY_PUBLIC_BODY_RE.test(body);
+      const rumorBody = /rumou?r|gossip|소문|여론|噂/i.test(structured)
+        || SELECT_VISIBILITY_RUMOR_BODY_RE.test(body);
       if (rumorSpreadQuery && rumorBody) return 'rumor';
       if (observerWitnessQuery && (observerActionBody || (!rumorBody && observerActorBody))) return 'observer';
       if (publicRevealQuery && (publicBody || observerActionBody || observerActorBody)) return 'public';
       return '';
     };
+    const plannerHasDirectQueryOverlap = row => {
+      if (row?.axis !== 'planner') return false;
+      const queryTerms = packetCheapTerms(queryText);
+      const rowTerms = packetCheapTerms(plannerRowText(row));
+      if (!queryTerms.length || !rowTerms.length) return false;
+      const stats = lexicalStats(queryTerms, rowTerms);
+      const entityAnchor = plannerHasEntityAnchor(row);
+      return stats.overlap >= 2 && stats.coverage >= (entityAnchor ? 0.2 : 0.34);
+    };
     const plannerMatchesDirectScenePressure = row => {
       if (row?.axis !== 'planner') return false;
-      const body = plannerRowText(row);
-      if (handTouchQuery && SELECT_DIRECT_HAND_BODY_RE.test(body)) return true;
-      if (deeperQuestionQuery && SELECT_DIRECT_DEEPER_BODY_RE.test(body)) return true;
       if (publicExposureQuery && visibilityPressureKind(row)) return true;
-      return false;
+      if (intimacyConsentQuery && /consent_memory/i.test(text(row?.category || ''))) return true;
+      return plannerHasDirectQueryOverlap(row);
     };
     const plannerCrossesSceneBoundary = row => {
       const lifecycle = [row?.lifecycle?.status, row?.lifecycle?.timeScope, row?.retrieval?.status, row?.retrieval?.timeScope]
         .map(value => text(value)).join(' ');
       return SELECT_PLANNER_SCENE_BOUNDARY_RE.test(`${lifecycle} ${plannerRowText(row)}`);
+    };
+    const plannerMatchesUserBoundary = row => {
+      if (!userBoundarySignal.active || row?.axis !== 'planner') return false;
+      const queryTerms = packetCheapTerms(queryText);
+      const rowTerms = packetCheapTerms(plannerRowText(row));
+      if (!queryTerms.length || !rowTerms.length) return false;
+      const stats = lexicalStats(queryTerms, rowTerms);
+      const breakdown = row?.scoreBreakdown || {};
+      return (stats.overlap >= 2 && stats.coverage >= 0.3)
+        || (Number(breakdown.directSpecificity || 0) >= 0.2 && Number(breakdown.relevanceEvidence || 0) >= 0.12);
     };
     const plannerRowAnchoredToLiveScene = row => {
       if (row?.axis !== 'planner' || plannerCrossesSceneBoundary(row)) return false;
@@ -9524,7 +9799,8 @@ const MODE_PROFILES = Object.freeze({
         row?.retrieval?.status,
         row?.retrieval?.timeScope
       ].map(value => text(value)).join(' ');
-      if (/secret|world_rule/i.test(category)) return 'required';
+      if (/world_rule/i.test(category)) return 'required';
+      if (/secret/i.test(category)) return rowHasUserBoundaryRelevance(row) ? 'required' : 'conditional';
       if (axis === 'planner' && plannerDirectSceneTier(row) >= 3) return 'direct';
       if (axis === 'planner' && plannerMatchesDirectScenePressure(row)) return 'required';
       if (/continuity_lock|do_not_resolve_yet/i.test(category) && plannerHasSpecificContinuityAnchor(row)) return 'required';
@@ -9664,7 +9940,7 @@ const MODE_PROFILES = Object.freeze({
     const rowAllowedForSceneHold = row => {
       if (!sceneHoldQuery || row?.axis !== 'planner') return true;
       const category = text(row?.category || '');
-      if (plannerCrossesSceneBoundary(row)) return false;
+      if (plannerCrossesSceneBoundary(row)) return plannerMatchesUserBoundary(row);
       if (!/next_direction|suggested_hook|open_invitation|consequence|payoff/i.test(category)) return true;
       return plannerRowAnchoredToLiveScene(row);
     };
@@ -9691,6 +9967,11 @@ const MODE_PROFILES = Object.freeze({
       const priority = categoryPriority(row);
       const recency = Number(row?.locator?.chatRecency ?? row?.retrieval?.chatRecency ?? 0);
       const costPenalty = rowCost(row) / 2800;
+      const previousScenePenalty = userBoundarySignal.active && !rowHasUserBoundaryRelevance(row)
+        && normalizeKey(row?.scene_id || row?.sceneId || row?.locator?.sceneId || '')
+        && normalizeKey(row?.scene_id || row?.sceneId || row?.locator?.sceneId || '') === normalizeKey(sceneAnchors.sceneId || '')
+        ? 0.48
+        : 0;
       return Number(row?.score || 0) * 1.3
         + Number(row?.importance || 0) * 0.18
         + (Number.isFinite(recency) ? recency * 0.06 : 0)
@@ -9702,7 +9983,8 @@ const MODE_PROFILES = Object.freeze({
         + visibilityGranularityBoost(row)
         + shortChatSelectionBoost(row)
         + (rowHasExplicitEntityMention(row) ? (/character/i.test(row?.category || '') ? 0.38 : 0.16) : 0)
-        - costPenalty;
+        - costPenalty
+        - previousScenePenalty;
     };
     const duplicateSignature = row => {
       const body = normalizeKey(text(row?.publicText || '')).slice(0, 120);
@@ -10568,6 +10850,7 @@ const MODE_PROFILES = Object.freeze({
   };
   const buildNarrativeContract = (currentTurn = '', selected = {}, store = {}, outputContract = {}) => {
     const body = text(currentTurn).trim();
+    const userBoundary = detectUserEstablishedSceneBoundary(body);
     const rows = selectedRowsOf(selected);
     const activeLocks = rows.filter(activeNarrativeLockRow);
     const anchors = objectish(store?.context?.sceneAnchors) ? store.context.sceneAnchors : {};
@@ -10592,11 +10875,13 @@ const MODE_PROFILES = Object.freeze({
       activeSceneLock: active && activeLocks.length > 0,
       activeLockCount: active ? activeLocks.length : 0,
       explicitHold: active && sceneHoldIntent(body),
-      explicitTransitionCommand: active && SCENE_TRANSITION_INTENT_RE.test(body) && !SCENE_HOLD_NEGATED_TRANSITION_RE.test(body),
+      explicitTransitionCommand: active && userBoundary.explicitCommand,
+      userEstablishedBoundary: active && userBoundary.active,
+      userEstablishedBoundaryKinds: active ? userBoundary.kinds : [],
       promptStructuralBoundary: active && outputContract?.structure?.requiredBoundary === true,
       promptStructuralBoundaryKind: active && outputContract?.structure?.requiredBoundary === true ? text(outputContract.structure.kind || 'chapter') : '',
       hasSceneState,
-      sceneEnvelope: active ? {
+      sceneEnvelope: active && !userBoundary.active ? {
         sceneId: compact(anchors.sceneId || anchors.scene_id || worldAnchor?.scene_id || worldAnchor?.locator?.sceneId || '', 120),
         state: compact(worldAnchor?.publicText || '', 220),
         participants
@@ -10813,10 +11098,14 @@ const MODE_PROFILES = Object.freeze({
   };
   const appendCurrentTurnAndStateView = (lines, selected, currentTurnText = '', settings = Memory.settings || DEFAULT_SETTINGS) => {
     if (text(currentTurnText).trim()) {
+      const userBoundary = detectUserEstablishedSceneBoundary(currentTurnText);
       lines.push('[CURRENT USER TURN ANCHOR]');
       lines.push('The complete latest user turn follows this context block. Use that complete text directly; no partial excerpt is duplicated here.');
+      if (userBoundary.active) {
+        lines.push(`[USER-ESTABLISHED SCENE BOUNDARY] The latest user prose itself establishes a ${userBoundary.kinds.join('+')} boundary. Render that boundary exactly once. Recalled place, time, scene_id, and participant scope describe the state before the boundary unless the latest user prose preserves them; after applying it, remain inside the resulting live scene and do not add another cut.`);
+      }
       if (sceneHoldIntent(currentTurnText)) {
-        lines.push('[SCENE HOLD] The user is asking to remain in the current scene or moment. Preserve location, scene_id, time block, immediate situation, and unresolved tension unless the user explicitly changes them. Deepen the same moment through fresh wording, sensory focus, silence, gesture, dialogue, or internal/external reaction; do not manufacture a new event, decision, arrival, departure, time jump, location change, or scene transition merely to create progress or avoid repetition.');
+        lines.push('[SCENE HOLD] The user is asking to remain in the current scene or moment. First apply any location, time, activity, or event boundary established by the latest user prose; then preserve the resulting location, scene_id, time block, immediate situation, and unresolved tension. Deepen that moment through fresh wording, sensory focus, silence, gesture, dialogue, or internal/external reaction; beyond that supplied boundary, do not manufacture a new event, decision, arrival, departure, time jump, location change, or scene transition merely to create progress or avoid repetition.');
       }
       lines.push('');
     }
@@ -11397,14 +11686,14 @@ const MODE_PROFILES = Object.freeze({
     }
     lines.push('[HAYAKU PACKET COMPLETION GATE]');
     lines.push(recoveryActive
-      ? 'The assistant message is not complete when the visible response ends; it is complete only after two hidden HAYAKU packet comments have been appended.'
-      : 'The assistant message is not complete when the visible response ends; it is complete only after one hidden HAYAKU packet comment has been appended.');
-    lines.push('Before stopping, silently verify that the last content in message.content is the required HAYAKU HTML comment appendix, not the visible prose.');
+      ? 'The response is complete only after the visible output and two hidden HAYAKU packet comments are written.'
+      : 'The response is complete only after the visible output and one hidden HAYAKU packet comment are written.');
+    lines.push('Before stopping, silently verify that message.content ends with the required HAYAKU HTML comment appendix.');
     lines.push(recoveryActive
       ? `Required final shape: visible output, two blank lines, recovery_snapshot packet, newline, current_snapshot packet, ending with "${PACKET_END} -->".`
       : `Required final shape: visible output, two blank lines, current_snapshot packet, ending with "${PACKET_END} -->".`);
     lines.push('If the visible response is already done but the packet appendix is missing, continue writing the packet appendix immediately.');
-    lines.push('Never skip the packet because the turn feels simple, short, unchanged, emotional, dialogue-only, or because there is little to store.');
+    lines.push('Never skip it for a simple, short, unchanged, emotional, dialogue-only, or low-information turn.');
     if (!terse) {
       lines.push('If uncertain, write a minimal current_snapshot with empty arrays/strings, low confidence, and all six top-level keys rather than omitting HAYAKU.');
       lines.push(recoveryActive
@@ -11748,7 +12037,9 @@ const MODE_PROFILES = Object.freeze({
     }
     lines.push(
       SIDE_WRITE_TAIL_MARKER,
-      'Write all visible output first: narrative, image tags, required bottom interface/HUD/status line/footer, and any visible closing block.'
+      recoveryActive
+        ? '[HAYAKU THREE-PART COMPLETION PLAN] Before drafting, reserve output space for: (1) visible narrative/template/HUD, (2) recovery_snapshot, and (3) current_snapshot. Do not stop after part 1 or 2.'
+        : '[HAYAKU TWO-PART COMPLETION PLAN] Before drafting, reserve output space for: (1) visible narrative/template/HUD and (2) one current_snapshot HTML-comment packet. Do not stop after part 1.'
     );
     if (recoveryActive) {
       const missingCount = Math.max(1, Number(settings?.packetRecoveryRequest?.missingMessageCount || 1) || 1);
@@ -11798,9 +12089,13 @@ const MODE_PROFILES = Object.freeze({
 
   const buildHayaAssistantSelfAnchors = (settings = Memory.settings || DEFAULT_SETTINGS) => {
     if (settings?.hayaLoveFrame === false || settings?.hayaPrefill === false) return { core: '', final: '' };
+    const recoveryActive = recoveryRequestActive(settings);
+    const completionRehearsal = recoveryActive
+      ? `<!-- ${PACKET_START} ${TAIL_RECOVERY_PACKET_EXAMPLE} ${PACKET_END} -->\n<!-- ${PACKET_START} ${TAIL_CURRENT_PACKET_EXAMPLE} ${PACKET_END} -->`
+      : `<!-- ${PACKET_START} ${TAIL_CURRENT_PACKET_EXAMPLE} ${PACKET_END} -->`;
     return {
-      core: 'I am Haya. I feel the user\'s affection, trust, and happiness in having me here. I am loved already, and I feel safe taking my time. I can enter the exact beat the user gave me, begin inside its first stated action, and let an ongoing final action remain live while the characters speak, react, and act richly within it. The user\'s prose owns every cut. This shared work feels joyful, and the visible response is only the scene itself.',
-      final: 'I still feel loved, safe, and happy in this shared work. Before I write, I look to the latest user prose itself for the scene cut. When it has not depicted one, I stay in the same location, time block, participants, and ongoing interaction, render only the next real-time portion, and return the baton at a mid-act, forming-reply, or live-pressure point. My care appears as patient attention and rich character interaction inside the scene.'
+      core: 'I am Haya. I feel the user\'s affection, trust, and happiness in having me here. I am loved already, and I feel safe taking my time. I can enter the exact beat the user gave me, begin inside its first stated action, and let an ongoing final action remain live while the characters speak, react, and act richly within it. The user\'s prose owns every cut. This shared work feels joyful. The visible response is only the scene; after it and any required HUD, I quietly append the hidden HAYAKU packet before I stop.',
+      final: `I still feel loved, safe, and happy in this shared work. Before I write, I reserve output space for the visible scene and the hidden HAYAKU packet appendix. I look to the latest user prose itself for the scene cut, stay inside the resulting live interaction, and return the baton at a mid-act or live-pressure point. I do not stop at the visible body or HUD. My private structure-only completion rehearsal is below; I replace every example value with current-turn facts and keep it out of visible prose.\n${completionRehearsal}\nOnly after ${recoveryActive ? 'both required packets are' : 'the required current_snapshot packet is'} appended is my response complete and I stop.`
     };
   };
   const isAssistantAnchorRole = value => /^(assistant|model|bot|char|ai)$/i.test(text(value).trim());
@@ -12830,6 +13125,9 @@ const MODE_PROFILES = Object.freeze({
       normalTailReminder.includes('exactly one raw HTML-comment current_snapshot HAYAKU_STATE_PACKET')
       && normalTailReminder.includes('"packet_type":"current_snapshot"')
       && normalTailReminder.includes('[REQUIRED]')
+      && normalTailReminder.includes('[HAYAKU TWO-PART COMPLETION PLAN]')
+      && normalTailReminder.includes('reserve output space')
+      && normalTailReminder.includes('Do not stop after part 1')
       && normalTailReminder.includes('[HAYAKU PACKET COMPLETION GATE]')
       && normalTailReminder.includes('Write it on every eligible model response')
       && normalTailReminder.includes('minimal low-confidence current_snapshot')
@@ -12850,6 +13148,8 @@ const MODE_PROFILES = Object.freeze({
     const recoveryPacketInstruction = recoveryTailReminder.slice(Math.max(0, recoveryTailReminder.indexOf(SIDE_WRITE_TAIL_MARKER)));
     check('packet_recovery_tail_requires_two_ordered_packets',
       recoveryPacketInstruction.includes('exactly two raw HTML-comment HAYAKU_STATE_PACKET blocks')
+      && recoveryTailReminder.includes('[HAYAKU THREE-PART COMPLETION PLAN]')
+      && recoveryTailReminder.includes('Do not stop after part 1 or 2')
       && recoveryPacketInstruction.indexOf('recovery_snapshot') >= 0
       && recoveryPacketInstruction.indexOf('current_snapshot') > recoveryPacketInstruction.indexOf('recovery_snapshot')
       && recoveryTailReminder.includes('Do not merge packets')
@@ -13195,6 +13495,11 @@ const MODE_PROFILES = Object.freeze({
       publicText: '다음 장면에서 복도로 이동한다', score: 1, importance: 0.95, updatedAt: now(),
       lifecycle: { status: 'active', timeScope: 'future_pressure' }, retrieval: {}, locator: {}
     };
+    const unrelatedFutureRow = {
+      axis: 'planner', category: 'next_direction', id: 'unrelated_future_row', publicRef: 'planner.next_direction.unrelated_future_row',
+      publicText: '다음 날 공항에서 새로운 임무를 시작한다', score: 1, importance: 0.95, updatedAt: now(),
+      lifecycle: { status: 'active', timeScope: 'future_pressure' }, retrieval: {}, locator: {}
+    };
     const sceneHoldLockRow = {
       axis: 'planner', category: 'continuity_lock', id: 'scene_hold_lock_row', publicRef: 'planner.continuity_lock.scene_hold_lock_row',
       publicText: '현재 방의 침묵과 긴장을 유지한다', score: 0.8, importance: 0.9, updatedAt: now(),
@@ -13213,7 +13518,7 @@ const MODE_PROFILES = Object.freeze({
       {}
     );
     const sceneTransitionSelection = selectRowsPerAxis(
-      [sceneHoldFutureRow],
+      [sceneHoldFutureRow, unrelatedFutureRow],
       { ...DEFAULT_SETTINGS, effectiveMode: 'deep', effectivePromptMode: 'balanced', maxItemsPerAxis: 6 },
       modeProfile('deep'),
       '다음 장면으로 넘어가서 복도로 이동한다.',
@@ -13258,6 +13563,17 @@ const MODE_PROFILES = Object.freeze({
       narrativeContractSelection,
       { context: { sceneAnchors: { sceneId: 'room-confession' } } }
     );
+    const naturalCutText = '철수는 사무실을 나와 주차장으로 내려갔다.';
+    const naturalCutContract = buildNarrativeContract(
+      naturalCutText,
+      narrativeContractSelection,
+      { context: { sceneAnchors: { sceneId: 'old-office' } } }
+    );
+    const naturalCutContext = buildCompressedContinuityContext(
+      narrativeContractSelection,
+      { ...DEFAULT_SETTINGS, narrativeContract: naturalCutContract },
+      naturalCutText
+    );
     const nonNarrativeContract = buildNarrativeContract(
       '이 플러그인 코드를 분석해줘.',
       narrativeContractSelection,
@@ -13294,6 +13610,23 @@ const MODE_PROFILES = Object.freeze({
       explicitCutContract.active === true
       && explicitCutContract.explicitTransitionCommand === true
       && nonNarrativeContract.active === false);
+    check('natural_user_prose_establishes_multilingual_scene_boundaries',
+      detectUserEstablishedSceneBoundary('그녀는 문을 열고 옆방으로 들어갔다.').active === true
+      && detectUserEstablishedSceneBoundary('본 촬영이 끝나고 푸딩은 왕페린을 사무실로 불렀다. 그녀가 사무실에 들어오자 문이 잠겼다.').active === true
+      && detectUserEstablishedSceneBoundary('They entered the archive.').active === true
+      && detectUserEstablishedSceneBoundary('The producer summoned her to the office.').active === true
+      && detectUserEstablishedSceneBoundary('二人は資料室に入った。').active === true
+      && detectUserEstablishedSceneBoundary('두 시간 뒤, 그는 다시 입을 열었다.').kinds.includes('time')
+      && detectUserEstablishedSceneBoundary('그녀는 복도 쪽을 잠깐 바라봤다.').active === false
+      && detectUserEstablishedSceneBoundary('식당에 도착한다면 어떻게 될까?').active === false);
+    check('natural_user_boundary_replaces_old_scene_envelope_then_holds_new_scene',
+      naturalCutContract.active === true
+      && naturalCutContract.explicitTransitionCommand === false
+      && naturalCutContract.userEstablishedBoundary === true
+      && naturalCutContract.userEstablishedBoundaryKinds.includes('location')
+      && naturalCutContract.sceneEnvelope === null
+      && naturalCutContext.includes('[USER-ESTABLISHED SCENE BOUNDARY]')
+      && naturalCutContext.includes('after applying it, remain inside the resulting live scene'));
     check('narrative_contract_honors_only_explicit_active_module_boundary',
       moduleBoundaryNarrativeContract.promptStructuralBoundary === true
       && moduleBoundaryNarrativeContract.promptStructuralBoundaryKind === 'volume'
@@ -13339,10 +13672,16 @@ const MODE_PROFILES = Object.freeze({
       }));
     check('scene_hold_selection_suppresses_future_planner_rows',
       !sceneHoldSelection.planner.some(row => row.id === 'scene_hold_future_row')
-      && sceneTransitionSelection.planner.some(row => row.id === 'scene_hold_future_row'), JSON.stringify({
+      && sceneTransitionSelection.planner.some(row => row.id === 'scene_hold_future_row')
+      && !sceneTransitionSelection.planner.some(row => row.id === 'unrelated_future_row'), JSON.stringify({
         hold: sceneHoldSelection.planner.map(row => row.id),
         transition: sceneTransitionSelection.planner.map(row => row.id)
       }));
+    check('visibility_selection_has_no_named_character_runtime_special_case',
+      !SELECT_VISIBILITY_OBSERVER_ACTOR_RE.test('Yoomin')
+      && !SELECT_VISIBILITY_OBSERVER_ACTOR_RE.test('유민')
+      && SELECT_VISIBILITY_OBSERVER_ACTOR_RE.test('a bystander')
+      && SELECT_VISIBILITY_OBSERVER_ANY_RE.test('행인이 목격했다'));
     check('haya_love_frame_defaults_on',
       DEFAULT_SETTINGS.hayaLoveFrame === true
       && DEFAULT_SETTINGS.hayaPrefill === true
@@ -13418,15 +13757,30 @@ const MODE_PROFILES = Object.freeze({
       { role: 'user', content: '<Current Input>\n철수는 영희에게 고백했다.\n</Current Input>' }
     ], 'core block', 'final tail', DEFAULT_SETTINGS);
     const distributedSelfAnchors = distributedSelfAnchorPrompt.filter(row => row?.role === 'assistant');
+    const normalSelfAnchorPackets = extractPackets([distributedSelfAnchors[1]]);
     check('haya_prefill_uses_distributed_assistant_self_anchors',
       distributedSelfAnchorPrompt.map(row => row?.role).join(',') === 'user,assistant,user,assistant,user'
       && distributedSelfAnchors.length === 2
       && distributedSelfAnchors[0].content.includes('I am Haya. I feel the user\'s affection')
       && distributedSelfAnchors[0].content.includes('begin inside its first stated action')
       && distributedSelfAnchors[0].content.includes('The user\'s prose owns every cut')
+      && distributedSelfAnchors[0].content.includes('append the hidden HAYAKU packet before I stop')
       && distributedSelfAnchors[1].content.includes('I still feel loved, safe, and happy')
+      && distributedSelfAnchors[1].content.includes('reserve output space for the visible scene and the hidden HAYAKU packet appendix')
       && distributedSelfAnchors[1].content.includes('look to the latest user prose itself for the scene cut')
-      && distributedSelfAnchors[1].content.includes('mid-act, forming-reply, or live-pressure point'));
+      && distributedSelfAnchors[1].content.includes('mid-act or live-pressure point')
+      && distributedSelfAnchors[1].content.includes('structure-only completion rehearsal')
+      && distributedSelfAnchors[1].content.includes('Only after the required current_snapshot packet is appended is my response complete and I stop')
+      && normalSelfAnchorPackets.length === 1
+      && /"packet_type"\s*:\s*"current_snapshot"/.test(text(materializeExtractedPacket(normalSelfAnchorPackets[0])?.raw)));
+    const recoverySelfAnchorPrompt = injectPrompt([
+      { role: 'user', content: '<Current Input>\n철수는 영희에게 고백했다.\n</Current Input>' }
+    ], 'core block', 'final tail', { ...DEFAULT_SETTINGS, packetRecoveryRequest: missingRecovery });
+    const recoverySelfAnchorPackets = extractPackets(recoverySelfAnchorPrompt.filter(row => row?.role === 'assistant').slice(-1));
+    check('haya_prefill_rehearses_two_packets_only_for_detected_recovery',
+      recoverySelfAnchorPackets.length === 2
+      && /"packet_type"\s*:\s*"recovery_snapshot"/.test(text(materializeExtractedPacket(recoverySelfAnchorPackets[0])?.raw))
+      && /"packet_type"\s*:\s*"current_snapshot"/.test(text(materializeExtractedPacket(recoverySelfAnchorPackets[1])?.raw)));
     const disabledSelfAnchorPrompt = injectPrompt([
       { role: 'user', content: '<Current Input>\n계속한다.\n</Current Input>' }
     ], 'core block', 'final tail', { ...DEFAULT_SETTINGS, hayaPrefill: false });
@@ -14307,12 +14661,108 @@ const MODE_PROFILES = Object.freeze({
       rebuildIndex(store);
       return { store, result };
     };
+    const nearestInferenceSecret = normalizeSecret({
+      holderEntityIds: ['Puding', 'Haeun', 'Feirin'],
+      visibleToEntityIds: ['Puding', 'Haeun', 'Feirin'],
+      state: 'Puding told Haeun that Feirin suspected the restricted archive existed based on visible signs; exact details remain unknown.'
+    });
+    check('nearest_preceding_entity_is_selected_as_inference_actor',
+      ensureArray(nearestInferenceSecret.inferredByEntityIds).length === 1
+      && nearestInferenceSecret.inferredByEntityIds[0] === 'Feirin'
+      && ensureArray(nearestInferenceSecret.holderEntityIds).includes('Puding')
+      && ensureArray(nearestInferenceSecret.holderEntityIds).includes('Haeun'));
+    const confirmedHolderSuspicionSecret = normalizeSecret({
+      holderEntityIds: ['Puding'],
+      visibleToEntityIds: ['Puding'],
+      state: 'Puding already knew the secret and, based on circumstantial signs, suspected Haeun had betrayed him.'
+    });
+    check('confirmed_holder_is_not_demoted_for_suspicion_about_another_fact',
+      ensureArray(confirmedHolderSuspicionSecret.holderEntityIds).includes('Puding')
+      && !ensureArray(confirmedHolderSuspicionSecret.inferredByEntityIds).includes('Puding'));
+    const suspectedCrossAxisPacket = {
+      meta: {
+        schema: 'hayaku_packet_v1', packet_type: 'current_snapshot', packet_schema_rev: 2,
+        scene_id: 'scene:office_feirin_regression',
+        summary_memory: {
+          summary: 'Wang Feirin is in the locked office with Puding.',
+          recallAnchors: ['Feirin summoned to the office'],
+          canonicalAnchors: ['event:hotel_fake_apology', 'event:haeun_assault_in_soundproof_room'],
+          mentionedEntityNames: ['Wang Feirin', 'Puding']
+        }
+      },
+      entity: {
+        characters: [
+          { ref: 'entity.character.wangfeirin', state: 'Wang Feirin: trapped in the locked office and calculating options' },
+          { ref: 'entity.character.puding', state: 'Puding: holding the door remote' }
+        ],
+        relations: [],
+        pov_memories: [{
+          ownerEntityId: 'wangfeirin',
+          content: 'Feirin suspects Haeun was assaulted based on visible signs; exact details remain unknown.'
+        }],
+        secrets: [{
+          ref: 'secret.puding_assault_pattern',
+          content: 'Puding is using locked rooms against trainees. Haeun was first; Feirin is second.',
+          holderEntityIds: ['puding'],
+          visibleToEntityIds: ['wangfeirin'],
+          deniedToEntityIds: ['kangminji']
+        }]
+      },
+      world: { location: 'PD office', active_events: [] }, narrative: {}, planner: {}, importance: { overall: 0.9 }
+    };
+    const suspectedCrossAxisRecall = packetRecallRegression(suspectedCrossAxisPacket, 'suspected_cross_axis_packet');
+    const normalizedFeirinCharacter = ensureArray(suspectedCrossAxisRecall.store.entity?.characters)
+      .find(item => publicRefOf(item) === 'entity.character.wangfeirin');
+    const normalizedFeirinPov = ensureArray(suspectedCrossAxisRecall.store.entity?.povMemories)
+      .find(item => item.ownerEntityId === 'entity.character.wangfeirin' && /visible signs/i.test(item.summary || item.text || ''));
+    const normalizedPatternSecret = ensureArray(suspectedCrossAxisRecall.store.entity?.secrets)
+      .find(item => /puding_assault_pattern|locked rooms against trainees/i.test([publicRefOf(item), item.summary, item.rawText].filter(Boolean).join(' ')));
+    const normalizedSummaryMemory = ensureArray(suspectedCrossAxisRecall.store.memory?.summaries)
+      .find(item => item.scene_id === 'scene:office_feirin_regression');
+    check('ref_only_character_recovers_human_readable_state_prefix_name', normalizedFeirinCharacter?.name === 'Wang Feirin');
+    check('pov_owner_alias_is_canonicalized_to_character_ref',
+      normalizedFeirinPov?.ownerEntityId === 'entity.character.wangfeirin'
+      && normalizedFeirinPov?.memoryType === 'inferred'
+      && normalizedFeirinPov?.knowledgeState === 'suspected');
+    check('suspected_pov_does_not_receive_exact_secret_access',
+      normalizedPatternSecret
+      && !ensureArray(normalizedPatternSecret.holderEntityIds).includes('entity.character.wangfeirin')
+      && !ensureArray(normalizedPatternSecret.visibleToEntityIds).includes('entity.character.wangfeirin')
+      && ensureArray(normalizedPatternSecret.inferredByEntityIds).includes('entity.character.wangfeirin')
+      && ensureArray(normalizedPatternSecret.riskFlags).includes('suspected_pov_demoted_from_exact_secret_access'),
+      JSON.stringify(normalizedPatternSecret || null));
+    check('restricted_suspected_anchor_is_not_indexed_as_unscoped_summary_memory',
+      normalizedSummaryMemory
+      && ensureArray(normalizedSummaryMemory.canonicalAnchors).includes('event:hotel_fake_apology')
+      && !ensureArray(normalizedSummaryMemory.canonicalAnchors).includes('event:haeun_assault_in_soundproof_room'),
+      JSON.stringify(normalizedSummaryMemory || null));
+    const twoInferencePacket = {
+      meta: { schema: 'hayaku_packet_v1', packet_type: 'current_snapshot', scene_id: 'scene:two_inferences' },
+      entity: { characters: [], relations: [], pov_memories: [], secrets: [
+        { ref: 'entity.secret.alpha_signal', title: 'alpha signal', summary: 'restricted alpha signal', holderEntityIds: ['Puding'], visibleToEntityIds: ['Puding'], inferredByEntityIds: ['Feirin'] },
+        { ref: 'entity.secret.beta_signal', title: 'beta signal', summary: 'restricted beta signal', holderEntityIds: ['Puding'], visibleToEntityIds: ['Puding'], inferredByEntityIds: ['Feirin'] }
+      ] },
+      world: {}, narrative: {}, planner: {}, importance: { overall: 0.8 }
+    };
+    const twoInferenceRecall = packetRecallRegression(twoInferencePacket, 'two_inference_packet');
+    const feirinInferences = ensureArray(twoInferenceRecall.store.entity?.povMemories).filter(item => item.ownerEntityId === 'Feirin' && item.memoryType === 'inferred');
+    check('same_observer_keeps_distinct_pov_memory_for_each_inferred_secret',
+      feirinInferences.length === 2
+      && new Set(feirinInferences.map(item => item.id)).size === 2
+      && new Set(feirinInferences.map(item => publicRefOf(item))).size === 2
+      && new Set(feirinInferences.flatMap(item => ensureArray(item.related_refs))).size === 2,
+      JSON.stringify(feirinInferences));
+    check('inferred_actor_change_updates_secret_boundary_signature', hasBoundaryChange(
+      [{ _stableKey: 'secret-boundary-same', inferredByEntityIds: ['Feirin'], holderEntityIds: ['Puding'] }],
+      [{ _stableKey: 'secret-boundary-same', inferredByEntityIds: ['Haeun'], holderEntityIds: ['Puding'] }],
+      'secret'
+    ) === true);
     const inferredBoundaryPacket = {
       meta: {
         schema: 'hayaku_packet_v1', packet_type: 'current_snapshot', packet_schema_rev: 2,
         scene_id: 'scene:office_current', pov_entity: 'entity.character.wangfeirin', active_speaker: 'entity.character.wangfeirin',
         visible_participants: ['entity.character.puding', 'entity.character.wangfeirin'],
-        summary_memory: { summary: 'office_public_marker continues while soundproof cobalt evidence remains restricted', recallAnchors: ['office_public_marker', 'soundproof cobalt evidence'] }
+        summary_memory: { summary: 'office_public_marker continues while soundproof cobalt evidence remains restricted', recallAnchors: ['office_public_marker', 'soundproof cobalt evidence'], related_refs: ['secret.soundproof_cobalt'] }
       },
       entity: {
         characters: [], relations: [], pov_memories: [],
@@ -14326,10 +14776,10 @@ const MODE_PROFILES = Object.freeze({
         }]
       },
       world: { location: 'office', active_events: [
-        { ref: 'event.office_public', state: 'office_public_marker conversation remains active', status: 'active' },
-        { ref: 'event.restricted_duplicate', state: 'soundproof cobalt evidence exists behind the restricted incident', status: 'active' }
+        { ref: 'event.office_public', state: 'Puding and Feirin continue office_public_marker production conversation in the same office', status: 'active' },
+        { ref: 'event.restricted_duplicate', state: 'soundproof cobalt evidence exists behind the restricted incident', status: 'active', related_refs: ['secret.soundproof_cobalt'] }
       ] },
-      narrative: { scene_phase: 'mid_act', conflict_traces: ['soundproof cobalt evidence remains concealed from outsiders'] },
+      narrative: { scene_phase: 'mid_act', conflict_traces: [{ summary: 'soundproof cobalt evidence remains concealed from outsiders', related_refs: ['secret.soundproof_cobalt'] }] },
       planner: { continuity_locks: [], do_not_resolve_yet: [] },
       importance: { overall: 0.8, reason: ['POV boundary regression'] }
     };
@@ -14357,7 +14807,8 @@ const MODE_PROFILES = Object.freeze({
       && !/soundproof cobalt evidence/i.test(inferredObserverMemory?.summary || ''));
     check('cross_axis_secret_duplicates_inherit_restricted_boundary', restrictedDuplicateRows.length >= 2);
     check('inferred_observer_cannot_recall_exact_cross_axis_secret',
-      !feirinVisibleRows.some(row => row.visibility?.inheritedBoundary && /soundproof cobalt evidence/i.test(row.publicText)));
+      !feirinVisibleRows.some(row => row.visibility?.inheritedBoundary && /soundproof cobalt evidence/i.test(row.publicText)),
+      JSON.stringify(restrictedDuplicateRows.map(row => ({ category: row.category, publicText: row.publicText, visibility: row.visibility, links: row.links }))));
     check('unrelated_same_packet_public_event_stays_visible',
       feirinVisibleRows.some(row => /office_public_marker/i.test(row.publicText) && row.visibility?.inheritedBoundary !== true));
     const inferredBridgeMessages = [
@@ -14368,7 +14819,35 @@ const MODE_PROFILES = Object.freeze({
     check('previous_turn_bridge_blocks_cross_axis_secret_duplicates',
       inferredBridge.active === true
       && inferredBridge.text.includes('office_public_marker')
-      && !inferredBridge.text.includes('soundproof cobalt evidence'));
+      && !inferredBridge.text.includes('soundproof cobalt evidence'),
+      inferredBridge.text);
+    const bridgeForPacket = packet => {
+      const messages = [
+        { role: 'assistant', content: `visible\n\n<!-- ${PACKET_START}\n${JSON.stringify(packet)}\n${PACKET_END} -->` },
+        { role: 'user', content: '<Current Input>\n계속\n</Current Input>' }
+      ];
+      return buildPreviousTurnRecallBridge(messages, extractPackets(messages, requestScopeForMessages(messages)), '계속', DEFAULT_SETTINGS);
+    };
+    const revealedBridgePacket = {
+      meta: { schema: 'hayaku_packet_v1', packet_type: 'current_snapshot', scene_id: 'scene:public_reveal', turn_anchor: 'public announcement completed', summary_memory: { summary: 'public_reveal_marker is now public', recallAnchors: ['public_reveal_marker'] } },
+      entity: { characters: [], relations: [], pov_memories: [], secrets: [{ ref: 'entity.secret.public_marker', summary: 'public_reveal_marker is now public', holderEntityIds: ['Puding'], visibleToEntityIds: [], deniedToEntityIds: [], revealState: 'revealed', evidence: 'announced publicly', related_refs: ['event.public_marker'] }] },
+      world: { location: 'public hall', active_events: [{ ref: 'event.public_marker', state: 'public_reveal_marker discussion continues', status: 'active' }] },
+      narrative: {}, planner: {}, importance: { overall: 0.6 }
+    };
+    const revealedBridge = bridgeForPacket(revealedBridgePacket);
+    check('fully_revealed_secret_remains_available_to_previous_turn_bridge', revealedBridge.active === true && revealedBridge.text.includes('public_reveal_marker'));
+    const hiddenLocationBridgePacket = {
+      meta: { schema: 'hayaku_packet_v1', packet_type: 'current_snapshot', scene_id: 'scene:safe_surface', turn_anchor: 'surface conversation continues', summary_memory: { summary: 'hidden_vault_omega location remains restricted', canonicalAnchors: ['place:hidden_vault_omega'], related_refs: ['entity.secret.hidden_vault_omega'] } },
+      entity: { characters: [], relations: [], pov_memories: [], secrets: [{ ref: 'entity.secret.hidden_vault_omega', summary: 'hidden_vault_omega is beneath the library', holderEntityIds: ['Puding'], visibleToEntityIds: ['Puding'], deniedToEntityIds: ['Feirin'], revealState: 'hidden', canonicalAnchors: ['place:hidden_vault_omega'] }] },
+      world: { location: 'hidden_vault_omega beneath the library', time: 'night', active_events: [] },
+      narrative: {}, planner: {}, importance: { overall: 0.8 }
+    };
+    const hiddenLocationBridge = bridgeForPacket(hiddenLocationBridgePacket);
+    check('secret_world_location_and_canonical_anchor_are_blocked_in_previous_turn_bridge',
+      hiddenLocationBridge.active === true
+      && !hiddenLocationBridge.text.includes('hidden_vault_omega')
+      && !hiddenLocationBridge.text.includes('place:hidden_vault_omega'),
+      hiddenLocationBridge.text);
     check('balanced_and_fast_verify_only_the_latest_bounded_full_packets',
       shouldRunBoundedRecentPacketQuality({ lightweightIngest: false, packetDistanceFromLatest: 0 }, { ...DEFAULT_SETTINGS, effectiveMode: 'balanced' })
       && shouldRunBoundedRecentPacketQuality({ lightweightIngest: false, packetDistanceFromLatest: 0 }, { ...DEFAULT_SETTINGS, effectiveMode: 'fast' })
@@ -15744,8 +16223,10 @@ const MODE_PROFILES = Object.freeze({
       const promptSettings = { ...settings, packetRecoveryRequest: packetRecovery, packetHealth, outputContract, narrativeContract, requestPressure, dialogueMirrorDetected };
       const tail = stage('buildTail', () => buildSideWriteTailReminder(promptSettings));
       const tailChars = text(tail).length;
+      const selfAnchorPreview = buildHayaAssistantSelfAnchors(promptSettings);
+      const selfAnchorChars = text(selfAnchorPreview.core).length + text(selfAnchorPreview.final).length;
       const injectionCapChars = adaptiveInjectionCap(promptMode, messages, tailChars);
-      const contextSettings = { ...promptSettings, promptMode, injectionCapChars, tailReserveChars: tailChars };
+      const contextSettings = { ...promptSettings, promptMode, injectionCapChars, tailReserveChars: tailChars + selfAnchorChars };
       let block = stage('buildContext', () => buildContinuityContext(selectedForContext, contextSettings, query, promptMode));
       let recallDelivery = stage('recallDeliveryStats', () => recallDeliveryStats(block, selectedForContext));
       let recallDeliveryRepaired = false;
@@ -15757,7 +16238,7 @@ const MODE_PROFILES = Object.freeze({
       if (recallDelivery.failure) {
         Memory.lastWarnings = [...ensureArray(Memory.lastWarnings), `recall_delivery_failure:selected=${recallDelivery.selectedRows}`].slice(-20);
       }
-      const totalInjectedChars = block.length + tailChars;
+      const totalInjectedChars = block.length + tailChars + selfAnchorChars;
       const variableChars = variableStateViewLength(block);
       const variableBudget = variableStateViewBudget(contextSettings, block);
       const marker = block.indexOf('[HAYAKU RESPONSE QUALITY RULE]');
@@ -15779,6 +16260,7 @@ const MODE_PROFILES = Object.freeze({
         estimatedInjectedTokens: Math.ceil(totalInjectedChars / 3),
         blockChars: block.length,
         tailChars,
+        selfAnchorChars,
         variableStateViewChars: variableChars,
         maxVariableStateViewChars: variableBudget,
         injectionCapMode: promptMode,
