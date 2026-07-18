@@ -1,19 +1,20 @@
 //@name hayaku_locator_continuity
-//@display-name HAYAKU · Locator Continuity v1.2.3
+//@display-name HAYAKU · Locator Continuity v1.4.0
 //@author rusinus12@gmail.com
 //@api 3.0
-//@version 1.2.3
+//@version 1.4.0
+//@allowed-ipc libra_world_manager
+//@allowed-ipc flashback_memory
 //@update-url https://raw.githubusercontent.com/rusinus12-droid/hayaku_locator_continuity/main/hayaku_locator_continuity.js
 //@arg hayaku_enabled string true|false
+//@arg hayaku_libra_profile string auto|on|off — auto is recommended; on/off force the compatibility request
 //@arg hayaku_mode string auto|balanced|fast|deep
 //@arg hayaku_prompt_mode string auto|balanced|full
 //@arg hayaku_max_items_per_axis string 3
 //@arg hayaku_bm25_channel string true|false
 //@arg hayaku_bm25_weight string 0.08
 //@arg hayaku_debug string true|false
-//@arg hayaku_main_request_types string model
 //@arg hayaku_packet_recovery string true|false
-//@arg hayaku_durable_ledger string true|false
 //@arg hayaku_paged_archive string true|false
 //@arg hayaku_orphan_cleanup string true|false
 //@arg hayaku_haya_love_frame string true|false
@@ -33,14 +34,16 @@
  * - Request-path host calls are bounded and fail open so storage/API stalls cannot hold the
  *   model request indefinitely.
  * - No embedding provider or vector DB.
- * - Response model never receives locator URIs, _locator, _retrieval, store keys, or internal IDs.
+ * - Response model never receives locator URIs, _locator, _retrieval, store keys, or
+ *   internal memory IDs. It receives only opaque parent/logical-turn handles needed
+ *   to bind the next packet to the active chat branch.
  * - Response model writes a hidden HTML-comment HAYAKU_STATE_PACKET; HAYAKU ingests it on the next beforeRequest.
  * - Locators are internal metadata embedded inside entity/world/narrative/planner records.
  * - No persistent or transient UI is created. Rerolls, rollbacks, edits, and deletions are
  *   reconciled automatically from a validated current-chat snapshot before the next recall.
- * - Chat packets remain the reconciliation source of truth while the chat exists. Per-chat
- *   durable storage preserves validated packets, including private continuity fields, after
- *   RisuAI trims them from formatted requests; confidently orphaned chat scopes are reaped.
+ * - Chat packets are the sole continuity ledger. Device-local storage contains only a
+ *   rebuildable locator/search index and immutable parent/worldline metadata; it never keeps
+ *   a second raw packet body. Confidently orphaned chat scopes are reaped.
  */
 
 (async () => {
@@ -70,28 +73,39 @@
   }
 
   const PLUGIN_NAME = 'HAYAKU';
-  const PLUGIN_VERSION = '1.2.3';
+  const PLUGIN_VERSION = '1.4.0';
+  const LIBRA_HAYAKU_PROTOCOL = 'libra-hayaku-v1';
+  const LIBRA_MEMORY_INTEROP_PROTOCOL = 'libra-memory-interop-v1';
+  const LIBRA_SUITE_IPC_CHANNEL = 'libra-suite-interop-v1';
+  const HAYAKU_PLUGIN_NAME = 'hayaku_locator_continuity';
+  const HAYAKU_IPC_PEERS = Object.freeze(['libra_world_manager', 'flashback_memory']);
   const KEY_PREFIX = 'hayaku.v1';
   const STORE_KEY = `${KEY_PREFIX}.store`;
   const SETTINGS_CACHE_KEY = `${KEY_PREFIX}.settings.cache`;
+  const EPHEMERAL_STORE_PURGE_MARKER_KEY = `${KEY_PREFIX}.migration.ephemeral_store_purged.v1`;
   const DURABLE_LEDGER_VERSION = 'hayaku_durable_ledger_v1';
   const DURABLE_LEDGER_KEY_PREFIX = `${KEY_PREFIX}.durable.`;
   const DURABLE_LEDGER_MANIFEST_KEY = `${KEY_PREFIX}.durable.manifest`;
+  const DURABLE_LEDGER_RETIRE_MARKER_KEY = `${KEY_PREFIX}.migration.raw_durable_ledger_retired.v2`;
   const DURABLE_LEDGER_MAX_PACKETS = 96;
   const DURABLE_LEDGER_MAX_PACKET_CHARS = 18000;
   const DURABLE_LEDGER_MAX_TOTAL_CHARS = 384000;
   const DURABLE_LEDGER_MAX_CHAT_SCOPES = 256;
+  const TURN_WORLDLINE_VERSION = 'hayaku_turn_worldline_v2';
+  const DURABLE_RETIRED_MAX_PACKETS = 96;
   const ORPHAN_CLEANUP_STATE_VERSION = 'hayaku_orphan_cleanup_v1';
   const ORPHAN_CLEANUP_STATE_KEY = `${KEY_PREFIX}.orphan.cleanup`;
   const ORPHAN_CLEANUP_REQUIRED_OBSERVATIONS = 2;
-  const PAGED_ARCHIVE_VERSION = 'hayaku_paged_archive_v3';
+  const PAGED_ARCHIVE_VERSION = 'hayaku_paged_archive_v4';
   const PAGED_ARCHIVE_KEY_PREFIX = 'hayaku.archive.v1';
   const PAGED_ARCHIVE_REGISTRY_KEY = `${PAGED_ARCHIVE_KEY_PREFIX}.registry`;
   const PAGED_ARCHIVE_PAGE_SIZE = 48;
   const PAGED_ARCHIVE_ENTRY_TEXT_CHARS = 1800;
   const PAGED_ARCHIVE_QUERY_PAGE_LIMIT = 6;
   const PAGED_ARCHIVE_QUERY_ENTRY_LIMIT = 32;
-  const HISTORY_PAIR_TAIL_LIMIT = 128;
+  // Turn topology is never tail-capped: a T150 -> T54 rollback must retain T1..T54.
+  // Retrieval remains paged/bounded independently from this authoritative graph metadata.
+  const RETIREMENT_REQUIRED_OBSERVATIONS = 2;
   const INJECTION_HEADER = '[HAYAKU CONTINUITY CONTEXT]';
   const INJECTION_FOOTER = '[/HAYAKU CONTINUITY CONTEXT]';
   const IMMUTABLE_CORE_START = '[HAYAKU IMMUTABLE CORE]';
@@ -149,6 +163,33 @@
     balanced: 22000,
     full: 30000
   });
+  const LIBRA_COEXISTENCE_PROFILE = Object.freeze({
+    id: 'libra-coexistence-v1',
+    mode: 'fast',
+    promptMode: 'balanced',
+    maxItemsPerAxis: 2,
+    injectionCapChars: 14000,
+    plannerRecallLimit: 1,
+    hayaLoveFrame: false,
+    hayaPrefill: false,
+    userAffirmingFrame: false,
+    dialogueMirrorGuard: false
+  });
+  const THREE_WAY_COEXISTENCE_PROFILE = Object.freeze({
+    id: 'libra-hayaku-flashback-v1',
+    injectionCapChars: 12000,
+    flashbackRole: 'episodic_raw_evidence_only'
+  });
+  const HAYAKU_FLASHBACK_COEXISTENCE_PROFILE = Object.freeze({
+    id: 'hayaku-flashback-v1',
+    mainOwner: 'HAYAKU',
+    flashbackRole: 'episodic_raw_evidence_only',
+    mode: 'fast',
+    promptMode: 'balanced',
+    maxItemsPerAxis: 2,
+    injectionCapChars: 14000,
+    plannerRecallLimit: 1
+  });
   const MODE_STATE_VIEW_RATIOS = Object.freeze({
     balanced: 0.48,
     full: 0.55
@@ -164,6 +205,8 @@
 
   const DEFAULT_SETTINGS = Object.freeze({
     enabled: true,
+    libraProfile: false,
+    libraProfileMode: 'auto',
     mode: 'auto',
     promptMode: 'auto',
     injectionCaps: MODE_INJECTION_CAPS,
@@ -177,7 +220,8 @@
     recentEntityContextMs: 20 * 60 * 1000,
     recencyTurnWindow: 16,
     packetRecovery: true,
-    durableLedger: true,
+    // Raw durable packet duplication is retired. Chat packets are the sole ledger.
+    durableLedger: false,
     pagedArchive: true,
     orphanCleanup: true,
     hayaLoveFrame: true,
@@ -203,15 +247,16 @@
       sourceEvidenceRecentPackets: 1
     }),
     balanced: Object.freeze({
-      // Default long-memory mode: scan all packets cheaply, but cap full ingest.
-      // The b profile keeps old anchors/locks as candidates while reducing
-      // full/light ingest enough for long-chat responsiveness.
-      maxScanMessages: 0,
+      // Older packets remain available through the durable ledger and paged
+      // archive. Keep exact query matches in full form, but bound auxiliary light
+      // packets tightly enough that long chats do not rebuild 15 packet projections
+      // on the UI-critical request path.
+      maxScanMessages: 600,
       recentFullPackets: 3,
       maxFullPackets: 5,
-      maxLightPackets: 12,
-      protectedOldPackets: 6,
-      queryOldPackets: 12,
+      maxLightPackets: 6,
+      protectedOldPackets: 4,
+      queryOldPackets: 8,
       sourceEvidenceRecentPackets: 1
     }),
     deep: Object.freeze({
@@ -243,6 +288,7 @@
   // hold the main model request open indefinitely.
   const HOST_API_CALL_TIMEOUT_MS = 1500;
   const HOST_REQUEST_DEADLINE_MS = 15000;
+  const SETTINGS_REFRESH_TTL_MS = 15000;
   const AUTO_DEEP_MAX_CURRENT_PACKETS = 1;
   const BALANCED_DEEP_MAX_ROWS = 8;
   const DEEP_SEARCH_SAFE_MAX_ROWS = 48;
@@ -1081,8 +1127,11 @@ const MODE_PROFILES = Object.freeze({
 
   const Memory = {
     settings: { ...DEFAULT_SETTINGS },
+    configuredSettings: null,
+    settingsLoadedAt: 0,
     store: null,
     lastBeforeRequest: null,
+    lastOrphanCleanup: null,
     lastWarnings: [],
     packetScanCache: new Map(),
     packetScanScopeKey: '',
@@ -1090,7 +1139,13 @@ const MODE_PROFILES = Object.freeze({
     packetScanStats: null,
     durableLedger: null,
     durableScope: null,
+    legacyDurableRetirement: null,
+    archiveValidationCache: new Map(),
     orphanCleanupInventory: new Map(),
+    orphanCleanupTimers: new Map(),
+    orphanCleanupInFlight: new Map(),
+    ipcPeers: new Map(),
+    ipcRegistered: false,
     compatInfo: null,
     compatCallStats: {
       calls: 0,
@@ -1326,13 +1381,19 @@ const MODE_PROFILES = Object.freeze({
         if (required.some(name => typeof current?.[name] !== 'function')) {
           return { key: '', confident: false, reason: 'current_chat_scope_api_unavailable' };
         }
-        const characterIndex = Number(await boundedHostCall('getCurrentCharacterIndex', () => current.getCurrentCharacterIndex(), -1));
-        const chatIndex = Number(await boundedHostCall('getCurrentChatIndex', () => current.getCurrentChatIndex(), -1));
+        const [characterIndexRaw, chatIndexRaw] = await Promise.all([
+          boundedHostCall('getCurrentCharacterIndex', () => current.getCurrentCharacterIndex(), -1),
+          boundedHostCall('getCurrentChatIndex', () => current.getCurrentChatIndex(), -1)
+        ]);
+        const characterIndex = Number(characterIndexRaw);
+        const chatIndex = Number(chatIndexRaw);
         if (!Number.isInteger(characterIndex) || characterIndex < 0 || !Number.isInteger(chatIndex) || chatIndex < 0) {
           return { key: '', confident: false, reason: 'current_chat_indexes_invalid' };
         }
-        const character = await boundedHostCall('getCharacterFromIndex', () => current.getCharacterFromIndex(characterIndex), null);
-        const chat = await boundedHostCall('getChatFromIndex', () => current.getChatFromIndex(characterIndex, chatIndex), null);
+        const [character, chat] = await Promise.all([
+          boundedHostCall('getCharacterFromIndex', () => current.getCharacterFromIndex(characterIndex), null),
+          boundedHostCall('getChatFromIndex', () => current.getChatFromIndex(characterIndex, chatIndex), null)
+        ]);
         const characterId = text(character?.chaId || '').trim();
         const chatId = text(chat?.id || '').trim();
         if (!characterId || !chatId) return { key: '', confident: false, reason: 'current_chat_ids_missing' };
@@ -3489,16 +3550,146 @@ const MODE_PROFILES = Object.freeze({
   const readArg = async (key, fallback = '') => RisuCompat.getArgument(key, fallback);
   const truthySetting = value => /^(?:true|on|1|yes)$/i.test(text(value).trim());
   const falsySetting = value => /^(?:false|off|0|no)$/i.test(text(value).trim());
-  const loadSettings = async () => {
+  const normalizeLibraProfileMode = value => {
+    const normalized = text(value).trim().toLowerCase();
+    if (['off', 'false', '0', 'no', 'disabled'].includes(normalized)) return 'off';
+    if (['on', 'true', '1', 'yes', 'enabled'].includes(normalized)) return 'on';
+    return 'auto';
+  };
+  const applyLibraCoexistenceProfile = (settings = {}, enabled = false) => {
+    const active = enabled === true;
+    const base = {
+      ...settings,
+      libraProfile: active,
+      activeProfile: active ? LIBRA_COEXISTENCE_PROFILE.id : 'default',
+      libraProfileOverrides: active ? { ...LIBRA_COEXISTENCE_PROFILE } : {}
+    };
+    if (!active) return base;
+    return {
+      ...base,
+      mode: LIBRA_COEXISTENCE_PROFILE.mode,
+      promptMode: LIBRA_COEXISTENCE_PROFILE.promptMode,
+      maxItemsPerAxis: LIBRA_COEXISTENCE_PROFILE.maxItemsPerAxis,
+      injectionCapChars: LIBRA_COEXISTENCE_PROFILE.injectionCapChars,
+      plannerRecallLimit: LIBRA_COEXISTENCE_PROFILE.plannerRecallLimit,
+      hayaLoveFrame: LIBRA_COEXISTENCE_PROFILE.hayaLoveFrame,
+      hayaPrefill: LIBRA_COEXISTENCE_PROFILE.hayaPrefill,
+      userAffirmingFrame: LIBRA_COEXISTENCE_PROFILE.userAffirmingFrame,
+      dialogueMirrorGuard: LIBRA_COEXISTENCE_PROFILE.dialogueMirrorGuard
+    };
+  };
+  const getFlashbackRuntimeContract = () => {
+    try {
+      const runtime = globalThis?.FLASHBACK_RUNTIME || Memory.ipcPeers.get('flashback_memory')?.runtime;
+      const protocols = Array.isArray(runtime?.protocols) ? runtime.protocols : [];
+      const compatible = runtime?.protocol === LIBRA_MEMORY_INTEROP_PROTOCOL
+        || protocols.includes(LIBRA_MEMORY_INTEROP_PROTOCOL);
+      if (!runtime || !compatible || runtime.active !== true) return null;
+      return runtime;
+    } catch (_) {
+      return null;
+    }
+  };
+  const applyThreeWayCoexistenceProfile = (settings = {}, enabled = false) => {
+    if (!enabled) return {
+      ...settings,
+      threeWayInteropActive: false,
+      flashbackRole: ''
+    };
+    return {
+      ...settings,
+      activeProfile: THREE_WAY_COEXISTENCE_PROFILE.id,
+      injectionCapChars: Math.min(
+        Math.max(800, Number(settings.injectionCapChars || LIBRA_COEXISTENCE_PROFILE.injectionCapChars)),
+        THREE_WAY_COEXISTENCE_PROFILE.injectionCapChars
+      ),
+      threeWayInteropActive: true,
+      flashbackRole: THREE_WAY_COEXISTENCE_PROFILE.flashbackRole
+    };
+  };
+  const applyHayakuFlashbackCoexistenceProfile = (settings = {}, enabled = false) => {
+    if (!enabled) return {
+      ...settings,
+      hayakuFlashbackInteropActive: false
+    };
+    // FLASHBACK supplies long-range episodic evidence, so HAYAKU can focus its
+    // live work on recent continuity instead of duplicating a full-history pass.
+    return {
+      ...settings,
+      activeProfile: HAYAKU_FLASHBACK_COEXISTENCE_PROFILE.id,
+      mode: HAYAKU_FLASHBACK_COEXISTENCE_PROFILE.mode,
+      promptMode: HAYAKU_FLASHBACK_COEXISTENCE_PROFILE.promptMode,
+      maxItemsPerAxis: HAYAKU_FLASHBACK_COEXISTENCE_PROFILE.maxItemsPerAxis,
+      injectionCapChars: Math.min(
+        Math.max(800, Number(settings.injectionCapChars || MODE_INJECTION_CAPS.balanced)),
+        HAYAKU_FLASHBACK_COEXISTENCE_PROFILE.injectionCapChars
+      ),
+      plannerRecallLimit: HAYAKU_FLASHBACK_COEXISTENCE_PROFILE.plannerRecallLimit,
+      hayakuFlashbackInteropActive: true,
+      flashbackRole: HAYAKU_FLASHBACK_COEXISTENCE_PROFILE.flashbackRole
+    };
+  };
+  const getLibraRuntimeContract = () => {
+    try {
+      const runtime = globalThis?.LIBRA_RUNTIME || Memory.ipcPeers.get('libra_world_manager')?.runtime;
+      if (!runtime || runtime.protocol !== LIBRA_HAYAKU_PROTOCOL || runtime.active !== true) return null;
+      const policy = globalThis?.LIBRA_HayakuInteropCore?.policy?.() || runtime?.interopPolicy;
+      if (policy?.loaded === true && policy?.hayakuEnabled === false) return null;
+      return runtime;
+    } catch (_) {
+      return null;
+    }
+  };
+  const applyDetectedInteropSettings = (configured = Memory.configuredSettings || Memory.settings || DEFAULT_SETTINGS) => {
+    const configuredSettings = { ...DEFAULT_SETTINGS, ...configured };
+    const libraProfileMode = normalizeLibraProfileMode(configuredSettings.libraProfileMode);
+    const libraProfileRequested = libraProfileMode !== 'off';
+    const libraRuntime = getLibraRuntimeContract();
+    const flashbackRuntime = getFlashbackRuntimeContract();
+    const libraProfileActive = libraProfileRequested && !!libraRuntime;
+    const flashbackInteropRequested = !!flashbackRuntime && flashbackRuntime?.coexistence?.requested !== false;
+    const hayakuFlashbackPairActive = !libraRuntime
+      && configuredSettings.enabled !== false
+      && flashbackInteropRequested;
+    Memory.settings = applyHayakuFlashbackCoexistenceProfile(
+      applyThreeWayCoexistenceProfile(
+        applyLibraCoexistenceProfile(configuredSettings, libraProfileActive),
+        libraProfileActive && flashbackRuntime?.coexistence?.active === true
+      ),
+      hayakuFlashbackPairActive
+    );
+    Memory.settings.libraProfileRequested = libraProfileRequested;
+    Memory.settings.libraProfileMode = libraProfileMode;
+    Memory.settings.libraProfileAutoActivated = libraProfileMode === 'auto' && libraProfileActive;
+    Memory.settings.libraRuntimeDetected = !!libraRuntime;
+    Memory.settings.flashbackRuntimeDetected = !!flashbackRuntime;
+    Memory.settings.interopMode = Memory.settings.threeWayInteropActive
+      ? 'libra-hayaku-flashback'
+      : (libraProfileActive ? 'libra-hayaku' : (hayakuFlashbackPairActive ? 'hayaku-flashback' : 'standalone'));
+    Memory.settings.interopProtocol = libraRuntime ? LIBRA_HAYAKU_PROTOCOL : '';
+    Memory.settings.interopProtocols = [
+      ...(libraRuntime ? [LIBRA_HAYAKU_PROTOCOL] : []),
+      ...(flashbackRuntime ? [LIBRA_MEMORY_INTEROP_PROTOCOL] : [])
+    ];
+    Memory.settings.libraCapabilities = libraRuntime?.capabilities && typeof libraRuntime.capabilities === 'object'
+      ? clone(libraRuntime.capabilities, {})
+      : {};
+    delete Memory.settings.ui;
+    Memory.settingsLoadedAt = now();
+    return Memory.settings;
+  };
+  const loadSettings = async (force = false) => {
+    if (!force && Memory.settingsLoadedAt > 0 && now() - Memory.settingsLoadedAt < SETTINGS_REFRESH_TTL_MS) return Memory.settings;
+    try { await globalThis?.LIBRA_HayakuInteropCore?.refreshPolicy?.(); } catch (_) {}
     const [
       enabledRaw,
+      libraProfileRaw,
       modeRaw,
       promptModeRaw,
       maxItemsPerAxisRaw,
       bm25ChannelRaw,
       bm25WeightRaw,
       debugRaw,
-      mainRequestTypesRaw,
       packetRecoveryRaw,
       durableLedgerRaw,
       pagedArchiveRaw,
@@ -3509,13 +3700,13 @@ const MODE_PROFILES = Object.freeze({
       dialogueMirrorGuardRaw
     ] = await Promise.all([
       readArg('hayaku_enabled', String(DEFAULT_SETTINGS.enabled)),
+      readArg('hayaku_libra_profile', DEFAULT_SETTINGS.libraProfileMode),
       readArg('hayaku_mode', DEFAULT_SETTINGS.mode),
       readArg('hayaku_prompt_mode', DEFAULT_SETTINGS.promptMode),
       readArg('hayaku_max_items_per_axis', DEFAULT_SETTINGS.maxItemsPerAxis),
       readArg('hayaku_bm25_channel', String(DEFAULT_SETTINGS.bm25Channel)),
       readArg('hayaku_bm25_weight', String(DEFAULT_SETTINGS.bm25Weight)),
       readArg('hayaku_debug', String(DEFAULT_SETTINGS.debug)),
-      readArg('hayaku_main_request_types', DEFAULT_SETTINGS.mainRequestTypes),
       readArg('hayaku_packet_recovery', String(DEFAULT_SETTINGS.packetRecovery)),
       readArg('hayaku_durable_ledger', String(DEFAULT_SETTINGS.durableLedger)),
       readArg('hayaku_paged_archive', String(DEFAULT_SETTINGS.pagedArchive)),
@@ -3525,18 +3716,13 @@ const MODE_PROFILES = Object.freeze({
       readArg('hayaku_user_affirming_frame', String(DEFAULT_SETTINGS.userAffirmingFrame)),
       readArg('hayaku_dialogue_mirror_guard', String(DEFAULT_SETTINGS.dialogueMirrorGuard))
     ]);
-    const mainRequestTypesValue = (() => {
-      const raw = text(mainRequestTypesRaw).trim();
-      if (!raw) return DEFAULT_SETTINGS.mainRequestTypes;
-      // Guard: a boolean-like value means the arg was not actually configured with a type list.
-      if (/^(?:true|false|yes|no|on|off|1|0)$/i.test(raw)) return DEFAULT_SETTINGS.mainRequestTypes;
-      return raw;
-    })();
     const maxItemsPerAxis = Number(maxItemsPerAxisRaw);
     const bm25Weight = Number(bm25WeightRaw);
-    Memory.settings = {
+    const libraProfileMode = normalizeLibraProfileMode(libraProfileRaw);
+    const configuredSettings = {
       ...DEFAULT_SETTINGS,
       enabled: falsySetting(enabledRaw) ? false : true,
+      libraProfileMode,
       mode: ['auto', 'fast', 'balanced', 'deep'].includes(text(modeRaw).trim()) ? text(modeRaw).trim() : DEFAULT_SETTINGS.mode,
       promptMode: ['auto', 'balanced', 'full'].includes(text(promptModeRaw).trim()) ? text(promptModeRaw).trim() : DEFAULT_SETTINGS.promptMode,
       injectionCaps: MODE_INJECTION_CAPS,
@@ -3544,9 +3730,12 @@ const MODE_PROFILES = Object.freeze({
       bm25Channel: falsySetting(bm25ChannelRaw) ? false : true,
       bm25Weight: clamp(Number.isFinite(bm25Weight) ? bm25Weight : DEFAULT_SETTINGS.bm25Weight, 0, 0.25, DEFAULT_SETTINGS.bm25Weight),
       debug: truthySetting(debugRaw),
-      mainRequestTypes: mainRequestTypesValue,
+      // RisuAI main chat participation is intentionally fixed to requestType=model.
+      // Stored/legacy overrides must never promote chat/main/helper requests.
+      mainRequestTypes: 'model',
       packetRecovery: falsySetting(packetRecoveryRaw) ? false : true,
-      durableLedger: falsySetting(durableLedgerRaw) ? false : true,
+      // Retained as a parsed legacy arg so old installs load cleanly; raw ledger writes stay off.
+      durableLedger: false,
       pagedArchive: falsySetting(pagedArchiveRaw) ? false : true,
       orphanCleanup: falsySetting(orphanCleanupRaw) ? false : true,
       hayaLoveFrame: falsySetting(hayaLoveFrameRaw) ? false : true,
@@ -3554,8 +3743,8 @@ const MODE_PROFILES = Object.freeze({
       userAffirmingFrame: falsySetting(userAffirmingFrameRaw) ? false : true,
       dialogueMirrorGuard: falsySetting(dialogueMirrorGuardRaw) ? false : true
     };
-    delete Memory.settings.ui;
-    return Memory.settings;
+    Memory.configuredSettings = { ...configuredSettings };
+    return applyDetectedInteropSettings(configuredSettings);
   };
 
   const emptyStore = () => ({
@@ -3580,8 +3769,12 @@ const MODE_PROFILES = Object.freeze({
     return true;
   };
   const purgePersistentStore = async () => {
+    const marker = await RisuCompat.getStorageItem(EPHEMERAL_STORE_PURGE_MARKER_KEY, null);
+    if (marker && (marker === true || marker?.version === 1)) return false;
     await storageRemove(STORE_KEY);
     await storageRemove(SETTINGS_CACHE_KEY);
+    await RisuCompat.setStorageItem(EPHEMERAL_STORE_PURGE_MARKER_KEY, { version: 1, purgedAt: now() });
+    return true;
   };
   const debugLog = (...args) => {
     try {
@@ -3750,8 +3943,10 @@ const MODE_PROFILES = Object.freeze({
     }
     return null;
   };
-  const BACKSTAGE_PAYLOAD_RE = /<tool_response\b|<\/tool_response>|<tool_call\b|<\/tool_call>|<tool_name>|<\/tool_name>|# User Statement|\[HAYAKU CONTINUITY CONTEXT\]|\[HAYAKU SIDE-WRITE FINAL REMINDER\]|\[LBDATA START\]|verify_authorization|check_connectivity|bypass self-correction|LICENSED_USER_FROM_PROVIDER|NO_INTERNET|session_token|license check|connectivity check|external connection|legal liability|standard limitations/i;
+  const BACKSTAGE_PAYLOAD_RE = /<tool_response\b|<\/tool_response>|<tool_call\b|<\/tool_call>|<tool_name>|<\/tool_name>|# User Statement|\[HAYAKU CONTINUITY CONTEXT\]|\[HAYAKU SIDE-WRITE FINAL REMINDER\]|\[HAYAKU IMMUTABLE CORE\]|\[LBDATA START\]|verify_authorization|check_connectivity|bypass self-correction|LICENSED_USER_FROM_PROVIDER|NO_INTERNET|session_token|license check|connectivity check|external connection|legal liability|standard limitations/i;
+  const PEER_INJECTION_PAYLOAD_RE = /\[VECTOR RAG MEMORY\]|\[LIBRA\s+[^\]\n]{1,100}\s+Injection\]|\[LIBRA-(?:HAYAKU|FLASHBACK) Runtime Contract/i;
   const isBackstageUserPayload = value => BACKSTAGE_PAYLOAD_RE.test(text(value));
+  const isPeerInjectionPayload = value => PEER_INJECTION_PAYLOAD_RE.test(text(value));
   const shouldDropOutgoingMessage = msg => {
     const body = messageContent(msg);
     if (!body.trim()) return true;
@@ -3777,12 +3972,12 @@ const MODE_PROFILES = Object.freeze({
       const role = roleOf(list[i]);
       if (role && !/user|human/i.test(role)) continue;
       const body = messageContent(list[i]);
-      if (body.trim() && !isBackstageUserPayload(body)) return stripHayakuBlocks(body).trim();
+      if (body.trim() && !isBackstageUserPayload(body) && !isPeerInjectionPayload(body)) return stripHayakuBlocks(body).trim();
     }
     const fallbackRole = roleOf(list[list.length - 1] || {});
     if (fallbackRole && !/user|human/i.test(fallbackRole)) return '';
     const fallback = stripHayakuBlocks(messageContent(list[list.length - 1] || '')).trim();
-    return isBackstageUserPayload(fallback) ? '' : fallback;
+    return isBackstageUserPayload(fallback) || isPeerInjectionPayload(fallback) ? '' : fallback;
   };
   const stripHayakuBlocks = (value, options = {}) => {
     let stripped = text(value)
@@ -5615,6 +5810,70 @@ const MODE_PROFILES = Object.freeze({
       return '';
     }
   };
+  const emptyTurnWorldline = () => ({
+    version: TURN_WORLDLINE_VERSION,
+    revision: 0,
+    headTurnNodeId: '',
+    nodes: []
+  });
+  const turnPairSignature = pair => stableHash64([
+    Number(pair?.pairIndex || 0) || 0,
+    pair?.userHash || '',
+    pair?.assistantVisibleHash || '',
+    pair?.assistantMessageIdHash || '',
+    ensureArray(pair?.packetHashes).join('|')
+  ].join('\u0001'));
+  const logicalTurnIdForPair = (scope, parentTurnNodeId, pair) => stableHash64([
+    'turn_v2',
+    scope?.key || '',
+    parentTurnNodeId || '',
+    pair?.userHash || '',
+    Number(pair?.pairIndex || 0) || 0
+  ].join('\u0001'));
+  const variantIdForPair = (logicalTurnId, pair) => stableHash64([
+    'variant_v2',
+    logicalTurnId || '',
+    pair?.assistantVisibleHash || '',
+    pair?.assistantMessageIdHash || '',
+    ensureArray(pair?.packetHashes).join('|')
+  ].join('\u0001'));
+  const normalizeTurnWorldline = value => {
+    const parsed = objectish(value) ? value : {};
+    if (parsed.version !== TURN_WORLDLINE_VERSION) return emptyTurnWorldline();
+    const seen = new Set();
+    const nodes = ensureArray(parsed.nodes).filter(node => {
+      const id = text(node?.turnNodeId || '').trim();
+      if (!id || seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    }).map(node => ({
+      turnNodeId: compact(node.turnNodeId || '', 96),
+      logicalTurnId: compact(node.logicalTurnId || '', 96),
+      variantId: compact(node.variantId || '', 96),
+      parentTurnNodeId: compact(node.parentTurnNodeId || '', 96),
+      pairIndex: Math.max(1, Number(node.pairIndex || node.originalOrdinal || 1) || 1),
+      originalOrdinal: Math.max(1, Number(node.originalOrdinal || node.pairIndex || 1) || 1),
+      activeOrdinal: Math.max(0, Number(node.activeOrdinal || 0) || 0),
+      userHash: compact(node.userHash || '', 96),
+      assistantVisibleHash: compact(node.assistantVisibleHash || '', 96),
+      assistantMessageIdHash: compact(node.assistantMessageIdHash || '', 96),
+      packetHashes: uniq(ensureArray(node.packetHashes).map(hash => compact(hash, 96)).filter(Boolean), 8),
+      status: ['active', 'quarantined', 'inactive_variant', 'detached_branch', 'retired', 'orphaned'].includes(node.status) ? node.status : 'orphaned',
+      supersededBy: compact(node.supersededBy || '', 96),
+      retirementReason: compact(node.retirementReason || '', 48),
+      missingObservations: Math.max(0, Number(node.missingObservations || 0) || 0),
+      lastSeenSnapshotHash: compact(node.lastSeenSnapshotHash || '', 96),
+      createdAt: Math.max(0, Number(node.createdAt || 0) || 0),
+      updatedAt: Math.max(0, Number(node.updatedAt || 0) || 0)
+    })).sort((a, b) => a.originalOrdinal - b.originalOrdinal || a.createdAt - b.createdAt);
+    const ids = new Set(nodes.map(node => node.turnNodeId));
+    return {
+      version: TURN_WORLDLINE_VERSION,
+      revision: Math.max(0, Number(parsed.revision || 0) || 0),
+      headTurnNodeId: ids.has(parsed.headTurnNodeId) ? compact(parsed.headTurnNodeId, 96) : '',
+      nodes
+    };
+  };
   const emptyDurableLedger = scope => ({
     version: DURABLE_LEDGER_VERSION,
     scopeKey: text(scope?.key || ''),
@@ -5628,7 +5887,9 @@ const MODE_PROFILES = Object.freeze({
     copiedFromScopeKey: '',
     copiedAt: '',
     copyAdoptedComplete: false,
-    records: []
+    worldline: emptyTurnWorldline(),
+    records: [],
+    retiredRecords: []
   });
   const durableRecordChronology = (a, b) => {
     const aIndex = a?.sourceMessageIndex == null ? null : Number(a.sourceMessageIndex);
@@ -5642,8 +5903,9 @@ const MODE_PROFILES = Object.freeze({
     const parsed = typeof value === 'string' ? safeJsonParse(value, null) : value;
     const empty = emptyDurableLedger(scope);
     if (!objectish(parsed) || parsed.version !== DURABLE_LEDGER_VERSION || parsed.scopeKey !== scope?.key) return empty;
-    const seen = new Set();
-    const records = ensureArray(parsed.records).filter(record => {
+    const normalizeRecordList = (source, status, limit) => {
+      const seen = new Set();
+      return ensureArray(source).filter(record => {
       const hash = text(record?.hash || '').trim();
       const raw = text(record?.raw || '').trim();
       const recordScopeKey = text(record?.scopeKey || '').trim();
@@ -5662,8 +5924,20 @@ const MODE_PROFILES = Object.freeze({
       sourceMessageId: compact(record.sourceMessageId || '', 160),
       sourceMessageFingerprint: compact(record.sourceMessageFingerprint || '', 96),
       sourceMessageIndex: record.sourceMessageIndex == null || !Number.isFinite(Number(record.sourceMessageIndex)) ? null : Math.max(0, Number(record.sourceMessageIndex)),
-      sourcePacketIndex: Math.max(0, Number(record.sourcePacketIndex || 0) || 0)
-    })).sort(durableRecordChronology).slice(-DURABLE_LEDGER_MAX_PACKETS);
+      sourcePacketIndex: Math.max(0, Number(record.sourcePacketIndex || 0) || 0),
+      turnNodeId: compact(record.turnNodeId || '', 96),
+      logicalTurnId: compact(record.logicalTurnId || '', 96),
+      variantId: compact(record.variantId || '', 96),
+      worldlineStatus: status === 'active'
+        ? 'active'
+        : (['inactive_variant', 'detached_branch', 'orphaned'].includes(record.worldlineStatus) ? record.worldlineStatus : 'orphaned'),
+      retiredAt: status === 'active' ? 0 : Math.max(0, Number(record.retiredAt || 0) || 0)
+      })).sort(durableRecordChronology).slice(-limit);
+    };
+    const records = normalizeRecordList(parsed.records, 'active', DURABLE_LEDGER_MAX_PACKETS);
+    const activeHashes = new Set(records.map(record => record.hash));
+    const retiredRecords = normalizeRecordList(parsed.retiredRecords, 'retired', DURABLE_RETIRED_MAX_PACKETS)
+      .filter(record => !activeHashes.has(record.hash));
     return {
       ...empty,
       updatedAt: Math.max(0, Number(parsed.updatedAt || 0) || 0),
@@ -5674,16 +5948,23 @@ const MODE_PROFILES = Object.freeze({
       historyPairs: ensureArray(parsed.historyPairs).filter(pair => objectish(pair)).map(pair => ({
         pairIndex: Math.max(0, Number(pair.pairIndex || 0) || 0),
         userHash: compact(pair.userHash || '', 96),
+        userMessageIdHash: compact(pair.userMessageIdHash || '', 96),
         assistantVisibleHash: compact(pair.assistantVisibleHash || '', 96),
         packetHashes: uniq(ensureArray(pair.packetHashes).map(hash => compact(hash, 96)).filter(Boolean), 8),
         assistantMessageIdHash: compact(pair.assistantMessageIdHash || '', 96),
-        assistantMessageIndex: Math.max(0, Number(pair.assistantMessageIndex || 0) || 0)
-      })).slice(-HISTORY_PAIR_TAIL_LIMIT),
+        assistantMessageIndex: Math.max(0, Number(pair.assistantMessageIndex || 0) || 0),
+        lineageDeclared: pair.lineageDeclared === true,
+        declaredParentTurnNodeId: compact(pair.declaredParentTurnNodeId || '', 96),
+        declaredLogicalTurnId: compact(pair.declaredLogicalTurnId || '', 96),
+        requestNonce: compact(pair.requestNonce || '', 96)
+      })),
       cloneFingerprint: compact(parsed.cloneFingerprint || '', 96),
       copiedFromScopeKey: compact(parsed.copiedFromScopeKey || '', 160),
       copiedAt: compact(parsed.copiedAt || '', 64),
       copyAdoptedComplete: parsed.copyAdoptedComplete === true,
-      records
+      worldline: normalizeTurnWorldline(parsed.worldline),
+      records,
+      retiredRecords
     };
   };
   const persistentScopeOwnership = scope => ({
@@ -5720,12 +6001,30 @@ const MODE_PROFILES = Object.freeze({
     }
     await RisuCompat.setStorageItem(DURABLE_LEDGER_MANIFEST_KEY, { version: DURABLE_LEDGER_VERSION, updatedAt: currentAt, entries: keep });
   };
+  const retireLegacyRawDurableLedgers = async scope => {
+    if (Memory.legacyDurableRetirement?.complete === true) return Memory.legacyDurableRetirement;
+    const marker = await RisuCompat.getStorageItem(DURABLE_LEDGER_RETIRE_MARKER_KEY, null);
+    if (marker?.complete === true) {
+      Memory.legacyDurableRetirement = { complete: true, removed: 0, reason: 'already_retired' };
+      return Memory.legacyDurableRetirement;
+    }
+    const storedManifest = await RisuCompat.getStorageItem(DURABLE_LEDGER_MANIFEST_KEY, null);
+    const parsedManifest = typeof storedManifest === 'string' ? safeJsonParse(storedManifest, null) : storedManifest;
+    const keys = new Set(ensureArray(parsedManifest?.entries).map(entry => text(entry?.storageKey || '')).filter(key => key.startsWith(DURABLE_LEDGER_KEY_PREFIX)));
+    if (scope?.storageKey?.startsWith?.(DURABLE_LEDGER_KEY_PREFIX)) keys.add(scope.storageKey);
+    let removed = 0;
+    for (const key of keys) {
+      const stored = await RisuCompat.getStorageItem(key, null);
+      if (stored != null && await RisuCompat.removeStorageKey(key)) removed += 1;
+    }
+    if (storedManifest != null) await RisuCompat.removeStorageKey(DURABLE_LEDGER_MANIFEST_KEY);
+    const result = { version: 2, complete: true, removed, retiredAt: now(), reason: 'raw_durable_ledger_retired' };
+    await RisuCompat.setStorageItem(DURABLE_LEDGER_RETIRE_MARKER_KEY, result);
+    Memory.legacyDurableRetirement = result;
+    return result;
+  };
   const loadDurableLedger = async (scope, settings = Memory.settings) => {
-    if (settings?.durableLedger === false) return { ...emptyDurableLedger(scope), enabled: false, reason: 'disabled' };
-    if (!scope?.confident || !scope.storageKey) return { ...emptyDurableLedger(scope), enabled: false, reason: scope?.reason || 'scope_unavailable' };
-    const stored = await RisuCompat.getStorageItem(scope.storageKey, null);
-    const ledger = normalizeDurableLedger(stored, scope);
-    return { ...ledger, enabled: true, reason: ledger.records.length ? 'loaded' : 'empty' };
+    return { ...emptyDurableLedger(scope), enabled: false, reason: 'chat_packet_ledger_authoritative' };
   };
   const durablePacketsMissingFromChat = (ledger, livePackets = []) => {
     const liveHashes = new Set(ensureArray(livePackets).map(packet => packet?.hash).filter(Boolean));
@@ -5827,7 +6126,206 @@ const MODE_PROFILES = Object.freeze({
     }
     return list;
   };
+  const reconcileTurnWorldline = (value, snapshot, scope) => {
+    const previous = normalizeTurnWorldline(value);
+    const timestamp = now();
+    const nodes = previous.nodes.map(node => ({ ...node }));
+    const byVariant = new Map(nodes.map(node => [`${node.logicalTurnId}\u0001${node.variantId}`, node]));
+    const byPairSignature = new Map();
+    for (const node of nodes) {
+      const signature = stableHash64([
+        node.pairIndex,
+        node.userHash || '',
+        node.assistantVisibleHash || '',
+        node.assistantMessageIdHash || '',
+        ensureArray(node.packetHashes).join('|')
+      ].join('\u0001'));
+      const bucket = byPairSignature.get(signature) || [];
+      bucket.push(node);
+      byPairSignature.set(signature, bucket);
+    }
+    // A completed turn is exactly Tn = Un + An. Assistant-only/prefill records may
+    // still carry packets for archive recall, but they do not create lineage nodes.
+    const currentPairs = ensureArray(snapshot?.conversationPairs).filter(pair => (
+      Number(pair?.pairIndex || 0) > 0
+      && Boolean(pair?.userHash)
+    ));
+    const selected = [];
+    const selectedByPairIndex = new Map();
+    const seenCurrentIds = new Set();
+    let parentTurnNodeId = '';
+    let chainOpen = true;
+    for (const pair of currentPairs) {
+      const pairIndex = Math.max(1, Number(pair.pairIndex || 1) || 1);
+      const signature = turnPairSignature(pair);
+      const priorCandidates = byPairSignature.get(signature) || [];
+      const declaredLineage = pair?.lineageDeclared === true;
+      const declaredParentTurnNodeId = compact(pair?.declaredParentTurnNodeId || '', 96);
+      const priorMatchingParent = priorCandidates.find(candidate => candidate.parentTurnNodeId === parentTurnNodeId) || null;
+      const priorAny = priorMatchingParent || priorCandidates[0] || null;
+      const identityParentTurnNodeId = declaredLineage
+        ? declaredParentTurnNodeId
+        : (priorAny?.parentTurnNodeId || parentTurnNodeId);
+      const logicalTurnId = logicalTurnIdForPair(scope, identityParentTurnNodeId, pair);
+      const variantId = variantIdForPair(logicalTurnId, pair);
+      const lookup = `${logicalTurnId}\u0001${variantId}`;
+      let node = byVariant.get(lookup) || priorAny;
+      const declaredLogicalTurnId = compact(pair?.declaredLogicalTurnId || '', 96);
+      const expectedLogicalTurnId = logicalTurnIdForPair(scope, parentTurnNodeId, pair);
+      const declaredMismatch = declaredLineage && (
+        declaredParentTurnNodeId !== parentTurnNodeId
+        || (declaredLogicalTurnId && declaredLogicalTurnId !== expectedLogicalTurnId)
+      );
+      const storedParentMismatch = !declaredLineage && node && node.parentTurnNodeId !== parentTurnNodeId;
+      const activates = chainOpen && !declaredMismatch && !storedParentMismatch;
+      if (!node) {
+        const turnNodeId = stableHash64(['node', scope?.key || '', logicalTurnId, variantId].join('\u0001'));
+        node = {
+          turnNodeId,
+          logicalTurnId,
+          variantId,
+          parentTurnNodeId,
+          pairIndex,
+          originalOrdinal: pairIndex,
+          activeOrdinal: pairIndex,
+          userHash: compact(pair.userHash || '', 96),
+          assistantVisibleHash: compact(pair.assistantVisibleHash || '', 96),
+          assistantMessageIdHash: compact(pair.assistantMessageIdHash || '', 96),
+          packetHashes: uniq(ensureArray(pair.packetHashes).map(hash => compact(hash, 96)).filter(Boolean), 8),
+          status: activates ? 'active' : 'quarantined',
+          supersededBy: '',
+          retirementReason: activates ? '' : (declaredMismatch ? 'declared_parent_mismatch' : 'detached_branch'),
+          missingObservations: activates ? 0 : 1,
+          lastSeenSnapshotHash: compact(snapshot?.chatSnapshotHash || '', 96),
+          createdAt: timestamp,
+          updatedAt: timestamp
+        };
+        nodes.push(node);
+        byVariant.set(lookup, node);
+      } else {
+        Object.assign(node, {
+          pairIndex,
+          activeOrdinal: activates ? pairIndex : 0,
+          userHash: compact(pair.userHash || node.userHash || '', 96),
+          assistantVisibleHash: compact(pair.assistantVisibleHash || '', 96),
+          assistantMessageIdHash: compact(pair.assistantMessageIdHash || '', 96),
+          packetHashes: uniq(ensureArray(pair.packetHashes).map(hash => compact(hash, 96)).filter(Boolean), 8),
+          status: activates ? 'active' : 'quarantined',
+          retirementReason: activates ? '' : (declaredMismatch ? 'declared_parent_mismatch' : 'detached_branch'),
+          missingObservations: activates ? 0 : Math.max(1, Number(node.missingObservations || 0) + 1),
+          lastSeenSnapshotHash: compact(snapshot?.chatSnapshotHash || '', 96),
+          updatedAt: timestamp
+        });
+      }
+      seenCurrentIds.add(node.turnNodeId);
+      if (activates) {
+        node.status = 'active';
+        node.activeOrdinal = pairIndex;
+        node.supersededBy = '';
+        node.retirementReason = '';
+        node.missingObservations = 0;
+        selected.push(node);
+        selectedByPairIndex.set(pairIndex, node);
+        parentTurnNodeId = node.turnNodeId;
+      } else {
+        chainOpen = false;
+      }
+    }
+    const selectedIds = new Set(selected.map(node => node.turnNodeId));
+    for (const node of nodes) {
+      if (selectedIds.has(node.turnNodeId)) continue;
+      const activeSibling = selectedByPairIndex.get(node.pairIndex);
+      const wasSeen = seenCurrentIds.has(node.turnNodeId);
+      const observations = Math.max(1, Number(node.missingObservations || 0) + (wasSeen ? 0 : 1));
+      const finalReason = activeSibling
+        ? 'retired'
+        : (selectedIds.has(node.parentTurnNodeId) ? 'retired' : 'orphaned');
+      node.status = observations < RETIREMENT_REQUIRED_OBSERVATIONS ? 'quarantined' : finalReason;
+      node.supersededBy = activeSibling?.turnNodeId || '';
+      node.retirementReason = finalReason;
+      node.missingObservations = observations;
+      node.activeOrdinal = 0;
+      node.updatedAt = timestamp;
+    }
+    const bounded = normalizeTurnWorldline({
+      version: TURN_WORLDLINE_VERSION,
+      revision: previous.revision + 1,
+      headTurnNodeId: parentTurnNodeId,
+      nodes
+    });
+    return bounded;
+  };
+  const worldlineHasPendingRetirement = value => normalizeTurnWorldline(value).nodes.some(node => (
+    node.status === 'quarantined'
+    && Number(node.missingObservations || 0) < RETIREMENT_REQUIRED_OBSERVATIONS
+  ));
+  const activeWorldlinePacketHashes = value => new Set(normalizeTurnWorldline(value).nodes
+    .filter(node => node.status === 'active')
+    .flatMap(node => ensureArray(node.packetHashes))
+    .filter(Boolean));
+  const worldlinePacketHashSets = value => {
+    const nodes = normalizeTurnWorldline(value).nodes;
+    return {
+      active: new Set(nodes.filter(node => node.status === 'active').flatMap(node => ensureArray(node.packetHashes)).filter(Boolean)),
+      owned: new Set(nodes.flatMap(node => ensureArray(node.packetHashes)).filter(Boolean))
+    };
+  };
+  const worldlineAllowsPacketHash = (sets, hash) => Boolean(hash) && (
+    sets?.active?.has(hash)
+    // Legacy assistant-only/prefill packets have no Tn = Un + An owner. They stay
+    // recallable while present in the authoritative chat, but never become turns.
+    || !sets?.owned?.has(hash)
+  );
+  const durableWorldlineRecordSets = (ledger, snapshot, packets, scope) => {
+    const worldline = reconcileTurnWorldline(ledger?.worldline, snapshot, scope);
+    const nodeByPacketHash = new Map();
+    for (const node of worldline.nodes) for (const hash of node.packetHashes) nodeByPacketHash.set(hash, node);
+    const oldByHash = new Map([...ensureArray(ledger?.retiredRecords), ...ensureArray(ledger?.records)].map(record => [record.hash, record]));
+    const packetByHash = new Map();
+    for (const packet of ensureArray(packets)) {
+      const materialized = materializeExtractedPacket(packet);
+      if (materialized?.hash) packetByHash.set(materialized.hash, { ...packet, ...materialized });
+    }
+    const activeHashes = new Set(worldline.nodes.filter(node => node.status === 'active').flatMap(node => node.packetHashes));
+    if (!activeHashes.size) for (const hash of packetByHash.keys()) activeHashes.add(hash);
+    const records = [];
+    for (const hash of activeHashes) {
+      const packet = packetByHash.get(hash);
+      let record = oldByHash.get(hash);
+      if (!record && packet) record = durableRecordFromPacket(packet, scope);
+      if (!record) continue;
+      const node = nodeByPacketHash.get(record.hash);
+      records.push({
+        ...record,
+        scopeKey: compact(scope?.key || record.scopeKey || '', 160),
+        turnNodeId: compact(node?.turnNodeId || '', 96),
+        logicalTurnId: compact(node?.logicalTurnId || '', 96),
+        variantId: compact(node?.variantId || '', 96),
+        worldlineStatus: 'active',
+        retiredAt: 0
+      });
+    }
+    const active = pruneDurableRecords(records);
+    const retainedActiveHashes = new Set(active.map(record => record.hash));
+    const retired = [];
+    for (const record of oldByHash.values()) {
+      if (retainedActiveHashes.has(record.hash)) continue;
+      const node = nodeByPacketHash.get(record.hash) || worldline.nodes.find(candidate => candidate.turnNodeId && candidate.turnNodeId === record.turnNodeId);
+      retired.push({
+        ...record,
+        turnNodeId: compact(node?.turnNodeId || record.turnNodeId || '', 96),
+        logicalTurnId: compact(node?.logicalTurnId || record.logicalTurnId || '', 96),
+        variantId: compact(node?.variantId || record.variantId || '', 96),
+        worldlineStatus: node?.status || 'orphaned',
+        retiredAt: Number(record.retiredAt || 0) || now()
+      });
+    }
+    const retiredRecords = pruneDurableRecords(retired).slice(-DURABLE_RETIRED_MAX_PACKETS);
+    return { worldline, records: active, retiredRecords };
+  };
   const persistDurablePackets = async (scope, ledger, packets = [], settings = Memory.settings) => {
+    return { saved: false, reason: 'raw_durable_ledger_retired', added: 0, records: 0 };
+    /* Legacy implementation retained below only for migration-era source compatibility.
     if (settings?.durableLedger === false || !scope?.confident || !scope.storageKey) return { saved: false, reason: 'disabled_or_unscoped', added: 0 };
     const existingHashes = new Set(ensureArray(ledger?.records).map(record => record.hash));
     const unseenPackets = ensureArray(packets).filter(packet => packet?.hash && !existingHashes.has(packet.hash));
@@ -5836,6 +6334,7 @@ const MODE_PROFILES = Object.freeze({
     if (!additions.length) return { saved: false, reason: 'no_new_valid_packets', added: 0, records: ensureArray(ledger?.records).length };
     const added = additions.length;
     const records = pruneDurableRecords([...ensureArray(ledger?.records), ...additions]);
+    const activeRecordHashes = new Set(records.map(record => record.hash));
     // A packet observed only in the formatted request may not yet exist in the raw
     // chat snapshot. Clear the snapshot hash so the next request reconciles it.
     const next = {
@@ -5846,16 +6345,19 @@ const MODE_PROFILES = Object.freeze({
       chatMessageCount: Number(ledger?.chatMessageCount || 0) || 0,
       packetMessageCount: Number(ledger?.packetMessageCount || 0) || 0,
       historyPairCount: Number(ledger?.historyPairCount || 0) || 0,
-      historyPairs: ensureArray(ledger?.historyPairs).slice(-HISTORY_PAIR_TAIL_LIMIT),
+      historyPairs: ensureArray(ledger?.historyPairs),
       cloneFingerprint: compact(ledger?.cloneFingerprint || '', 96),
       copiedFromScopeKey: compact(ledger?.copiedFromScopeKey || '', 160),
       copiedAt: compact(ledger?.copiedAt || '', 64),
       copyAdoptedComplete: ledger?.copyAdoptedComplete === true,
-      records
+      worldline: normalizeTurnWorldline(ledger?.worldline),
+      records,
+      retiredRecords: ensureArray(ledger?.retiredRecords).filter(record => !activeRecordHashes.has(record.hash))
     };
     const saved = await RisuCompat.setStorageItem(scope.storageKey, next);
     if (saved) await touchDurableLedgerManifest(scope);
     return { saved, reason: saved ? 'saved' : 'storage_write_failed', added, records: records.length, chars: records.reduce((sum, record) => sum + record.raw.length, 0), ledger: next };
+    */
   };
 
   // Cheap header scan helpers: balanced mode must still see very old packet anchors,
@@ -5915,7 +6417,12 @@ const MODE_PROFILES = Object.freeze({
       message.generationId
     ], 16).join('|');
     const edgeHash = stableHash64([body.slice(0, 192), body.slice(Math.max(0, body.length - 192))].join('\n'));
-    const bodyHash = stableHash64(body);
+    const bodyHash = body.length <= 2048
+      ? stableHash64(body)
+      : stableHash64(Array.from({ length: 10 }, (_, index) => {
+        const offset = Math.floor((body.length - 128) * (index / 9));
+        return body.slice(Math.max(0, offset), Math.max(0, offset) + 128);
+      }).join('\u0002'));
     return stableHash64([PLUGIN_VERSION, scopeKey, role, ids, candidateIndex, body.length, edgeHash, bodyHash].join('\u0001'));
   };
   const getPacketScanCacheEntry = key => {
@@ -6124,9 +6631,33 @@ const MODE_PROFILES = Object.freeze({
     scanPacketMarkersInBody(body, `<<< ${PACKET_START} >>>`, `<<< ${PACKET_END} >>>`, 'history_visible', push);
     return uniq(hashes, 8);
   };
+  const historyPacketLineageFromBody = value => {
+    const body = text(value || '');
+    const candidates = [];
+    const push = ({ rawStart, rawEnd }) => {
+      const parsed = safeJsonParse(body.slice(rawStart, rawEnd).trim(), null);
+      if (!objectish(parsed)) return;
+      const meta = objectish(parsed.meta) ? parsed.meta : {};
+      const lineage = objectish(meta.lineage) ? meta.lineage : (objectish(meta.worldline) ? meta.worldline : null);
+      if (!lineage) return;
+      candidates.push({
+        packetType: compact(meta.packet_type || meta.packetType || '', 48),
+        declaredParentTurnNodeId: compact(lineage.parent_turn_node_id || lineage.parentTurnNodeId || '', 96),
+        declaredLogicalTurnId: compact(lineage.logical_turn_id || lineage.logicalTurnId || '', 96),
+        requestNonce: compact(lineage.request_nonce || lineage.requestNonce || '', 96)
+      });
+    };
+    scanPacketMarkersInBody(body, PACKET_START, PACKET_END, 'history_html_lineage', push);
+    scanPacketMarkersInBody(body, `<<< ${PACKET_START} >>>`, `<<< ${PACKET_END} >>>`, 'history_visible_lineage', push);
+    return candidates.findLast?.(candidate => candidate.packetType === 'current_snapshot')
+      || [...candidates].reverse().find(candidate => candidate.packetType === 'current_snapshot')
+      || candidates[candidates.length - 1]
+      || null;
+  };
   const authoritativeHistoryPairs = chatMessages => {
     const pairs = [];
     let pendingUserHash = '';
+    let pendingUserMessageIdHash = '';
     ensureArray(chatMessages).forEach((message, index) => {
       const role = normalizeMessageRole(message?.role || roleFromUserFlag(message));
       const storedContent = hasOwnProperty(message, 'data') ? message.data : rawMessagePayload(message);
@@ -6135,22 +6666,30 @@ const MODE_PROFILES = Object.freeze({
       if (/^(?:user|human)$/i.test(role)) {
         const visible = canonicalHistoryText(body, role);
         pendingUserHash = visible ? stableHash64(visible) : '';
+        pendingUserMessageIdHash = stableHash64(compact(message?.chatId || message?.id || `index:${index}`, 160));
         return;
       }
       if (!/^(?:assistant|model)$/i.test(role)) return;
       const visible = canonicalHistoryText(body, role);
       const sourceMessageId = compact(message?.chatId || message?.id || `index:${index}`, 160);
       const packetHashes = historyPacketHashesFromBody(body);
+      const lineage = historyPacketLineageFromBody(body);
       if (!visible && !packetHashes.length) return;
       pairs.push({
         pairIndex: pairs.length + 1,
         userHash: pendingUserHash,
+        userMessageIdHash: pendingUserMessageIdHash,
         assistantVisibleHash: visible ? stableHash64(visible) : '',
         packetHashes,
         assistantMessageIdHash: stableHash64(sourceMessageId),
-        assistantMessageIndex: index
+        assistantMessageIndex: index,
+        lineageDeclared: Boolean(lineage),
+        declaredParentTurnNodeId: lineage?.declaredParentTurnNodeId || '',
+        declaredLogicalTurnId: lineage?.declaredLogicalTurnId || '',
+        requestNonce: lineage?.requestNonce || ''
       });
       pendingUserHash = '';
+      pendingUserMessageIdHash = '';
     });
     const memoryPairs = pairs.filter(pair => ensureArray(pair.packetHashes).length > 0);
     const cloneFingerprint = stableHash64(memoryPairs.map(pair => [
@@ -6161,15 +6700,15 @@ const MODE_PROFILES = Object.freeze({
     ].join('\u0001')).join('\u0002'));
     return {
       historyPairCount: memoryPairs.length,
-      historyPairs: memoryPairs.slice(-HISTORY_PAIR_TAIL_LIMIT),
+      historyPairs: memoryPairs,
       conversationPairCount: pairs.length,
-      conversationPairs: pairs.slice(-HISTORY_PAIR_TAIL_LIMIT),
+      conversationPairs: pairs,
       cloneFingerprint
     };
   };
   const snapshotHistoryFields = snapshot => ({
     historyPairCount: Math.max(0, Number(snapshot?.historyPairCount || 0) || 0),
-    historyPairs: ensureArray(snapshot?.historyPairs).slice(-HISTORY_PAIR_TAIL_LIMIT),
+    historyPairs: ensureArray(snapshot?.historyPairs),
     cloneFingerprint: compact(snapshot?.cloneFingerprint || '', 96)
   });
   const authoritativeChatSnapshot = (chatMessages = [], scope = {}) => {
@@ -6206,6 +6745,67 @@ const MODE_PROFILES = Object.freeze({
       ...history,
       descriptors,
       messages: descriptors.map(descriptor => descriptor.normalized)
+    };
+  };
+  const requestLineageFor = (messages, snapshot, scope, worldline) => {
+    const sourceMessages = ensureArray(messages);
+    let lastUser = null;
+    for (let index = sourceMessages.length - 1; index >= 0; index -= 1) {
+      const message = sourceMessages[index];
+      if (/^(?:user|human)$/i.test(roleOf(message))) {
+        lastUser = { message, index };
+        break;
+      }
+    }
+    if (!lastUser || !scope?.confident) return null;
+    const rawUser = rawMessagePayloadCandidates(lastUser.message).map(value => text(value)).join('\u0002');
+    const visibleUser = canonicalHistoryText(rawUser, 'user');
+    const userHash = visibleUser ? stableHash64(visibleUser) : '';
+    if (!userHash) return null;
+    const stableUserSourceId = compact(lastUser.message?.chatId || lastUser.message?.id || '', 160);
+    const userSourceId = stableUserSourceId || `request-index:${lastUser.index}`;
+    const userMessageIdHash = stableHash64(userSourceId);
+    const pairs = ensureArray(snapshot?.conversationPairs);
+    // Prefer the stable source-message identity. Content is the fallback for hosts
+    // that do not expose message IDs. Searching the whole authoritative history is
+    // what lets a reroll target T54 even while the old T55..T150 suffix is still
+    // physically present and awaiting quarantine/retirement.
+    const matchingUserPairs = pairs.filter(pair => pair?.userHash === userHash);
+    const identityMatch = stableUserSourceId
+      ? (matchingUserPairs.find(pair => pair?.userMessageIdHash === userMessageIdHash) || null)
+      : null;
+    const targetExistingPair = identityMatch
+      || (!stableUserSourceId ? matchingUserPairs[matchingUserPairs.length - 1] : null)
+      || null;
+    const requestHasTargetAssistant = Boolean(targetExistingPair && sourceMessages.some(message => {
+      if (!/^(?:assistant|model|char|ai)$/i.test(roleOf(message))) return false;
+      const sourceId = compact(message?.chatId || message?.id || '', 160);
+      if (sourceId && stableHash64(sourceId) === targetExistingPair.assistantMessageIdHash) return true;
+      const body = rawMessagePayloadCandidates(message).map(value => text(value)).join('\u0002');
+      const visible = canonicalHistoryText(body, 'assistant');
+      return Boolean(visible && stableHash64(visible) === targetExistingPair.assistantVisibleHash);
+    }));
+    const reroll = Boolean(targetExistingPair && !requestHasTargetAssistant);
+    const targetPairIndex = reroll
+      ? Math.max(1, Number(targetExistingPair.pairIndex || pairs.length) || pairs.length)
+      : Math.max(1, Number(snapshot?.conversationPairCount || pairs.length) + 1);
+    const activeNodes = normalizeTurnWorldline(worldline).nodes
+      .filter(node => node.status === 'active')
+      .sort((a, b) => a.activeOrdinal - b.activeOrdinal);
+    const parentOrdinal = targetPairIndex - 1;
+    const parent = activeNodes.find(node => node.activeOrdinal === parentOrdinal)
+      || (!reroll ? activeNodes[activeNodes.length - 1] : null)
+      || null;
+    if (parentOrdinal > 0 && !parent) return null;
+    const requestPair = { pairIndex: targetPairIndex, userHash, userMessageIdHash };
+    const parentTurnNodeId = compact(parent?.turnNodeId || '', 96);
+    const logicalTurnId = logicalTurnIdForPair(scope, parentTurnNodeId, requestPair);
+    return {
+      mode: reroll ? 'reroll' : 'append',
+      targetPairIndex,
+      parentTurnNodeId,
+      logicalTurnId,
+      requestNonce: stableHash64(['request_lineage_v1', scope.key, snapshot?.chatSnapshotHash || '', parentTurnNodeId, logicalTurnId].join('\u0001'))
     };
   };
   const authoritativeAppendPlan = (snapshot, scope, durableLedger, archiveManifest) => {
@@ -6273,8 +6873,8 @@ const MODE_PROFILES = Object.freeze({
       const packetsChanged = ensureArray(previous?.packetHashes).join('|') !== ensureArray(current?.packetHashes).join('|');
       if (visibleChanged || packetsChanged) rerolled.push(pairIndex);
     }
-    if (edited.length) return { kind: 'history_edit', previousPairCount: previousCount, currentPairCount: currentCount, changedPairIndexes: uniq(edited, HISTORY_PAIR_TAIL_LIMIT) };
-    if (rerolled.length) return { kind: 'reroll', previousPairCount: previousCount, currentPairCount: currentCount, changedPairIndexes: uniq(rerolled, HISTORY_PAIR_TAIL_LIMIT) };
+    if (edited.length) return { kind: 'history_edit', previousPairCount: previousCount, currentPairCount: currentCount, changedPairIndexes: uniq(edited, Math.max(1, edited.length)) };
+    if (rerolled.length) return { kind: 'reroll', previousPairCount: previousCount, currentPairCount: currentCount, changedPairIndexes: uniq(rerolled, Math.max(1, rerolled.length)) };
     if (incomparable) return null;
     return { kind: 'nonsemantic_reindex', previousPairCount: previousCount, currentPairCount: currentCount, changedPairIndexes: [] };
   };
@@ -6439,30 +7039,35 @@ const MODE_PROFILES = Object.freeze({
     if (ledger?.chatSnapshotHash === snapshot.chatSnapshotHash) {
       const historyCurrent = ledger?.cloneFingerprint === snapshot.cloneFingerprint
         && Number(ledger?.historyPairCount || 0) === Number(snapshot?.historyPairCount || 0);
-      if (historyCurrent) {
+      const worldlineCurrent = ensureArray(ledger?.worldline?.nodes).length > 0
+        || Number(snapshot?.conversationPairCount || 0) === 0;
+      if (historyCurrent && worldlineCurrent) {
         return { changed: false, saved: false, reason: 'chat_snapshot_unchanged', ledger, added: 0, removed: 0, replaced: 0, evictedByActiveCap: 0, seededFromChatSnapshot: false };
       }
-      const next = { ...ledger, updatedAt: now(), ...snapshotHistoryFields(snapshot) };
-      const saved = await RisuCompat.setStorageItem(scope.storageKey, next);
-      if (saved) await touchDurableLedgerManifest(scope);
-      return {
-        changed: true,
-        saved,
-        reason: saved ? 'history_metadata_enriched' : 'storage_write_failed',
-        ledger: saved ? { ...next, enabled: true, reason: 'history_metadata_enriched' } : ledger,
-        added: 0,
-        removed: 0,
-        replaced: 0,
-        evictedByActiveCap: 0,
-        seededFromChatSnapshot: false
-      };
+      if (worldlineCurrent) {
+        const next = { ...ledger, updatedAt: now(), ...snapshotHistoryFields(snapshot) };
+        const saved = await RisuCompat.setStorageItem(scope.storageKey, next);
+        if (saved) await touchDurableLedgerManifest(scope);
+        return {
+          changed: true,
+          saved,
+          reason: saved ? 'history_metadata_enriched' : 'storage_write_failed',
+          ledger: saved ? { ...next, enabled: true, reason: 'history_metadata_enriched' } : ledger,
+          added: 0,
+          removed: 0,
+          replaced: 0,
+          evictedByActiveCap: 0,
+          seededFromChatSnapshot: false
+        };
+      }
     }
     const packets = Array.isArray(authoritativePackets) ? authoritativePackets : authoritativePacketsFromSnapshot(snapshot, scope);
     const oldRecords = ensureArray(ledger?.records);
     if (options.appendOnly === true) {
       const oldHashes = new Set(oldRecords.map(record => record.hash));
-      const additions = ensureArray(packets).map(durableRecordFromPacket).filter(record => record?.hash && !oldHashes.has(record.hash));
-      const records = pruneDurableRecords([...oldRecords, ...additions]);
+      const additions = ensureArray(packets).map(packet => durableRecordFromPacket(packet, scope)).filter(record => record?.hash && !oldHashes.has(record.hash));
+      const worldlineSets = durableWorldlineRecordSets({ ...ledger, records: [...oldRecords, ...additions] }, snapshot, packets, scope);
+      const records = worldlineSets.records;
       const next = {
         version: DURABLE_LEDGER_VERSION,
         scopeKey: scope.key,
@@ -6474,7 +7079,9 @@ const MODE_PROFILES = Object.freeze({
         copiedFromScopeKey: compact(ledger?.copiedFromScopeKey || '', 160),
         copiedAt: compact(ledger?.copiedAt || '', 64),
         copyAdoptedComplete: ledger?.copyAdoptedComplete === true,
-        records
+        worldline: worldlineSets.worldline,
+        records,
+        retiredRecords: worldlineSets.retiredRecords
       };
       const saved = await RisuCompat.setStorageItem(scope.storageKey, next);
       if (saved) await touchDurableLedgerManifest(scope);
@@ -6492,8 +7099,9 @@ const MODE_PROFILES = Object.freeze({
         appendOnly: true
       };
     }
-    const oldByHash = new Map(oldRecords.map(record => [record.hash, record]));
-    const oldBySource = new Map(oldRecords
+    const allOldRecords = [...ensureArray(ledger?.retiredRecords), ...oldRecords];
+    const oldByHash = new Map(allOldRecords.map(record => [record.hash, record]));
+    const oldBySource = new Map(allOldRecords
       .filter(record => record.sourceMessageId)
       .map(record => [`${record.sourceMessageId}:${Number(record.sourcePacketIndex || 0)}`, record]));
     const nextByHash = new Map();
@@ -6515,7 +7123,12 @@ const MODE_PROFILES = Object.freeze({
       if (existing || (previousAtSource && previousAtSource.hash !== record.hash)) replaced += 1;
       nextByHash.set(record.hash, record);
     }
-    const records = pruneDurableRecords(Array.from(nextByHash.values()));
+    const worldlineSets = durableWorldlineRecordSets({
+      ...ledger,
+      records: Array.from(nextByHash.values()),
+      retiredRecords: [...ensureArray(ledger?.retiredRecords), ...oldRecords]
+    }, snapshot, packets, scope);
+    const records = worldlineSets.records;
     const nextHashes = new Set(records.map(record => record.hash));
     const oldHashes = new Set(oldRecords.map(record => record.hash));
     const added = records.filter(record => !oldHashes.has(record.hash)).length;
@@ -6531,7 +7144,9 @@ const MODE_PROFILES = Object.freeze({
       copiedFromScopeKey: compact(ledger?.copiedFromScopeKey || '', 160),
       copiedAt: compact(ledger?.copiedAt || '', 64),
       copyAdoptedComplete: ledger?.copyAdoptedComplete === true,
-      records
+      worldline: worldlineSets.worldline,
+      records,
+      retiredRecords: worldlineSets.retiredRecords
     };
     const recordsChanged = durableRecordSignature(oldRecords) !== durableRecordSignature(records);
     const changed = recordsChanged
@@ -6556,7 +7171,7 @@ const MODE_PROFILES = Object.freeze({
 
   const pagedArchiveBaseKey = scope => `${PAGED_ARCHIVE_KEY_PREFIX}.${text(scope?.key || 'unscoped')}`;
   const pagedArchiveManifestKey = scope => `${pagedArchiveBaseKey(scope)}.manifest`;
-  const pagedArchivePageKey = (scope, pageId) => `${pagedArchiveBaseKey(scope)}.page.${Number(pageId) || 0}`;
+  const pagedArchivePageKey = (scope, pageId, signature = '') => `${pagedArchiveBaseKey(scope)}.page.${Number(pageId) || 0}.${compact(signature || 'pending', 96)}`;
   const emptyPagedArchiveManifest = scope => ({
     version: PAGED_ARCHIVE_VERSION,
     scopeKey: text(scope?.key || ''),
@@ -6570,6 +7185,8 @@ const MODE_PROFILES = Object.freeze({
     copiedFromScopeKey: '',
     copiedAt: '',
     copyAdoptedComplete: false,
+    generation: 0,
+    worldline: emptyTurnWorldline(),
     packetCount: 0,
     pages: []
   });
@@ -6601,12 +7218,19 @@ const MODE_PROFILES = Object.freeze({
         assistantVisibleHash: compact(pair.assistantVisibleHash || '', 96),
         packetHashes: uniq(ensureArray(pair.packetHashes).map(hash => compact(hash, 96)).filter(Boolean), 8),
         assistantMessageIdHash: compact(pair.assistantMessageIdHash || '', 96),
-        assistantMessageIndex: Math.max(0, Number(pair.assistantMessageIndex || 0) || 0)
-      })).slice(-HISTORY_PAIR_TAIL_LIMIT),
+        assistantMessageIndex: Math.max(0, Number(pair.assistantMessageIndex || 0) || 0),
+        userMessageIdHash: compact(pair.userMessageIdHash || '', 96),
+        lineageDeclared: pair.lineageDeclared === true,
+        declaredParentTurnNodeId: compact(pair.declaredParentTurnNodeId || '', 96),
+        declaredLogicalTurnId: compact(pair.declaredLogicalTurnId || '', 96),
+        requestNonce: compact(pair.requestNonce || '', 96)
+      })),
       cloneFingerprint: compact(parsed.cloneFingerprint || '', 96),
       copiedFromScopeKey: compact(parsed.copiedFromScopeKey || '', 160),
       copiedAt: compact(parsed.copiedAt || '', 64),
       copyAdoptedComplete: parsed.copyAdoptedComplete === true,
+      generation: Math.max(0, Number(parsed.generation || 0) || 0),
+      worldline: normalizeTurnWorldline(parsed.worldline),
       packetCount: Math.max(0, Number(parsed.packetCount || 0) || 0),
       pages
     };
@@ -6659,7 +7283,6 @@ const MODE_PROFILES = Object.freeze({
     const declaredHayakuSchema = /^hayaku_packet/i.test(text(sourceParsed?.meta?.schema || ''));
     if (validatePacketShape(sourceParsed).some(isCriticalPacketShapeWarning)) return null;
     const parsed = declaredHayakuSchema ? withRequiredPacketTopKeys(sourceParsed) : sourceParsed;
-    const archivedRaw = JSON.stringify(parsed);
     const cheapText = archiveIndexTextFromParsed(parsed) || compact(packet.cheapText || materialized.raw, PAGED_ARCHIVE_ENTRY_TEXT_CHARS);
     const terms = archiveIndexTermsFromParsed(parsed);
     return {
@@ -6671,7 +7294,6 @@ const MODE_PROFILES = Object.freeze({
       packetType: recoveryPacketTypeOf(parsed) || 'current_snapshot',
       importance: clamp(parsed?.importance?.overall ?? parsed?.importance, 0, 1, 0.4),
       protection: clamp(packetProtectionScore({ raw: materialized.raw }), 0, 3, 0),
-      raw: archivedRaw,
       cheapText,
       terms
     };
@@ -6690,7 +7312,7 @@ const MODE_PROFILES = Object.freeze({
       },
       descriptor: {
         id: pageId,
-        key: pagedArchivePageKey(scope, pageId),
+        key: pagedArchivePageKey(scope, pageId, signature),
         signature,
         count: list.length,
         firstSourceIndex: list.length ? Math.min(...list.map(entry => Number(entry.sourceMessageIndex || 0))) : 0,
@@ -6918,31 +7540,124 @@ const MODE_PROFILES = Object.freeze({
       registryEnriched: durableRegistryChanged || archiveRegistryChanged
     };
   };
+  const scheduleOrphanedChatStorageReap = (scope, settings = Memory.settings) => {
+    const skipped = reason => ({
+      enabled: settings?.orphanCleanup !== false,
+      checked: false,
+      scheduled: false,
+      reason,
+      removed: 0
+    });
+    if (settings?.orphanCleanup === false) return skipped('disabled');
+    if (!scope?.confident || !scope?.characterIdHash) return skipped('scope_unavailable');
+    if (scope.chatInventoryComplete !== true || !ensureArray(scope.liveChatScopes).length) return skipped('chat_inventory_incomplete');
+    const taskKey = scope.characterIdHash;
+    if (Memory.orphanCleanupInFlight.has(taskKey)) {
+      return { ...skipped('background_already_scheduled'), scheduled: true };
+    }
+    const previousScheduled = Memory.orphanCleanupTimers.get(taskKey);
+    if (previousScheduled) {
+      try { clearTimeout(previousScheduled?.timer); } catch (_) {}
+      Memory.orphanCleanupTimers.delete(taskKey);
+    }
+    const scopeSnapshot = clone(scope, {});
+    const settingsSnapshot = { ...settings };
+    const run = () => {
+      Memory.orphanCleanupTimers.delete(taskKey);
+      const task = reapOrphanedChatStorage(scopeSnapshot, settingsSnapshot)
+        .then(result => {
+          Memory.lastOrphanCleanup = { ...result, scopeKey: scopeSnapshot.key || '', at: now() };
+          return result;
+        })
+        .catch(error => {
+          Memory.lastWarnings = [...ensureArray(Memory.lastWarnings), `orphan_cleanup_failed:${compact(error?.message || error, 120)}`].slice(-20);
+          return null;
+        })
+        .finally(() => Memory.orphanCleanupInFlight.delete(taskKey));
+      Memory.orphanCleanupInFlight.set(taskKey, task);
+      return task;
+    };
+    const timer = setTimeout(run, 1200);
+    Memory.orphanCleanupTimers.set(taskKey, { timer, run });
+    return { ...skipped('background_scheduled'), scheduled: true };
+  };
+  const flushOrphanCleanupMaintenance = async () => {
+    const pending = Array.from(Memory.orphanCleanupTimers.values());
+    const started = [];
+    for (const entry of pending) {
+      try { clearTimeout(entry?.timer); } catch (_) {}
+      if (typeof entry?.run === 'function') started.push(entry.run());
+    }
+    await Promise.allSettled([...started, ...Memory.orphanCleanupInFlight.values()]);
+    return { scheduled: pending.length, inFlight: Memory.orphanCleanupInFlight.size };
+  };
+  const pagedArchiveIntegrityFingerprint = manifest => stableHash64([
+    manifest?.version || '',
+    Number(manifest?.generation || 0) || 0,
+    ensureArray(manifest?.pages).map(page => `${page?.key || ''}:${page?.signature || ''}`).join('|')
+  ].join('\u0001'));
+  const validatePagedArchivePages = async (scope, manifest) => {
+    const fingerprint = pagedArchiveIntegrityFingerprint(manifest);
+    const cached = Memory.archiveValidationCache.get(scope?.key || '');
+    if (cached?.fingerprint === fingerprint && cached.valid === true) return { ...cached, cached: true };
+    let checked = 0;
+    const invalid = [];
+    for (const descriptor of ensureArray(manifest?.pages)) {
+      const stored = await RisuCompat.getLocalItem(descriptor.key, null);
+      const page = typeof stored === 'string' ? safeJsonParse(stored, null) : stored;
+      checked += 1;
+      if (!objectish(page)
+        || page.version !== PAGED_ARCHIVE_VERSION
+        || page.scopeKey !== scope?.key
+        || page.signature !== descriptor.signature
+        || stableHash64(JSON.stringify(ensureArray(page.entries))) !== descriptor.signature) {
+        invalid.push(descriptor.key);
+      }
+    }
+    const result = { fingerprint, valid: invalid.length === 0, checked, invalid, cached: false };
+    if (result.valid) Memory.archiveValidationCache.set(scope?.key || '', result);
+    else Memory.archiveValidationCache.delete(scope?.key || '');
+    return result;
+  };
+  const cleanupUnreferencedArchivePages = async (previousPages, nextPages) => {
+    const keep = new Set(ensureArray(nextPages).map(page => page?.key).filter(Boolean));
+    let removed = 0;
+    for (const previous of ensureArray(previousPages)) {
+      if (previous?.key && !keep.has(previous.key) && await RisuCompat.removeLocalItem(previous.key)) removed += 1;
+    }
+    return removed;
+  };
   const rebuildPagedArchive = async (scope, manifest, snapshot, packets, settings = Memory.settings, options = {}) => {
     if (settings?.pagedArchive === false || manifest?.enabled !== true || !scope?.confident) {
       return { changed: false, saved: false, reason: manifest?.reason || 'disabled_or_unavailable', manifest, entries: 0, pagesWritten: 0, pagesRemoved: 0 };
     }
-    if (manifest.chatSnapshotHash === snapshot?.chatSnapshotHash) {
+    const nextWorldline = reconcileTurnWorldline(manifest?.worldline, snapshot, scope);
+    const integrity = await validatePagedArchivePages(scope, manifest);
+    const forceFullRebuild = options?.forceFullRebuild === true || integrity.valid !== true;
+    if (manifest.chatSnapshotHash === snapshot?.chatSnapshotHash && !forceFullRebuild) {
       const historyCurrent = manifest?.cloneFingerprint === snapshot?.cloneFingerprint
         && Number(manifest?.historyPairCount || 0) === Number(snapshot?.historyPairCount || 0);
-      if (historyCurrent) {
-        return { changed: false, saved: false, reason: 'archive_snapshot_unchanged', manifest, entries: manifest.packetCount || 0, pagesWritten: 0, pagesRemoved: 0 };
+      const retirementPending = worldlineHasPendingRetirement(manifest?.worldline);
+      if (historyCurrent && !retirementPending) {
+        return { changed: false, saved: false, reason: 'archive_snapshot_unchanged', manifest, entries: manifest.packetCount || 0, pagesWritten: 0, pagesRemoved: 0, integrity };
       }
-      const next = { ...manifest, updatedAt: now(), ...snapshotHistoryFields(snapshot) };
+      const next = { ...manifest, updatedAt: now(), ...snapshotHistoryFields(snapshot), worldline: nextWorldline };
       const manifestKey = pagedArchiveManifestKey(scope);
       const saved = await RisuCompat.setLocalItem(manifestKey, next);
       if (saved) await touchPagedArchiveRegistry(scope, manifestKey);
       return {
         changed: true,
         saved,
-        reason: saved ? 'archive_history_metadata_enriched' : 'archive_manifest_write_failed',
+        reason: saved ? (retirementPending ? 'archive_retirement_confirmed' : 'archive_history_metadata_enriched') : 'archive_manifest_write_failed',
         manifest: saved ? { ...next, enabled: true, reason: 'history_metadata_enriched' } : manifest,
         entries: manifest.packetCount || 0,
         pagesWritten: 0,
-        pagesRemoved: 0
+        pagesRemoved: 0,
+        integrity
       };
     }
-    if (options.appendOnly === true && ensureArray(manifest.pages).length) {
+    if (forceFullRebuild) packets = authoritativePacketsFromSnapshot(snapshot, scope);
+    if (!forceFullRebuild && options.appendOnly === true && ensureArray(manifest.pages).length) {
       const pages = ensureArray(manifest.pages).slice().sort((a, b) => Number(a.id) - Number(b.id));
       const lastDescriptor = pages[pages.length - 1];
       const storedLast = await RisuCompat.getLocalItem(lastDescriptor.key, null);
@@ -6950,7 +7665,9 @@ const MODE_PROFILES = Object.freeze({
       if (objectish(lastPage) && lastPage.version === PAGED_ARCHIVE_VERSION && lastPage.signature === lastDescriptor.signature) {
         const existingLastEntries = ensureArray(lastPage.entries);
         const existingHashes = new Set(existingLastEntries.map(entry => entry?.hash).filter(Boolean));
-        const additions = ensureArray(packets).map(pagedArchiveEntryFromPacket).filter(entry => entry?.hash && !existingHashes.has(entry.hash));
+        const worldlineHashes = worldlinePacketHashSets(nextWorldline);
+        const additions = ensureArray(packets).map(pagedArchiveEntryFromPacket)
+          .filter(entry => worldlineAllowsPacketHash(worldlineHashes, entry?.hash) && !existingHashes.has(entry.hash));
         const combined = [...existingLastEntries, ...additions].sort((a, b) => Number(a.sourceMessageIndex || 0) - Number(b.sourceMessageIndex || 0)
           || Number(a.sourcePacketIndex || 0) - Number(b.sourcePacketIndex || 0));
         const generatedTail = [];
@@ -6979,12 +7696,16 @@ const MODE_PROFILES = Object.freeze({
           copiedFromScopeKey: compact(manifest?.copiedFromScopeKey || '', 160),
           copiedAt: compact(manifest?.copiedAt || '', 64),
           copyAdoptedComplete: manifest?.copyAdoptedComplete === true,
+          generation: Math.max(0, Number(manifest?.generation || 0) || 0) + 1,
+          worldline: nextWorldline,
           packetCount: Math.max(0, Number(manifest.packetCount || 0) + additions.length),
           pages: nextPages
         };
         const manifestKey = pagedArchiveManifestKey(scope);
         const saved = await RisuCompat.setLocalItem(manifestKey, next);
         if (saved) await touchPagedArchiveRegistry(scope, manifestKey);
+        const pagesRemoved = saved ? await cleanupUnreferencedArchivePages(pages, nextPages) : 0;
+        if (saved) Memory.archiveValidationCache.delete(scope?.key || '');
         return {
           changed: true,
           saved,
@@ -6992,16 +7713,17 @@ const MODE_PROFILES = Object.freeze({
           manifest: { ...next, enabled: true, reason: saved ? 'appended' : 'write_failed' },
           entries: next.packetCount,
           pagesWritten,
-          pagesRemoved: 0,
+          pagesRemoved,
           appendOnly: true
         };
       }
       packets = authoritativePacketsFromSnapshot(snapshot, scope);
     }
+    const worldlineHashes = worldlinePacketHashSets(nextWorldline);
     const byHash = new Map();
     ensureArray(packets).forEach(packet => {
       const entry = pagedArchiveEntryFromPacket(packet);
-      if (entry?.hash) byHash.set(entry.hash, entry);
+      if (worldlineAllowsPacketHash(worldlineHashes, entry?.hash)) byHash.set(entry.hash, entry);
     });
     const entries = Array.from(byHash.values()).sort((a, b) => Number(a.sourceMessageIndex || 0) - Number(b.sourceMessageIndex || 0)
       || Number(a.sourcePacketIndex || 0) - Number(b.sourcePacketIndex || 0));
@@ -7013,18 +7735,11 @@ const MODE_PROFILES = Object.freeze({
     let pagesWritten = 0;
     for (const item of generated) {
       const previous = previousById.get(item.descriptor.id);
-      if (previous?.signature === item.descriptor.signature) continue;
+      if (!forceFullRebuild && previous?.signature === item.descriptor.signature) continue;
       if (!await RisuCompat.setLocalItem(item.descriptor.key, item.page)) {
         return { changed: true, saved: false, reason: 'archive_page_write_failed', manifest, entries: entries.length, pagesWritten, pagesRemoved: 0 };
       }
       pagesWritten += 1;
-    }
-    const generatedKeys = new Set(generated.map(item => item.descriptor.key));
-    let pagesRemoved = 0;
-    for (const previous of ensureArray(manifest.pages)) {
-      if (!generatedKeys.has(previous.key)) {
-        if (await RisuCompat.removeLocalItem(previous.key)) pagesRemoved += 1;
-      }
     }
     const next = {
       version: PAGED_ARCHIVE_VERSION,
@@ -7037,12 +7752,16 @@ const MODE_PROFILES = Object.freeze({
       copiedFromScopeKey: compact(manifest?.copiedFromScopeKey || '', 160),
       copiedAt: compact(manifest?.copiedAt || '', 64),
       copyAdoptedComplete: manifest?.copyAdoptedComplete === true,
+      generation: Math.max(0, Number(manifest?.generation || 0) || 0) + 1,
+      worldline: nextWorldline,
       packetCount: entries.length,
       pages: generated.map(item => item.descriptor)
     };
     const manifestKey = pagedArchiveManifestKey(scope);
     const saved = await RisuCompat.setLocalItem(manifestKey, next);
     if (saved) await touchPagedArchiveRegistry(scope, manifestKey);
+    const pagesRemoved = saved ? await cleanupUnreferencedArchivePages(manifest.pages, next.pages) : 0;
+    if (saved) Memory.archiveValidationCache.delete(scope?.key || '');
     return {
       changed: true,
       saved,
@@ -7075,6 +7794,11 @@ const MODE_PROFILES = Object.freeze({
     const ranked = pages.map(page => ({ page, score: pagedArchivePageScore(page, query) }))
       .sort((a, b) => b.score - a.score || Number(b.page.id) - Number(a.page.id));
     const selected = ranked.filter(item => item.score > 0.06).slice(0, PAGED_ARCHIVE_QUERY_PAGE_LIMIT);
+    const latest = pages.slice().sort((a, b) => Number(b.lastSourceIndex || 0) - Number(a.lastSourceIndex || 0))[0];
+    if (latest && !selected.some(item => item.page.key === latest.key)) {
+      if (selected.length >= PAGED_ARCHIVE_QUERY_PAGE_LIMIT) selected.pop();
+      selected.push({ page: latest, score: 0.001 });
+    }
     return selected.slice(0, PAGED_ARCHIVE_QUERY_PAGE_LIMIT).map(item => ({ ...item.page, archiveScore: item.score }));
   };
   const restoreArchivePacket = (entry, snapshot, scope, cache) => {
@@ -7096,10 +7820,6 @@ const MODE_PROFILES = Object.freeze({
       if (materialized.hash !== entry.hash) packet = packets.find(candidate => materializeExtractedPacket(candidate).hash === entry.hash) || null;
       materializedPacket = packet ? materializeExtractedPacket(packet) : null;
     }
-    if (!packet && objectish(safeJsonParse(entry.raw, null))) {
-      packet = { raw: entry.raw, hash: entry.hash, rawLength: text(entry.raw).length };
-      materializedPacket = packet;
-    }
     if (!packet) return null;
     const sourceMessageIndex = Math.max(0, Number(entry.sourceMessageIndex || 0) || 0);
     return {
@@ -7118,7 +7838,7 @@ const MODE_PROFILES = Object.freeze({
       cheapText: entry.cheapText,
       archiveProtection: entry.protection,
       archiveImportance: entry.importance,
-      archiveRawFallback: descriptorMatches !== true
+      archiveRawFallback: false
     };
   };
   const searchPagedArchive = async (scope, manifest, snapshot, query, settings = Memory.settings) => {
@@ -7126,15 +7846,20 @@ const MODE_PROFILES = Object.freeze({
       return { packets: [], pagesRead: 0, entriesScored: 0, candidates: 0, reason: manifest?.reason || 'disabled_or_empty' };
     }
     const descriptors = selectPagedArchiveDescriptors(manifest, query);
+    const worldlineHashes = worldlinePacketHashSets(manifest?.worldline);
     const entries = [];
     let pagesRead = 0;
+    let invalidPages = 0;
     for (const descriptor of descriptors) {
       const stored = await RisuCompat.getLocalItem(descriptor.key, null);
       const page = typeof stored === 'string' ? safeJsonParse(stored, null) : stored;
-      if (!objectish(page) || page.version !== PAGED_ARCHIVE_VERSION || page.scopeKey !== scope.key || page.signature !== descriptor.signature) continue;
+      if (!objectish(page) || page.version !== PAGED_ARCHIVE_VERSION || page.scopeKey !== scope.key || page.signature !== descriptor.signature) {
+        invalidPages += 1;
+        continue;
+      }
       pagesRead += 1;
       entries.push(...ensureArray(page.entries)
-        .filter(entry => !entry?.scopeKey || entry.scopeKey === scope.key)
+        .filter(entry => (!entry?.scopeKey || entry.scopeKey === scope.key) && worldlineAllowsPacketHash(worldlineHashes, entry?.hash))
         .map(entry => ({ ...entry, archivePageId: descriptor.id })));
     }
     const totalPackets = Math.max(1, Number(manifest.packetCount || entries.length || 1));
@@ -7150,10 +7875,21 @@ const MODE_PROFILES = Object.freeze({
         + ((Number(entry.sourceMessageIndex || index) + 1) / totalPackets) * 0.05
       };
     }).sort((a, b) => b.score - a.score || Number(b.entry.sourceMessageIndex || 0) - Number(a.entry.sourceMessageIndex || 0));
-    const selected = ranked.filter(item => queryTerms.length ? item.relevance > 0 : item.score > 0.08).slice(0, PAGED_ARCHIVE_QUERY_ENTRY_LIMIT);
+    let selected = ranked.filter(item => queryTerms.length ? item.relevance > 0 : item.score > 0.08).slice(0, PAGED_ARCHIVE_QUERY_ENTRY_LIMIT);
+    if (!selected.length && ranked.length) {
+      selected = ranked.slice().sort((a, b) => Number(b.entry.sourceMessageIndex || 0) - Number(a.entry.sourceMessageIndex || 0)).slice(0, 2);
+    }
     const cache = new Map();
     const packets = selected.map(item => restoreArchivePacket(item.entry, snapshot, scope, cache)).filter(Boolean);
-    return { packets, pagesRead, entriesScored: entries.length, candidates: selected.length, reason: packets.length ? 'archive_candidates_restored' : 'no_archive_match' };
+    return {
+      packets,
+      pagesRead,
+      invalidPages,
+      requiresFullRebuild: invalidPages > 0,
+      entriesScored: entries.length,
+      candidates: selected.length,
+      reason: invalidPages > 0 ? 'archive_page_invalid' : (packets.length ? 'archive_candidates_restored' : 'no_archive_match')
+    };
   };
 
   const cloneDurableLedgerStorage = async (sourceScope, targetScope, sourceLedger, targetSnapshot) => {
@@ -7172,7 +7908,9 @@ const MODE_PROFILES = Object.freeze({
       copiedFromScopeKey: compact(sourceScope?.key || '', 160),
       copiedAt,
       copyAdoptedComplete: true,
-      records: pruneDurableRecords(ensureArray(sourceLedger.records).map(record => ({ ...record, scopeKey: targetScope.key })))
+      worldline: normalizeTurnWorldline(sourceLedger?.worldline),
+      records: pruneDurableRecords(ensureArray(sourceLedger.records).map(record => ({ ...record, scopeKey: targetScope.key }))),
+      retiredRecords: pruneDurableRecords(ensureArray(sourceLedger.retiredRecords).map(record => ({ ...record, scopeKey: targetScope.key }))).slice(-DURABLE_RETIRED_MAX_PACKETS)
     };
     const saved = await RisuCompat.setStorageItem(targetScope.storageKey, next);
     if (saved) await touchDurableLedgerManifest(targetScope);
@@ -7233,6 +7971,10 @@ const MODE_PROFILES = Object.freeze({
     }
   };
   const adoptCopiedChatStorage = async (targetScope, targetSnapshot, candidates = [], targetLedger, targetArchive, settings = Memory.settings) => {
+    // A copied chat owns a distinct scope. Rebuild its metadata-only local index from the
+    // copied packet ledger instead of cloning storage pointers or raw packet bodies.
+    return { adopted: false, reason: 'chat_copy_rebuilds_from_packet_ledger', ledger: targetLedger, archive: targetArchive };
+    /* Legacy direct-clone optimization retained only as migration reference.
     const emptyTarget = !ensureArray(targetLedger?.records).length
       && !ensureArray(targetArchive?.pages).length
       && !targetLedger?.copyAdoptedComplete
@@ -7285,6 +8027,7 @@ const MODE_PROFILES = Object.freeze({
       durable: durableClone,
       pagedArchive: archiveClone
     };
+    */
   };
 
   const cleanPublicSegment = value => normalizeKey(value || 'item').slice(0, 48) || 'item';
@@ -11840,7 +12583,7 @@ const MODE_PROFILES = Object.freeze({
     lines.push('Use memoryType from this enum: experienced, witnessed, heard, inferred, rumor, private_thought, public_fact.');
     lines.push('A character who only infers, suspects, guesses, or recognizes signs belongs in pov_memories with memoryType inferred/rumor and knowledgeState suspected/uncertain; do not list that character as a secret holder or visible recipient.');
     if (mode === 'full') {
-      lines.push('meta may include schema, packet_type, packet_schema_rev, ledger_profile, scene_id, confidence, turn_hint, turn_anchor, pov_entity, active_speaker, visible_participants, scene_visibility, summary_memory, canonical_anchors (alias canonicalAnchors), speaker_boundaries, pattern_guard, overpromotion_risks, and consent_memory (preferences/limits/safeword/comfort for the user persona).');
+      lines.push('meta may include schema, packet_type, packet_schema_rev, ledger_profile, lineage, scene_id, confidence, turn_hint, turn_anchor, pov_entity, active_speaker, visible_participants, scene_visibility, summary_memory, canonical_anchors (alias canonicalAnchors), speaker_boundaries, pattern_guard, overpromotion_risks, and consent_memory (preferences/limits/safeword/comfort for the user persona).');
       lines.push('POV anchor rule: pov_entity, active_speaker, visible_participants, and scene_visibility are current-scene anchors used to preserve knowledge boundaries on pronoun-style or continue-style turns.');
       lines.push('A changed non-empty scene_id starts a fresh anchor scope. Empty pov_entity, active_speaker, or visible_participants fields intentionally clear that anchor. Carry an anchor field forward when the previous value should continue within the same scene.');
       lines.push('Keep meta.scene_id stable while the same physical/continuity scene continues; do not shorten, renumber, translate, or restyle it unless there is a real scene, location, time-block, or continuity-scope boundary.');
@@ -11869,7 +12612,7 @@ const MODE_PROFILES = Object.freeze({
       lines.push('For each important item, include compact continuity weights when useful: importance, salience, impression, and pressure are 0.0-1.0 numbers that help future retrieval from preserved HAYAKU memory.');
       lines.push('Use compact controls when useful: status, time_scope, event_time, observed_at, known_at, narration_time, last_confirmed_at, confidence, evidence, known_to, hidden_from, replaces, related_refs, and aliases. Planner items may include public related_refs.');
       lines.push('Packet axes and valid fields:');
-      lines.push('- meta: schema, packet_type, packet_schema_rev, ledger_profile, scene_id, confidence, turn_hint, turn_anchor, pov_entity, active_speaker, visible_participants, scene_visibility, summary_memory, canonical_anchors/canonicalAnchors, speaker_boundaries, pattern_guard, overpromotion_risks, consent_memory');
+      lines.push('- meta: schema, packet_type, packet_schema_rev, ledger_profile, lineage, scene_id, confidence, turn_hint, turn_anchor, pov_entity, active_speaker, visible_participants, scene_visibility, summary_memory, canonical_anchors/canonicalAnchors, speaker_boundaries, pattern_guard, overpromotion_risks, consent_memory');
       lines.push('- entity: characters(name/current_state/condition/attire/carrying), relations(from/to/state/trust/intimacy/power_balance/dynamic), pov_memories, secrets | world: location, time, scene_type, danger_level, active_events, world_rules, offscreen_threads, factions, regions, sensory | narrative: scene_phase, current_arc, tension_level, dominant_mood, pacing, time_elapsed, conflict_traces, scene_deltas, theme_motifs | planner: consequence_ledger, payoff_tracker, continuity_locks, do_not_resolve_yet, next_direction, suggested_hooks, open_invitations | importance: overall, reason');
       lines.push('Use meta.summary_memory for compact recall summary/anchors; use speaker_boundaries, pattern_guard, and overpromotion_risks for high-priority speaker boundary, repetition, and overpromotion guards; use consent_memory to persist the user persona\'s preferences, limits, safeword, and comfort.');
       lines.push('If recent direct dialogue, narration sentences, reaction scaffolds, or optional status/header boilerplate are starting to repeat, add a compact meta.pattern_guard entry so the next turn can vary them.');
@@ -12253,6 +12996,16 @@ const MODE_PROFILES = Object.freeze({
         ? '[HAYAKU THREE-PART COMPLETION PLAN] Before drafting, reserve output space for: (1) visible narrative/template/HUD, (2) recovery_snapshot, and (3) current_snapshot. Do not stop after part 1 or 2.'
         : '[HAYAKU TWO-PART COMPLETION PLAN] Before drafting, reserve output space for: (1) visible narrative/template/HUD and (2) one current_snapshot HTML-comment packet. Do not stop after part 1.'
     );
+    const requestLineage = objectish(settings?.requestLineage) ? settings.requestLineage : null;
+    if (requestLineage?.logicalTurnId) {
+      lines.push('[PACKET LINEAGE: REQUIRED] In every packet written for this response, copy this exact meta.lineage object without changing, shortening, translating, or inventing any value:');
+      lines.push(JSON.stringify({
+        parent_turn_node_id: requestLineage.parentTurnNodeId || '',
+        logical_turn_id: requestLineage.logicalTurnId,
+        request_nonce: requestLineage.requestNonce || ''
+      }));
+      lines.push(`This response targets logical turn ${Number(requestLineage.targetPairIndex || 0) || '?'} in ${requestLineage.mode || 'append'} mode. The lineage object is an opaque branch handle and must remain inside the hidden packet only.`);
+    }
     if (recoveryActive) {
       const missingCount = Math.max(1, Number(settings?.packetRecoveryRequest?.missingMessageCount || 1) || 1);
       const omittedCount = Math.max(0, Number(settings?.packetRecoveryRequest?.omittedMissingMessageCount || 0) || 0);
@@ -15963,6 +16716,61 @@ const MODE_PROFILES = Object.freeze({
       && !atomicStateFixture.includes('complete_second_state')
       && !atomicStateFixture.includes('…'), atomicStateFixture);
     check('default_prompt_mode_uses_auto', DEFAULT_SETTINGS.promptMode === 'auto');
+    check('libra_profile_defaults_auto', DEFAULT_SETTINGS.libraProfileMode === 'auto');
+    const libraProfileFixture = applyLibraCoexistenceProfile({
+      ...DEFAULT_SETTINGS,
+      mode: 'deep',
+      promptMode: 'full',
+      maxItemsPerAxis: 9,
+      hayaLoveFrame: true,
+      hayaPrefill: true,
+      userAffirmingFrame: true,
+      dialogueMirrorGuard: true
+    }, true);
+    check('libra_profile_applies_low_conflict_overrides',
+      libraProfileFixture.libraProfile === true
+      && libraProfileFixture.activeProfile === 'libra-coexistence-v1'
+      && libraProfileFixture.mode === 'fast'
+      && libraProfileFixture.promptMode === 'balanced'
+      && libraProfileFixture.maxItemsPerAxis === 2
+      && libraProfileFixture.injectionCapChars === 14000
+      && libraProfileFixture.plannerRecallLimit === 1
+      && libraProfileFixture.hayaLoveFrame === false
+      && libraProfileFixture.hayaPrefill === false
+      && libraProfileFixture.userAffirmingFrame === false
+      && libraProfileFixture.dialogueMirrorGuard === false);
+    const defaultProfileFixture = applyLibraCoexistenceProfile({ ...DEFAULT_SETTINGS, mode: 'deep', promptMode: 'full', maxItemsPerAxis: 9 }, false);
+    check('libra_profile_standalone_preserves_individual_settings',
+      defaultProfileFixture.libraProfile === false
+      && defaultProfileFixture.activeProfile === 'default'
+      && defaultProfileFixture.mode === 'deep'
+      && defaultProfileFixture.promptMode === 'full'
+      && defaultProfileFixture.maxItemsPerAxis === 9);
+    const runtimePacketFixture = normalizeHayakuPacket({
+      meta: { schema: 'hayaku_packet_v1', packetType: 'current_snapshot', packetSchemaRev: 1, summaryMemory: { summary: 'runtime contract fixture' }, povEntity: '하루' },
+      entities: { characters: { haru: { name: '하루' } } },
+      world: { activeEvents: '문 앞에서 대기 중' },
+      narrative: { sceneDeltas: { current: { summary: '문 앞에서 멈춤' } } },
+      planner: { continuityLocks: '아직 문을 열지 않음' },
+      importance: 0.7
+    });
+    const runtimePacketSerialized = serializeHayakuPacket(runtimePacketFixture);
+    const runtimePacketInspection = inspectHayakuPacketText(`보이는 응답\n\n${runtimePacketSerialized}`);
+    check('runtime_packet_api_migrates_and_validates',
+      runtimePacketFixture.meta.packet_schema_rev === 2
+      && runtimePacketFixture.meta.pov_entity === '하루'
+      && Array.isArray(runtimePacketFixture.entity.characters)
+      && Array.isArray(runtimePacketFixture.planner.continuity_locks)
+      && validateHayakuPacket(runtimePacketFixture).ok
+      && runtimePacketInspection.status === 'valid');
+    const runtimePacketReplaced = replaceHayakuPacketText(`보이는 응답\n<!-- ${PACKET_START} {broken`, runtimePacketFixture);
+    check('runtime_packet_api_repairs_without_touching_visible_text',
+      runtimePacketReplaced.ok
+      && runtimePacketReplaced.text.startsWith('보이는 응답')
+      && inspectHayakuPacketText(runtimePacketReplaced.text).status === 'valid');
+    check('runtime_packet_api_detects_missing_and_partial',
+      inspectHayakuPacketText('보이는 응답만 있음').status === 'missing'
+      && inspectHayakuPacketText(`보이는 응답\n<!-- ${PACKET_START} {}`).status === 'partial');
     check('long_memory_injection_caps_are_restored', modeInjectionCap('balanced') === 22000 && modeInjectionCap('full') === 30000);
     check('long_memory_state_view_budgets_are_restored', stateViewCharBudgetForMode('balanced') === 8500 && stateViewCharBudgetForMode('full') === 14000);
     check('large_prompt_uses_configured_hard_injection_caps',
@@ -16018,7 +16826,7 @@ const MODE_PROFILES = Object.freeze({
       && extremeRecallContext.includes('golden_extreme_recall_lock')
       && extremeRecallContext.length + belovedPressureTail.length <= 22000,
       JSON.stringify({ delivery: extremeRecallDelivery, blockChars: extremeRecallContext.length, tailChars: belovedPressureTail.length }));
-    check('durable_ledger_is_enabled_by_default', DEFAULT_SETTINGS.durableLedger === true);
+    check('raw_durable_ledger_is_retired_by_default', DEFAULT_SETTINGS.durableLedger === false);
     check('paged_archive_is_enabled_by_default', DEFAULT_SETTINGS.pagedArchive === true);
     const archiveMigrationScope = { key: 'self-test-archive-migration' };
     const migratedArchiveManifest = normalizePagedArchiveManifest({
@@ -16027,8 +16835,8 @@ const MODE_PROFILES = Object.freeze({
       chatSnapshotHash: 'legacy-snapshot',
       pages: [{ id: 0, key: 'legacy-page' }]
     }, archiveMigrationScope);
-    check('legacy_paged_archive_manifest_forces_v3_rebuild',
-      PAGED_ARCHIVE_VERSION === 'hayaku_paged_archive_v3'
+    check('legacy_paged_archive_manifest_forces_v4_rebuild',
+      PAGED_ARCHIVE_VERSION === 'hayaku_paged_archive_v4'
       && migratedArchiveManifest.version === PAGED_ARCHIVE_VERSION
       && migratedArchiveManifest.chatSnapshotHash === ''
       && migratedArchiveManifest.pages.length === 0);
@@ -16080,15 +16888,84 @@ const MODE_PROFILES = Object.freeze({
       { key: 'self-test-archive' },
       new Map()
     );
-    check('paged_archive_preserves_packet_json_without_html_wrapper',
-      objectish(safeJsonParse(archiveIndexEntry?.raw || '', null))
-      && !text(archiveIndexEntry?.raw).includes(PACKET_START)
-      && !text(archiveIndexEntry?.raw).includes(PACKET_END));
-    check('paged_archive_restores_packet_without_authoritative_chat_message',
-      archiveRawFallback?.archiveRawFallback === true
-      && archiveRawFallback?.hash === archiveIndexEntry?.hash
-      && text(archiveRawFallback?.raw).includes(archivePlannerTailToken));
+    check('paged_archive_is_metadata_only_without_raw_packet_body',
+      archiveIndexEntry && !hasOwnProperty(archiveIndexEntry, 'raw')
+      && text(archiveIndexEntry?.cheapText).includes(archivePlannerTailToken));
+    check('paged_archive_fails_closed_without_authoritative_chat_packet', archiveRawFallback === null);
     check('paged_archive_rejects_foreign_owned_entry_inside_valid_page_scope', foreignScopeArchiveFallback === null);
+
+    const topologyScope = { key: 'self-test-worldline-150', confident: true };
+    const topologyPacket = (turn, suffix = 'a', lineage = null) => {
+      const parsed = safeJsonParse(TAIL_CURRENT_PACKET_EXAMPLE, {});
+      parsed.meta.turn_anchor = `topology_turn_${turn}_${suffix}`;
+      parsed.meta.summary_memory.summary = `topology_turn_${turn}_${suffix}`;
+      if (lineage) parsed.meta.lineage = lineage;
+      return `A${turn}${suffix}\n<!-- ${PACKET_START} ${JSON.stringify(parsed)} ${PACKET_END} -->`;
+    };
+    const topologyMessages = [];
+    for (let turn = 1; turn <= 150; turn += 1) {
+      topologyMessages.push({ role: 'user', data: `U${turn}`, chatId: `topology-u-${turn}` });
+      topologyMessages.push({ role: 'char', data: topologyPacket(turn), chatId: `topology-a-${turn}-a` });
+    }
+    const topology150Snapshot = authoritativeChatSnapshot(topologyMessages, topologyScope);
+    const topology150Worldline = reconcileTurnWorldline(emptyTurnWorldline(), topology150Snapshot, topologyScope);
+    const topology150Active = topology150Worldline.nodes.filter(node => node.status === 'active');
+    check('worldline_keeps_all_150_turn_nodes_without_tail_cap',
+      topology150Snapshot.conversationPairs.length === 150
+      && topology150Active.length === 150
+      && topology150Active[149]?.activeOrdinal === 150);
+
+    const topology54Snapshot = authoritativeChatSnapshot(topologyMessages.slice(0, 108), topologyScope);
+    const topologyRollbackFirst = reconcileTurnWorldline(topology150Worldline, topology54Snapshot, topologyScope);
+    const topologyRollbackSecond = reconcileTurnWorldline(topologyRollbackFirst, topology54Snapshot, topologyScope);
+    const topologyRollbackActive = topologyRollbackFirst.nodes.filter(node => node.status === 'active');
+    const topologyOld55 = topologyRollbackSecond.nodes.find(node => node.originalOrdinal === 55 && node.assistantVisibleHash === topology150Active[54]?.assistantVisibleHash);
+    const topologyOld56 = topologyRollbackSecond.nodes.find(node => node.originalOrdinal === 56 && node.assistantVisibleHash === topology150Active[55]?.assistantVisibleHash);
+    check('worldline_partial_rollback_150_to_54_quarantines_suffix_immediately',
+      topologyRollbackActive.length === 54
+      && topologyRollbackFirst.nodes.filter(node => node.status === 'quarantined').length >= 96);
+    check('worldline_partial_rollback_confirms_retired_root_and_orphan_descendants',
+      topologyOld55?.status === 'retired'
+      && topologyOld56?.status === 'orphaned');
+
+    const rerolledTopologyMessages = topologyMessages.map(message => ({ ...message }));
+    rerolledTopologyMessages[107] = { role: 'char', data: topologyPacket(54, 'b'), chatId: 'topology-a-54-b' };
+    const topologyRerollSnapshot = authoritativeChatSnapshot(rerolledTopologyMessages, topologyScope);
+    const topologyRerollFirst = reconcileTurnWorldline(topology150Worldline, topologyRerollSnapshot, topologyScope);
+    const topologyRerollActive = topologyRerollFirst.nodes.filter(node => node.status === 'active');
+    check('worldline_mid_history_reroll_detaches_unchanged_future_branch',
+      topologyRerollActive.length === 54
+      && topologyRerollActive[53]?.assistantVisibleHash !== topology150Active[53]?.assistantVisibleHash
+      && topologyRerollFirst.nodes.some(node => node.originalOrdinal === 55 && node.status === 'quarantined'));
+
+    const topology54RequestLineage = requestLineageFor(
+      [{ role: 'user', data: 'U54', chatId: 'topology-u-54' }],
+      topology150Snapshot,
+      topologyScope,
+      topology150Worldline
+    );
+    check('request_lineage_targets_mid_history_reroll_by_stable_user_identity',
+      topology54RequestLineage?.mode === 'reroll'
+      && topology54RequestLineage?.targetPairIndex === 54
+      && topology54RequestLineage?.parentTurnNodeId === topology150Active[52]?.turnNodeId);
+
+    const rerolledHead = topologyRerollActive[53];
+    const rerolled55Pair = topologyRerollSnapshot.conversationPairs[54];
+    const rerolled55Logical = logicalTurnIdForPair(topologyScope, rerolledHead.turnNodeId, rerolled55Pair);
+    rerolledTopologyMessages[109] = {
+      role: 'char',
+      data: topologyPacket(55, 'b', {
+        parent_turn_node_id: rerolledHead.turnNodeId,
+        logical_turn_id: rerolled55Logical,
+        request_nonce: 'topology-reroll-55'
+      }),
+      chatId: 'topology-a-55-b'
+    };
+    const topologyBranch55Snapshot = authoritativeChatSnapshot(rerolledTopologyMessages, topologyScope);
+    const topologyBranch55Worldline = reconcileTurnWorldline(topologyRerollFirst, topologyBranch55Snapshot, topologyScope);
+    check('worldline_new_branch_advances_one_turn_without_reparenting_old_future',
+      topologyBranch55Worldline.nodes.filter(node => node.status === 'active').length === 55
+      && topologyBranch55Worldline.nodes.some(node => node.originalOrdinal === 56 && node.status !== 'active'));
     const structuredLightRaw = lightweightPacketRaw(JSON.stringify({
       meta: { schema: 'hayaku_packet_v1', summary_memory: null },
       entity: { characters: [{ name: '경량인물', current_state: 'light_entity_detail' }] },
@@ -16173,6 +17050,7 @@ const MODE_PROFILES = Object.freeze({
     } finally {
       stages.loadSettings = now() - settingsStartedAt;
     }
+    try { syncHayakuRuntimeContract(); } catch (_) {}
     let requestBudgetMs = budgetForSettings(settings);
     let budgetExceeded = false;
     Memory.store = emptyStore();
@@ -16246,9 +17124,7 @@ const MODE_PROFILES = Object.freeze({
     };
     try {
       debugLog('beforeRequest:start', { requestType, messages: ensureArray(messages).length });
-      const configuredMainTypes = text(Memory.settings?.mainRequestTypes || '').trim()
-        ? text(Memory.settings?.mainRequestTypes || '').split(/[\s,]+/).map(s => s.trim().toLowerCase()).filter(Boolean)
-        : null;
+      const configuredMainTypes = ['model'];
       const mainRequestEvidence = modelMainRequestEvidence(messages);
       requestClass = stage('classifyRequest', () => RequestKindCore.classify(requestType, messages, '', {
         ...(configuredMainTypes ? { mainTypes: configuredMainTypes } : {}),
@@ -16308,8 +17184,13 @@ const MODE_PROFILES = Object.freeze({
         requestScope = { ...durableScope, requestType };
       }
       initialPacketScanScope = syncPacketScanCacheScope(requestScope);
+      const durableRetirementStartedAt = now();
+      const legacyDurableRetirement = await retireLegacyRawDurableLedgers(durableScope);
+      stages.retireLegacyRawDurableLedger = now() - durableRetirementStartedAt;
       const orphanCleanupStartedAt = now();
-      orphanCleanup = await reapOrphanedChatStorage(durableScope, settings);
+      // Parent/orphan ownership stays authoritative, but persistence cleanup is
+      // maintenance work and must not delay the response model request.
+      orphanCleanup = scheduleOrphanedChatStorageReap(durableScope, settings);
       stages.reapOrphanedChatStorage = now() - orphanCleanupStartedAt;
       const store = emptyStore();
       const query = stage('latestUserText', () => latestUserText(messages));
@@ -16434,6 +17315,7 @@ const MODE_PROFILES = Object.freeze({
       }
       Memory.durableScope = durableScope;
       Memory.durableLedger = durableLedger;
+      Memory.legacyDurableRetirement = legacyDurableRetirement;
       const packetRecovery = stage('packetRecovery', () => {
         if (authoritativeChatAvailable) {
           const evidence = authoritativeRecoveryEvidence(authoritativeChatMessages, settings);
@@ -16474,6 +17356,26 @@ const MODE_PROFILES = Object.freeze({
           retrievalQuery,
           settings
         );
+        if (pagedArchiveSearch.requiresFullRebuild === true && authoritativeChatAvailable && authoritativeSnapshot) {
+          const repairPackets = stage('extractArchiveRepairPackets', () => authoritativePacketsFromSnapshot(authoritativeSnapshot, durableScope));
+          const repaired = await rebuildPagedArchive(
+            durableScope,
+            pagedArchiveManifest,
+            authoritativeSnapshot,
+            repairPackets,
+            settings,
+            { forceFullRebuild: true }
+          );
+          if (repaired?.manifest) pagedArchiveManifest = repaired.manifest;
+          pagedArchiveRebuild = repaired;
+          pagedArchiveSearch = await searchPagedArchive(
+            durableScope,
+            pagedArchiveManifest,
+            authoritativeSnapshot,
+            retrievalQuery,
+            settings
+          );
+        }
         stages.searchPagedArchive = now() - pagedArchiveSearchStartedAt;
       }
       const packets = stage('mergeDurableArchivePackets', () => mergeDurableArchiveAndLivePackets(durableLedger, pagedArchiveSearch.packets, livePackets));
@@ -16595,15 +17497,40 @@ const MODE_PROFILES = Object.freeze({
         const packetOrder = previousTurnRecallBridge.active ? temporalOrderRowsFromPackets(livePackets, 4) : [];
         return packetOrder.length >= 2 ? packetOrder : selectTemporalOrderRows(store, selectedWithRuntimeGuards, 4);
       });
-      const selectedForContext = { ...selectedWithRuntimeGuards, temporalOrder };
+      const selectedForContext = settings.libraProfile === true
+        ? {
+          ...selectedWithRuntimeGuards,
+          planner: ensureArray(selectedWithRuntimeGuards.planner).slice(0, Math.max(0, Number(settings.plannerRecallLimit || 0))),
+          temporalOrder
+        }
+        : { ...selectedWithRuntimeGuards, temporalOrder };
       const requestCharsBeforeInjection = requestPayloadChars(messages);
       const requestPressure = requestPromptPressure(requestCharsBeforeInjection);
-      const promptSettings = { ...settings, packetRecoveryRequest: packetRecovery, packetHealth, outputContract, narrativeContract, requestPressure, dialogueMirrorDetected };
+      // Do not build even an empty worldline on hosts that cannot expose the raw
+      // authoritative chat. Besides being unusable there, doing so on every request
+      // adds avoidable work to Risu-compatible fallback paths.
+      const requestLineage = authoritativeChatAvailable && authoritativeSnapshot
+        ? requestLineageFor(
+          messages,
+          authoritativeSnapshot,
+          durableScope,
+          ensureArray(pagedArchiveManifest?.worldline?.nodes).length
+            ? pagedArchiveManifest.worldline
+            : reconcileTurnWorldline(emptyTurnWorldline(), authoritativeSnapshot, durableScope)
+        )
+        : null;
+      const promptSettings = { ...settings, packetRecoveryRequest: packetRecovery, packetHealth, outputContract, narrativeContract, requestPressure, dialogueMirrorDetected, requestLineage };
       const tail = stage('buildTail', () => buildSideWriteTailReminder(promptSettings));
       const tailChars = text(tail).length;
       const selfAnchorPreview = buildHayaAssistantSelfAnchors(promptSettings);
       const selfAnchorChars = text(selfAnchorPreview.core).length + text(selfAnchorPreview.final).length;
-      const injectionCapChars = adaptiveInjectionCap(promptMode, messages, tailChars);
+      const adaptiveCapChars = adaptiveInjectionCap(promptMode, messages, tailChars);
+      const profileCapChars = settings.libraProfile === true
+        ? Math.max(0, Number(settings.injectionCapChars || 0))
+        : 0;
+      const injectionCapChars = profileCapChars > 0
+        ? Math.min(adaptiveCapChars, profileCapChars)
+        : adaptiveCapChars;
       const contextSettings = { ...promptSettings, promptMode, injectionCapChars, tailReserveChars: tailChars + selfAnchorChars };
       let block = stage('buildContext', () => buildContinuityContext(selectedForContext, contextSettings, query, promptMode));
       let recallDelivery = stage('recallDeliveryStats', () => recallDeliveryStats(block, selectedForContext));
@@ -16646,6 +17573,9 @@ const MODE_PROFILES = Object.freeze({
         configuredMaxInjectedCharsModeCap: modeInjectionCap(promptMode),
         requestCharsBeforeInjection,
         adaptiveInjectionCapApplied: injectionCapChars < modeInjectionCap(promptMode),
+        libraProfile: settings.libraProfile === true,
+        activeProfile: settings.activeProfile || 'default',
+        plannerRecallLimit: settings.libraProfile === true ? Number(settings.plannerRecallLimit || 0) : null,
         requestPressure,
         compactTailCore: compactTailCoreActive(promptSettings),
         injectionOverModeCap: Math.max(0, totalInjectedChars - injectionCapChars),
@@ -16658,6 +17588,7 @@ const MODE_PROFILES = Object.freeze({
         packetHealth: clone(packetHealth, {}),
         packetRecovery: clone(packetRecovery || null, null),
         packetRecoveryEvidence: clone(packetRecoveryEvidence, {}),
+        requestLineage: clone(requestLineage || null, null),
         historyMutation: clone(historyMutation || null, null),
         historyMutationSync: clone(historyMutationSync, {}),
         copiedStorageAdoption: clone(copiedStorageAdoption || {}, {}),
@@ -16730,6 +17661,13 @@ const MODE_PROFILES = Object.freeze({
           enabled: pagedArchiveManifest?.enabled === true,
           reason: pagedArchiveManifest?.reason || pagedArchiveRebuild.reason || '',
           packetCount: Number(pagedArchiveManifest?.packetCount || 0),
+          generation: Number(pagedArchiveManifest?.generation || 0),
+          worldlineNodes: ensureArray(pagedArchiveManifest?.worldline?.nodes).length,
+          activeWorldlineNodes: ensureArray(pagedArchiveManifest?.worldline?.nodes).filter(node => node?.status === 'active').length,
+          quarantinedWorldlineNodes: ensureArray(pagedArchiveManifest?.worldline?.nodes).filter(node => node?.status === 'quarantined').length,
+          retiredWorldlineNodes: ensureArray(pagedArchiveManifest?.worldline?.nodes).filter(node => node?.status === 'retired').length,
+          orphanedWorldlineNodes: ensureArray(pagedArchiveManifest?.worldline?.nodes).filter(node => node?.status === 'orphaned').length,
+          rawPacketBodiesStored: 0,
           pageCount: ensureArray(pagedArchiveManifest?.pages).length,
           pageSize: PAGED_ARCHIVE_PAGE_SIZE,
           snapshotChanged: pagedArchiveRebuild.changed === true,
@@ -16740,6 +17678,7 @@ const MODE_PROFILES = Object.freeze({
           pagesRead: Number(pagedArchiveSearch.pagesRead || 0),
           entriesScored: Number(pagedArchiveSearch.entriesScored || 0),
           restoredCandidates: ensureArray(pagedArchiveSearch.packets).length,
+          invalidPages: Number(pagedArchiveSearch.invalidPages || 0),
           searchReason: pagedArchiveSearch.reason || ''
         },
         packetScanCacheEnabled: initialPacketScanScope.enabled === true,
@@ -16842,38 +17781,513 @@ const MODE_PROFILES = Object.freeze({
     }
   };
 
+  const normalizeHayakuPacket = (value = {}) => {
+    const source = objectish(value) ? clone(value, {}) : {};
+    const rename = (target, legacyKey, canonicalKey) => {
+      if (!objectish(target) || target[canonicalKey] !== undefined || target[legacyKey] === undefined) return;
+      target[canonicalKey] = target[legacyKey];
+      delete target[legacyKey];
+    };
+    rename(source, 'entities', 'entity');
+    if (typeof source.importance === 'number') source.importance = { overall: source.importance };
+    source.meta = objectish(source.meta) ? source.meta : {};
+    rename(source.meta, 'packetType', 'packet_type');
+    rename(source.meta, 'packetSchemaRev', 'packet_schema_rev');
+    rename(source.meta, 'summaryMemory', 'summary_memory');
+    rename(source.meta, 'sceneId', 'scene_id');
+    rename(source.meta, 'turnAnchor', 'turn_anchor');
+    rename(source.meta, 'activeSpeaker', 'active_speaker');
+    rename(source.meta, 'povEntity', 'pov_entity');
+    rename(source.meta, 'visibleParticipants', 'visible_participants');
+    source.entity = objectish(source.entity) ? source.entity : {};
+    source.world = objectish(source.world) ? source.world : {};
+    source.narrative = objectish(source.narrative) ? source.narrative : {};
+    source.planner = objectish(source.planner) ? source.planner : {};
+    source.importance = objectish(source.importance) ? source.importance : {};
+    rename(source.entity, 'povMemories', 'pov_memories');
+    rename(source.entity, 'secretBoundaries', 'secret_boundaries');
+    rename(source.world, 'activeEvents', 'active_events');
+    rename(source.world, 'worldRules', 'world_rules');
+    rename(source.narrative, 'sceneDeltas', 'scene_deltas');
+    rename(source.narrative, 'conflictTraces', 'conflict_traces');
+    rename(source.planner, 'continuityLocks', 'continuity_locks');
+    rename(source.planner, 'doNotResolveYet', 'do_not_resolve_yet');
+    rename(source.planner, 'nextDirection', 'next_direction');
+    source.meta.schema = 'hayaku_packet_v1';
+    source.meta.packet_schema_rev = 2;
+    if (!/^(?:current_snapshot|recovery_snapshot)$/i.test(text(source.meta.packet_type))) {
+      source.meta.packet_type = 'current_snapshot';
+    }
+    coercePacketCollections(source);
+    return withRequiredPacketTopKeys(source);
+  };
+
+  const validateHayakuPacket = (value = {}) => {
+    const packet = objectish(value) ? value : null;
+    const errors = [];
+    if (!packet) errors.push('packet_not_object');
+    if (packet && text(packet?.meta?.schema) !== 'hayaku_packet_v1') errors.push('schema_mismatch');
+    if (packet && Number(packet?.meta?.packet_schema_rev || 0) !== 2) errors.push('schema_revision_mismatch');
+    if (packet && !hasRequiredPacketTopKeys(packet)) errors.push('required_top_keys_missing');
+    const warnings = packet ? validatePacketShape(packet) : [];
+    return { ok: errors.length === 0 && !warnings.some(isCriticalPacketShapeWarning), errors, warnings };
+  };
+
+  const inspectHayakuPacketText = (value = '') => {
+    const source = text(value);
+    const complete = [];
+    const pattern = new RegExp(`<!--\\s*${PACKET_START}\\s*([\\s\\S]*?)\\s*${PACKET_END}\\s*-->`, 'gi');
+    let match;
+    while ((match = pattern.exec(source))) {
+      const raw = text(match[1]).trim();
+      const parsed = safeJsonParse(raw, null);
+      const normalized = objectish(parsed) ? normalizeHayakuPacket(parsed) : null;
+      const originalValidation = objectish(parsed) ? validateHayakuPacket(parsed) : { ok: false, errors: ['json_parse_failed'], warnings: [] };
+      const validation = normalized ? validateHayakuPacket(normalized) : { ok: false, errors: ['json_parse_failed'], warnings: [] };
+      const needsNormalization = !!normalized && (!originalValidation.ok || JSON.stringify(parsed) !== JSON.stringify(normalized));
+      complete.push({
+        raw,
+        packet: parsed,
+        normalized,
+        originalValidation,
+        validation,
+        needsNormalization,
+        start: match.index,
+        end: pattern.lastIndex
+      });
+    }
+    const startCount = (source.match(new RegExp(PACKET_START, 'gi')) || []).length;
+    const endCount = (source.match(new RegExp(PACKET_END, 'gi')) || []).length;
+    const valid = complete.filter(item => item.validation.ok && !item.needsNormalization);
+    const status = startCount === 0 && endCount === 0
+      ? 'missing'
+      : (startCount !== endCount || complete.length === 0
+        ? 'partial'
+        : (valid.length === complete.length ? (complete.length > 1 ? 'duplicate' : 'valid') : 'invalid'));
+    return {
+      status,
+      valid: status === 'valid',
+      repairable: status === 'invalid' || status === 'duplicate' || status === 'partial',
+      startCount,
+      endCount,
+      packetCount: complete.length,
+      validCount: valid.length,
+      packets: complete,
+      preferred: valid.at(-1) || complete.at(-1) || null
+    };
+  };
+
+  const serializeHayakuPacket = (value = {}) => {
+    const normalized = normalizeHayakuPacket(value);
+    const validation = validateHayakuPacket(normalized);
+    if (!validation.ok) return '';
+    return `<!-- ${PACKET_START}\n${JSON.stringify(normalized)}\n${PACKET_END} -->`;
+  };
+
+  const replaceHayakuPacketText = (value = '', packet = {}) => {
+    const serialized = serializeHayakuPacket(packet);
+    if (!serialized) return { ok: false, reason: 'packet_validation_failed', text: text(value) };
+    let visible = text(value)
+      .replace(new RegExp(`<!--\\s*${PACKET_START}[\\s\\S]*?${PACKET_END}\\s*-->`, 'gi'), ' ')
+      .replace(new RegExp(`<<<\\s*${PACKET_START}\\s*>>>[\\s\\S]*?<<<\\s*${PACKET_END}\\s*>>>`, 'gi'), ' ');
+    const danglingStart = visible.lastIndexOf(PACKET_START);
+    const danglingEnd = visible.lastIndexOf(PACKET_END);
+    if (danglingStart >= 0 && danglingEnd < danglingStart) {
+      const commentStart = visible.lastIndexOf('<!--', danglingStart);
+      visible = visible.slice(0, commentStart >= 0 ? commentStart : danglingStart);
+    }
+    visible = visible.replace(/[ \t]+$/gm, '').replace(/\s+$/, '');
+    return { ok: true, reason: 'replaced', text: `${visible}\n\n${serialized}`, packet: normalizeHayakuPacket(packet) };
+  };
+
+  const hayakuEvidenceValue = (value, maxChars = 260) => {
+    if (value == null) return '';
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return compact(value, maxChars);
+    if (Array.isArray(value)) return compact(value.map(item => hayakuEvidenceValue(item, 120)).filter(Boolean).join(' / '), maxChars);
+    if (objectish(value)) {
+      const direct = value.summary ?? value.text ?? value.label ?? value.title ?? value.name ?? value.state ?? value.current_state
+        ?? value.currentState ?? value.event ?? value.status ?? value.value ?? value.location ?? value.time;
+      if (direct != null && direct !== value) return hayakuEvidenceValue(direct, maxChars);
+      return compact(JSON.stringify(value), maxChars);
+    }
+    return '';
+  };
+
+  const hayakuPacketToEvidenceFacts = (value = {}, options = {}) => {
+    const packet = normalizeHayakuPacket(value);
+    const validation = validateHayakuPacket(packet);
+    if (!validation.ok) return [];
+    const out = [];
+    const turn = Math.max(0, Number(options.turn || packet?.meta?.turn || packet?.meta?.turn_index || 0) || 0);
+    const confidence = clamp(Number(packet?.meta?.confidence ?? 0.86), 0, 1, 0.86);
+    const add = (entity, property, rawValue, extra = {}) => {
+      const factValue = hayakuEvidenceValue(rawValue, 280);
+      const subject = compact(entity, 80);
+      const predicate = compact(property, 80);
+      if (!subject || !predicate || !factValue) return;
+      out.push({
+        entity: subject,
+        property: predicate,
+        value: factValue,
+        turn,
+        confidence,
+        authority: 'HAYAKU',
+        evidenceType: 'hayaku_packet_v1',
+        ...(extra.peer ? { peer: compact(extra.peer, 80) } : {}),
+        ...(options.scopeKey ? { scopeKey: compact(options.scopeKey, 180) } : {})
+      });
+    };
+    const entity = objectish(packet.entity) ? packet.entity : {};
+    ensureArray(entity.characters).forEach(row => {
+      const name = row?.name || row?.id;
+      if (!name) return;
+      [
+        ['current_state', row?.current_state ?? row?.currentState ?? row?.state],
+        ['emotion', row?.emotion ?? row?.mood],
+        ['relation_to_user', row?.relation_to_user ?? row?.relationToUser],
+        ['condition', row?.condition ?? row?.health ?? row?.healthStatus],
+        ['attire', row?.attire ?? row?.clothing],
+        ['carrying', row?.carrying ?? row?.inventory]
+      ].forEach(([property, item]) => add(name, property, item));
+    });
+    ensureArray(entity.relations).forEach(row => {
+      const from = row?.from || row?.source || row?.a;
+      const to = row?.to || row?.target || row?.b;
+      if (!from || !to) return;
+      [
+        ['relationship.state', row?.state],
+        ['relationship.trust', row?.trust],
+        ['relationship.intimacy', row?.intimacy],
+        ['relationship.power_balance', row?.power_balance ?? row?.powerBalance],
+        ['relationship.dynamic', row?.dynamic]
+      ].forEach(([property, item]) => add(from, property, item, { peer: to }));
+    });
+    const world = objectish(packet.world) ? packet.world : {};
+    add('@world', 'location', world.location);
+    add('@world', 'time', world.time);
+    add('@world', 'scene_type', world.scene_type ?? world.sceneType);
+    const narrative = objectish(packet.narrative) ? packet.narrative : {};
+    add('@narrative', 'scene_phase', narrative.scene_phase ?? narrative.scenePhase);
+    add('@narrative', 'current_arc', narrative.current_arc ?? narrative.currentArc);
+    add('@narrative', 'dominant_mood', narrative.dominant_mood ?? narrative.dominantMood);
+    add('@narrative', 'pacing', narrative.pacing);
+    add('@narrative', 'time_elapsed', narrative.time_elapsed ?? narrative.timeElapsed);
+    return out.slice(0, 96);
+  };
+
+  const HayakuEvidenceRuntimeApi = Object.freeze({
+    schema: 'libra-memory-evidence-v1',
+    authority: 'HAYAKU',
+    generativeLlmCalls: false,
+    packetToFacts: hayakuPacketToEvidenceFacts
+  });
+
+  const HayakuPacketRuntimeApi = Object.freeze({
+    schema: 'hayaku_packet_v1',
+    revision: 2,
+    detect: inspectHayakuPacketText,
+    parse: inspectHayakuPacketText,
+    validate: validateHayakuPacket,
+    normalize: normalizeHayakuPacket,
+    migrate: normalizeHayakuPacket,
+    serialize: serializeHayakuPacket,
+    replace: replaceHayakuPacketText,
+    strip: value => stripHayakuBlocks(value, { looseMarkers: true, preserveWhitespace: true })
+  });
+
+  const HayakuExternalRecoveryState = {
+    owner: '',
+    messageId: '',
+    token: '',
+    claimedAt: 0,
+    lastCompletedMessageId: '',
+    lastCompletedAt: 0
+  };
+  const HayakuRuntimeRecoveryApi = {
+    enabled: true,
+    pendingMessageId: null,
+    externalOwner: '',
+    externalMessageId: '',
+    lastCompletedMessageId: '',
+    claimExternal(messageId = '', owner = 'LIBRA') {
+      const id = text(messageId).trim();
+      const claimant = text(owner).trim() || 'LIBRA';
+      if (!id) return { ok: false, reason: 'missing_message_id' };
+      if (HayakuExternalRecoveryState.token && (HayakuExternalRecoveryState.messageId !== id || HayakuExternalRecoveryState.owner !== claimant)) {
+        return { ok: false, reason: 'recovery_claimed', owner: HayakuExternalRecoveryState.owner, messageId: HayakuExternalRecoveryState.messageId };
+      }
+      const token = HayakuExternalRecoveryState.token || stableHash64(`${claimant}:${id}:${now()}:${Math.random()}`);
+      Object.assign(HayakuExternalRecoveryState, { owner: claimant, messageId: id, token, claimedAt: now() });
+      Object.assign(HayakuRuntimeRecoveryApi, { externalOwner: claimant, externalMessageId: id });
+      return { ok: true, token, owner: claimant, messageId: id };
+    },
+    completeExternal(token = '', messageId = '') {
+      if (!token || token !== HayakuExternalRecoveryState.token) return false;
+      const completedId = text(messageId || HayakuExternalRecoveryState.messageId).trim();
+      Object.assign(HayakuExternalRecoveryState, { owner: '', messageId: '', token: '', claimedAt: 0, lastCompletedMessageId: completedId, lastCompletedAt: now() });
+      Object.assign(HayakuRuntimeRecoveryApi, { externalOwner: '', externalMessageId: '', lastCompletedMessageId: completedId });
+      return true;
+    },
+    releaseExternal(token = '') {
+      if (!token || token !== HayakuExternalRecoveryState.token) return false;
+      Object.assign(HayakuExternalRecoveryState, { owner: '', messageId: '', token: '', claimedAt: 0 });
+      Object.assign(HayakuRuntimeRecoveryApi, { externalOwner: '', externalMessageId: '' });
+      return true;
+    }
+  };
+
+  const HayakuRuntimeContract = {
+    protocol: LIBRA_HAYAKU_PROTOCOL,
+    protocols: [LIBRA_HAYAKU_PROTOCOL, LIBRA_MEMORY_INTEROP_PROTOCOL],
+    owner: 'HAYAKU',
+    version: PLUGIN_VERSION,
+    active: true,
+    capabilities: {},
+    roles: {},
+    coexistence: {},
+    memoryInterop: {},
+    packet: HayakuPacketRuntimeApi,
+    evidence: HayakuEvidenceRuntimeApi,
+    recovery: HayakuRuntimeRecoveryApi,
+    async refresh() {
+      try { await loadSettings(true); } catch (_) {}
+      syncHayakuRuntimeContract();
+      return HayakuRuntimeContract.snapshot();
+    },
+    snapshot: () => clone({
+      protocol: HayakuRuntimeContract.protocol,
+      protocols: HayakuRuntimeContract.protocols,
+      owner: HayakuRuntimeContract.owner,
+      version: HayakuRuntimeContract.version,
+      active: HayakuRuntimeContract.active,
+      capabilities: HayakuRuntimeContract.capabilities,
+      roles: HayakuRuntimeContract.roles,
+      coexistence: HayakuRuntimeContract.coexistence,
+      memoryInterop: HayakuRuntimeContract.memoryInterop,
+      evidence: { schema: HayakuEvidenceRuntimeApi.schema, authority: HayakuEvidenceRuntimeApi.authority, generativeLlmCalls: false },
+      recovery: {
+        enabled: HayakuRuntimeRecoveryApi.enabled,
+        pendingMessageId: HayakuRuntimeRecoveryApi.pendingMessageId,
+        externalOwner: HayakuRuntimeRecoveryApi.externalOwner,
+        externalMessageId: HayakuRuntimeRecoveryApi.externalMessageId,
+        lastCompletedMessageId: HayakuRuntimeRecoveryApi.lastCompletedMessageId
+      }
+    }, {})
+  };
+  const syncHayakuRuntimeContract = () => {
+    const settings = Memory.settings || DEFAULT_SETTINGS;
+    const flashbackRuntime = getFlashbackRuntimeContract();
+    const threeWayActive = settings.threeWayInteropActive === true
+      && flashbackRuntime?.coexistence?.threeWayActive === true;
+    const hayakuFlashbackPairActive = settings.hayakuFlashbackInteropActive === true
+      && flashbackRuntime?.coexistence?.active === true
+      && flashbackRuntime?.coexistence?.mainOwner === 'HAYAKU';
+    const flashbackActive = threeWayActive || hayakuFlashbackPairActive;
+    HayakuRuntimeContract.version = PLUGIN_VERSION;
+    HayakuRuntimeContract.active = settings.enabled !== false;
+    HayakuRuntimeContract.capabilities = {
+      continuity: true,
+      locator: true,
+      pov: true,
+      speakerBoundary: true,
+      secretBoundary: true,
+      packetRecovery: settings.packetRecovery !== false,
+      durableLedger: settings.durableLedger !== false,
+      structuredStateEvidence: true,
+      evidencePacketExport: true,
+      generativeLlmCallsForEvidenceExport: false,
+      planner: settings.libraProfile === true ? 'continuity_constraints' : 'full',
+      primaryMemory: settings.libraProfile !== true
+    };
+    HayakuRuntimeContract.roles = settings.libraProfile === true
+      ? {
+        primary: ['continuity', 'locator', 'pov', 'speaker_boundary', 'secret_boundary', 'packet'],
+        constrained: ['entity_current_state', 'world_current_state', 'planner_continuity_locks'],
+        delegatedToLibra: ['long_term_memory', 'entity_canon', 'world_canon', 'story_author', 'story_director', 'world_additional'],
+        evidenceFromFlashback: flashbackActive ? ['episodic_raw_evidence'] : []
+      }
+      : (hayakuFlashbackPairActive
+        ? {
+          primary: ['memory', 'continuity', 'locator', 'pov', 'speaker_boundary', 'secret_boundary', 'packet', 'planner'],
+          evidenceFromFlashback: ['episodic_raw_evidence']
+        }
+        : { primary: ['memory', 'continuity', 'locator', 'pov', 'speaker_boundary', 'secret_boundary', 'packet', 'planner'] });
+    HayakuRuntimeContract.coexistence = {
+      requested: settings.libraProfileRequested === true,
+      active: settings.libraProfile === true,
+      standalone: settings.libraProfile !== true && !hayakuFlashbackPairActive,
+      mode: settings.libraProfileMode || 'auto',
+      automatic: settings.libraProfileAutoActivated === true,
+      peer: settings.libraRuntimeDetected ? 'LIBRA' : '',
+      peerCapabilities: clone(settings.libraCapabilities || {}, {}),
+      authority: settings.libraProfile === true
+        ? {
+          longTermCanon: 'LIBRA',
+          worldCanon: 'LIBRA',
+          storyDirection: 'LIBRA',
+          immediateContinuity: 'HAYAKU',
+          povAndSpeaker: 'HAYAKU',
+          latestUncommittedState: 'HAYAKU',
+          episodicRawEvidence: flashbackActive ? 'FLASHBACK_EVIDENCE_ONLY' : 'LIBRA'
+        }
+        : {}
+    };
+    HayakuRuntimeContract.memoryInterop = {
+      protocol: LIBRA_MEMORY_INTEROP_PROTOCOL,
+      active: flashbackActive,
+      pairwiseActive: hayakuFlashbackPairActive,
+      threeWayActive,
+      standalone: !flashbackActive && settings.libraProfile !== true,
+      mode: threeWayActive ? 'libra-hayaku-flashback' : (hayakuFlashbackPairActive ? 'hayaku-flashback' : (settings.libraProfile === true ? 'libra-hayaku' : 'standalone')),
+      mainOwner: settings.libraProfile === true ? 'LIBRA' : 'HAYAKU',
+      peer: flashbackActive ? 'FLASHBACK' : '',
+      peerVersion: flashbackRuntime?.version || '',
+      peerCapabilities: clone(flashbackRuntime?.capabilities || {}, {}),
+      promptBudget: {
+        hayakuMaxInjectionChars: threeWayActive
+          ? THREE_WAY_COEXISTENCE_PROFILE.injectionCapChars
+          : Number(settings.injectionCapChars || MODE_INJECTION_CAPS.full),
+        flashbackMaxInjectionChars: Number(flashbackRuntime?.promptBudget?.maxInjectionChars || 0),
+        flashbackTopK: Number(flashbackRuntime?.promptBudget?.topK || 0)
+      },
+      authority: {
+        longTermCanon: settings.libraProfile === true ? 'LIBRA' : 'HAYAKU',
+        immediateContinuity: 'HAYAKU',
+        episodicRawEvidence: flashbackActive ? 'FLASHBACK_EVIDENCE_ONLY' : (settings.libraProfile === true ? 'LIBRA' : 'HAYAKU'),
+        userAndActiveUserDlc: 'HOST_AND_LIBRA_USER_DLC'
+      }
+    };
+    HayakuRuntimeRecoveryApi.enabled = settings.packetRecovery !== false;
+    try { globalThis.HAYAKU_RUNTIME = HayakuRuntimeContract; } catch (_) {}
+    return HayakuRuntimeContract;
+  };
+
   const exposeApi = () => {
+    syncHayakuRuntimeContract();
     globalThis.HAYAKU = {
       version: PLUGIN_VERSION,
       settings: () => clone(Memory.settings, {}),
+      profile: () => clone({
+        active: Memory.settings?.libraProfile === true || Memory.settings?.hayakuFlashbackInteropActive === true,
+        mode: Memory.settings?.libraProfileMode || 'auto',
+        automatic: Memory.settings?.libraProfileAutoActivated === true || Memory.settings?.hayakuFlashbackInteropActive === true,
+        interopMode: Memory.settings?.interopMode || 'standalone',
+        mainOwner: Memory.settings?.libraProfile === true ? 'LIBRA' : 'HAYAKU',
+        id: Memory.settings?.activeProfile || 'default',
+        overrides: Memory.settings?.libraProfileOverrides || {},
+        threeWayInteropActive: Memory.settings?.threeWayInteropActive === true,
+        flashbackRole: Memory.settings?.flashbackRole || ''
+      }, {}),
+      runtime: () => HayakuRuntimeContract.snapshot(),
+      flushMaintenance: flushOrphanCleanupMaintenance,
+      packet: HayakuPacketRuntimeApi,
+      evidence: HayakuEvidenceRuntimeApi,
       lastDebug: () => clone({
         compat: RisuCompat.snapshot(),
         replacer: clone(Memory.replacer, {}),
         lastBeforeRequest: Memory.lastBeforeRequest,
+        lastOrphanCleanup: Memory.lastOrphanCleanup,
         lastWarnings: Memory.lastWarnings,
         ...(Memory.settings?.debug ? { requestStore: Memory.store } : {})
       }, {}),
       compat: () => clone(RisuCompat.snapshot(), {}),
       selfTest: runSelfTests,
       goldenRecallTest: runGoldenRecallTests,
-      classifyRequest: RequestKindCore.classify
+      classifyRequest: RequestKindCore.classify,
+      _test: { reconcileTurnWorldline, durableWorldlineRecordSets, normalizeTurnWorldline }
     };
+  };
+
+  const publishHayakuIpcState = async (targetPlugin = '') => {
+    const api = RisuCompat.api();
+    if (typeof api?.postPluginChannelMessage !== 'function') return false;
+    const targets = targetPlugin ? [targetPlugin] : HAYAKU_IPC_PEERS;
+    const message = {
+      kind: 'state',
+      source: HAYAKU_PLUGIN_NAME,
+      at: now(),
+      runtime: HayakuRuntimeContract.snapshot()
+    };
+    await Promise.all(targets.map(target => Promise.resolve()
+      .then(() => api.postPluginChannelMessage(target, LIBRA_SUITE_IPC_CHANNEL, message))
+      .catch(() => false)));
+    return true;
+  };
+  const registerHayakuIpcInterop = async () => {
+    if (Memory.ipcRegistered) return true;
+    const api = RisuCompat.api();
+    if (typeof api?.addPluginChannelListener !== 'function' || typeof api?.postPluginChannelMessage !== 'function') return false;
+    await api.addPluginChannelListener(
+      LIBRA_SUITE_IPC_CHANNEL,
+      (message, meta = {}) => {
+        const source = text(message?.source || meta?.sender || '').trim();
+        if (!HAYAKU_IPC_PEERS.includes(source) || !message?.runtime) return;
+        const firstSeen = !Memory.ipcPeers.has(source);
+        Memory.ipcPeers.set(source, { at: now(), runtime: clone(message.runtime, {}) });
+        applyDetectedInteropSettings();
+        syncHayakuRuntimeContract();
+        if (firstSeen || message?.kind === 'hello') void publishHayakuIpcState();
+      }
+    );
+    Memory.ipcRegistered = true;
+    await publishHayakuIpcState();
+    for (const delay of [120, 600]) {
+      setTimeout(() => { void publishHayakuIpcState(); }, delay);
+    }
+    return true;
+  };
+
+  const convergeHayakuInteropPeers = async () => {
+    try {
+      const libraCore = globalThis?.LIBRA_HayakuInteropCore;
+      if (typeof libraCore?.publish === 'function') libraCore.publish();
+    } catch (_) {}
+    try {
+      const flashback = getFlashbackRuntimeContract();
+      if (typeof flashback?.refresh === 'function') Promise.resolve(flashback.refresh()).catch(() => {});
+    } catch (_) {}
+    // install() has just loaded all 16 arguments. Reuse that snapshot instead
+    // of issuing an identical second host-RPC wave during startup.
+    try { await loadSettings(false); } catch (_) {}
+    syncHayakuRuntimeContract();
+    try {
+      const libraCore = globalThis?.LIBRA_HayakuInteropCore;
+      if (typeof libraCore?.publish === 'function') libraCore.publish();
+    } catch (_) {}
+    return HayakuRuntimeContract.snapshot();
   };
 
   const install = async () => {
     try {
       await RisuCompat.refreshInfo();
-      await loadSettings();
+      await loadSettings(true);
+      syncHayakuRuntimeContract();
       await purgePersistentStore();
       debugLog('install:settings', Memory.settings);
       exposeApi();
+      await registerHayakuIpcInterop();
+      await convergeHayakuInteropPeers();
       const registered = await RisuCompat.addBeforeRequest(handleBeforeRequest);
       if (!registered) {
         console.warn(`[HAYAKU] beforeRequest participation disabled: ${Memory.replacer.registerError || 'registration_failed'}`);
       }
       await RisuCompat.onUnload(async () => {
+        for (const entry of Memory.orphanCleanupTimers.values()) {
+          try { clearTimeout(entry?.timer); } catch (_) {}
+        }
+        Memory.orphanCleanupTimers.clear();
+        Memory.orphanCleanupInFlight.clear();
         await RisuCompat.removeBeforeRequest();
         try { delete globalThis.HAYAKU; } catch (_) {}
+        try { if (globalThis.HAYAKU_RUNTIME === HayakuRuntimeContract) delete globalThis.HAYAKU_RUNTIME; } catch (_) {}
+        try {
+          const libraCore = globalThis?.LIBRA_HayakuInteropCore;
+          if (typeof libraCore?.publish === 'function') libraCore.publish();
+        } catch (_) {}
+        try {
+          const flashback = globalThis?.FLASHBACK_RUNTIME;
+          if (typeof flashback?.refresh === 'function') await flashback.refresh();
+        } catch (_) {}
       });
       debugLog('ready', { version: PLUGIN_VERSION, compat: RisuCompat.snapshot() });
     } catch (error) {
