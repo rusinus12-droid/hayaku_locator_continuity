@@ -1,8 +1,8 @@
 //@name hayaku_locator_continuity
-//@display-name HAYAKU · Locator Continuity v2.3.23
+//@display-name HAYAKU · Locator Continuity v2.3.24
 //@author rusinus12@gmail.com
 //@api 3.0
-//@version 2.3.23
+//@version 2.3.24
 //@update-url https://raw.githubusercontent.com/rusinus12-droid/hayaku_locator_continuity/main/hayaku_locator_continuity.js
 //@arg hayaku_enabled string true|false
 //@arg hayaku_mode string auto|balanced|fast|deep
@@ -89,7 +89,7 @@
   }
 
   const PLUGIN_NAME = 'HAYAKU';
-  const PLUGIN_VERSION = '2.3.23';
+  const PLUGIN_VERSION = '2.3.24';
   const LEGACY_STORAGE_PREFIXES = Object.freeze(['hayaku.v1', 'hayaku.archive.v1']);
   const TURN_WORLDLINE_VERSION = 'hayaku_turn_worldline_v2';
   const STORAGE_LEDGER_VERSION = 'hayaku_storage_ledger_v2';
@@ -1598,7 +1598,8 @@ const MODE_PROFILES = Object.freeze({
       activeTab: 'packets',
       stateFilter: 'all',
       typeFilter: 'all',
-      search: ''
+      search: '',
+      debugExportText: ''
     }
   };
 
@@ -17121,6 +17122,16 @@ const MODE_PROFILES = Object.freeze({
         atomicPacketContractMinChars: Number(packetBudgetPlan.atomicMinimumChars || 0),
         atomicPacketContractPreserved: packetBudgetPlan.atomicContractPreserved === true,
         captureOriginRegistered: Boolean(captureOrigin),
+        injectedRuntimePrompt: {
+          memo: RUNTIME_CONTEXT_MEMO,
+          placement: 'before_resolved_current_input_or_terminal_prefill',
+          block,
+          tail,
+          combined: [text(block).trim(), text(tail).trim()].filter(Boolean).join('\n\n'),
+          blockChars: text(block).length,
+          tailChars: text(tail).length,
+          totalChars: totalInjectedChars
+        },
         packetCoreOnly: true,
         budgetSafeFallbackApplied,
         blockBudgetChars,
@@ -21323,6 +21334,303 @@ const MODE_PROFILES = Object.freeze({
     try { return JSON.stringify(value, null, 2); }
     catch (_) { return text(value); }
   };
+
+  const HAYAKU_DEBUG_EXPORT_SCHEMA = 'hayaku_operation_debug_export_v1';
+  const HAYAKU_DEBUG_EXPORT_VERSION = 1;
+  const DEBUG_EXPORT_CREDENTIAL_KEY_RE = /^(?:authorization|proxy[_-]?authorization|api[_-]?key|apikey|access[_-]?token|refresh[_-]?token|auth[_-]?token|bearer[_-]?token|password|passwd|client[_-]?secret|secret[_-]?key|service[_-]?account(?:[_-]?json)?|vertex[_-]?(?:credential|credentials|json)|cookie|session[_-]?cookie)$/i;
+  const debugSanitizeForExport = (value, seen = new WeakMap()) => {
+    if (value == null) return value;
+    if (typeof value === 'bigint') return String(value);
+    if (typeof value === 'function' || typeof value === 'symbol') return undefined;
+    if (typeof value !== 'object') return value;
+    if (value instanceof Error) {
+      return {
+        name: compact(value.name || 'Error', 80),
+        message: compact(value.message || String(value), 1000),
+        stack: compact(value.stack || '', 6000)
+      };
+    }
+    if (value instanceof Date) return value.toISOString();
+    if (seen.has(value)) return '[Circular]';
+    const out = Array.isArray(value) ? [] : {};
+    seen.set(value, out);
+    if (value instanceof Map) {
+      const mapped = {};
+      value.forEach((item, key) => {
+        mapped[compact(key, 180)] = debugSanitizeForExport(item, seen);
+      });
+      seen.set(value, mapped);
+      return mapped;
+    }
+    if (value instanceof Set) {
+      const list = [...value].map(item => debugSanitizeForExport(item, seen));
+      seen.set(value, list);
+      return list;
+    }
+    Object.entries(value).forEach(([key, item]) => {
+      if (DEBUG_EXPORT_CREDENTIAL_KEY_RE.test(text(key).replace(/[\s.]/g, '_'))) {
+        out[key] = item == null || item === '' ? item : '[REDACTED]';
+        return;
+      }
+      const sanitized = debugSanitizeForExport(item, seen);
+      if (sanitized !== undefined) out[key] = sanitized;
+    });
+    return out;
+  };
+  const debugScopeForExport = scope => {
+    if (!objectish(scope)) return null;
+    return debugSanitizeForExport({
+      key: scope.key || '',
+      confident: scope.confident === true,
+      reason: scope.reason || '',
+      characterIdHash: scope.characterIdHash || '',
+      chatIdHash: scope.chatIdHash || '',
+      chatTitle: scope.chatTitle || '',
+      chatMessageCount: Number(scope.chatMessageCount || 0),
+      chatMessagesAvailable: scope.chatMessagesAvailable === true,
+      bridgeHandoffSourceChatIdHash: scope.bridgeHandoffSourceChatId ? stableHash64(scope.bridgeHandoffSourceChatId) : '',
+      bridgeHandoffTransferId: scope.bridgeHandoffTransferId || '',
+      bridgeHandoffValid: scope.bridgeHandoffValid === true,
+      bridgeHandoffValidationReason: scope.bridgeHandoffValidationReason || '',
+      copiedFromChatIdHash: scope.copiedFromChatId ? stableHash64(scope.copiedFromChatId) : '',
+      copiedChatDetectionReason: scope.copiedChatDetectionReason || '',
+      requestType: scope.requestType || ''
+    });
+  };
+  const debugPendingCaptureForExport = pending => {
+    if (!objectish(pending)) return null;
+    const snapshot = objectish(pending.snapshot) ? pending.snapshot : null;
+    return debugSanitizeForExport({
+      createdAt: Number(pending.createdAt || 0),
+      requestSequence: Number(pending.requestSequence || 0),
+      requestType: pending.requestType || '',
+      recoveryRequired: pending.recoveryRequired === true,
+      scope: debugScopeForExport(pending.scope),
+      lineage: pending.lineage || null,
+      recoveryTarget: pending.recoveryTarget || null,
+      snapshot: snapshot ? {
+        messageCount: Number(snapshot.messageCount || snapshot.chatMessageCount || 0),
+        pairCount: ensureArray(snapshot.conversationPairs).length,
+        chatSnapshotHash: snapshot.chatSnapshotHash || '',
+        headPairIndex: Number(snapshot.headPairIndex || 0),
+        latestAssistantMessageIndex: Number(snapshot.latestAssistantMessageIndex ?? -1)
+      } : null
+    });
+  };
+  const debugMapForExport = map => {
+    if (!(map instanceof Map)) return [];
+    return [...map.entries()].map(([key, state]) => debugSanitizeForExport({
+      key: compact(key, 240),
+      startedAt: Number(state?.startedAt || 0),
+      stableSince: Number(state?.stableSince || 0),
+      attempts: Number(state?.attempts || 0),
+      pollDelayMs: Number(state?.pollDelayMs || 0),
+      observations: Number(state?.observations || 0),
+      lastSignature: compact(state?.lastSignature || '', 240),
+      incompleteReported: state?.incompleteReported === true,
+      timerActive: state?.timer != null,
+      pending: debugPendingCaptureForExport(state?.pending)
+    }));
+  };
+  const debugPersistMapForExport = map => {
+    if (!(map instanceof Map)) return [];
+    return [...map.entries()].map(([key, entry]) => debugSanitizeForExport({
+      key: compact(key, 240),
+      persistenceKey: compact(entry?.persistenceKey || key, 240),
+      startedAt: Number(entry?.startedAt || 0),
+      completedAt: Number(entry?.completedAt || entry?.outcome?.completedAt || 0),
+      settled: entry?.settled === true,
+      consumers: Number(entry?.consumers || 0),
+      hookTimeouts: Number(entry?.hookTimeouts || 0),
+      outcome: entry?.outcome || null
+    }));
+  };
+  const buildHayakuOperationDebugExport = async (options = {}) => {
+    let scope = objectish(options?.scope) ? options.scope : Memory.ledgerViewer.scope;
+    if (!scope) {
+      try { scope = await RisuCompat.currentChatScope(); }
+      catch (error) { scope = { confident: false, reason: compact(error?.message || error, 180) }; }
+    }
+    let ledger = objectish(options?.ledger) ? options.ledger : Memory.ledgerViewer.ledger;
+    if (!ledger && scope?.confident === true) {
+      try { ledger = await loadStorageLedger(scope); }
+      catch (error) { ledger = { enabled: false, reason: compact(error?.message || error, 180), records: [] }; }
+    }
+    const runtimeEnvironment = (() => {
+      let timezone = '';
+      try { timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (_) {}
+      return {
+        timezone,
+        userAgent: typeof navigator !== 'undefined' ? compact(navigator.userAgent || '', 500) : '',
+        language: typeof navigator !== 'undefined' ? compact(navigator.language || '', 80) : ''
+      };
+    })();
+    return debugSanitizeForExport({
+      schema: HAYAKU_DEBUG_EXPORT_SCHEMA,
+      schemaVersion: HAYAKU_DEBUG_EXPORT_VERSION,
+      exportedAt: new Date().toISOString(),
+      plugin: PLUGIN_NAME,
+      pluginVersion: PLUGIN_VERSION,
+      privacy: {
+        credentialValues: 'redacted',
+        rawChatMessages: 'omitted',
+        currentInputRecallAndPacketMemory: 'included_for_debugging'
+      },
+      environment: runtimeEnvironment,
+      runtime: hayakuRuntimeSnapshot(),
+      settings: Memory.settings,
+      scope: debugScopeForExport(scope),
+      request: {
+        lastBeforeRequest: Memory.lastBeforeRequest,
+        lastViewerRecall: Memory.lastViewerRecall,
+        lastSparseSearch: Memory.lastSparseSearch || null,
+        packetScanStats: Memory.packetScanStats,
+        projectionCache: {
+          scopeKey: Memory.projectionCacheScopeKey || '',
+          entries: Memory.projectionCache?.size || 0,
+          stats: Memory.projectionCacheStats
+        },
+        currentRequestStore: Memory.store
+      },
+      activity: {
+        operationLogLimit: OPERATION_LOG_MAX_ENTRIES,
+        operationLog: operationLogSnapshot(),
+        lastWarnings: Memory.lastWarnings
+      },
+      capture: {
+        lastStorageCapture: Memory.lastStorageCapture,
+        lastStorageBinding: Memory.lastStorageBinding,
+        pendingCaptures: ensureArray(Memory.pendingCaptures).map(debugPendingCaptureForExport),
+        persistence: {
+          inFlight: debugPersistMapForExport(Memory.capturePersistInFlight),
+          recent: debugPersistMapForExport(Memory.capturePersistRecent),
+          hookTimeouts: Memory.captureHookTimeouts,
+          dedupHits: Memory.capturePersistDedupHits,
+          afterRequestBudgetMs: AFTER_REQUEST_CAPTURE_WAIT_MS,
+          outputBudgetMs: OUTPUT_CAPTURE_WAIT_MS
+        },
+        finalizedCaptureMonitors: debugMapForExport(Memory.finalizedCaptureMonitors),
+        finalizedCaptureInFlight: [...Memory.finalizedCaptureInFlight],
+        finalizedBindingMonitors: debugMapForExport(Memory.finalizedBindingMonitors),
+        finalizedBindingInFlight: [...Memory.finalizedBindingInFlight],
+        worldlineObserver: {
+          inFlight: Memory.worldlineObserver.inFlight,
+          candidateSignature: Memory.worldlineObserver.candidateSignature,
+          candidateSince: Memory.worldlineObserver.candidateSince,
+          lastCommittedSignature: Memory.worldlineObserver.lastCommittedSignature,
+          observations: Memory.worldlineObserver.observations,
+          commits: Memory.worldlineObserver.commits,
+          lastResult: Memory.worldlineObserver.lastResult
+        }
+      },
+      hooks: {
+        compat: RisuCompat.snapshot(),
+        beforeRequest: {
+          permission: Memory.replacer.permission,
+          registered: Memory.replacer.registered,
+          registerError: Memory.replacer.registerError,
+          lastRunAt: Memory.replacer.lastRunAt,
+          runCount: Memory.replacer.runCount,
+          lastError: Memory.replacer.lastError
+        },
+        afterRequest: {
+          registered: Memory.afterRequest.registered,
+          registerError: Memory.afterRequest.registerError,
+          lastRunAt: Memory.afterRequest.lastRunAt,
+          runCount: Memory.afterRequest.runCount,
+          lastError: Memory.afterRequest.lastError
+        },
+        output: {
+          registered: Memory.outputHandler.registered,
+          registeredModes: Memory.outputHandler.registeredModes,
+          registerError: Memory.outputHandler.registerError,
+          lastRunAt: Memory.outputHandler.lastRunAt,
+          runCount: Memory.outputHandler.runCount,
+          lastError: Memory.outputHandler.lastError
+        },
+        display: {
+          registered: Memory.displayHandler.registered,
+          registerError: Memory.displayHandler.registerError,
+          lastRunAt: Memory.displayHandler.lastRunAt,
+          runCount: Memory.displayHandler.runCount,
+          lastError: Memory.displayHandler.lastError
+        }
+      },
+      storage: {
+        policy: 'live_chat_primary_plugin_storage_fallback',
+        cachedLedgerAvailable: Boolean(ledger),
+        ledger: ledger || null
+      }
+    });
+  };
+  const viewerCopyTextWithFallback = async value => {
+    const body = text(value || '');
+    let lastError = '';
+    try {
+      if (typeof navigator !== 'undefined' && typeof navigator.clipboard?.writeText === 'function') {
+        await navigator.clipboard.writeText(body);
+        return { ok: true, method: 'clipboard' };
+      }
+    } catch (error) {
+      lastError = compact(error?.message || error, 300);
+    }
+    try {
+      if (typeof document !== 'undefined' && typeof document.execCommand === 'function' && document.body) {
+        const area = document.createElement('textarea');
+        area.value = body;
+        area.setAttribute('readonly', 'readonly');
+        area.style.position = 'fixed';
+        area.style.left = '-9999px';
+        area.style.top = '0';
+        document.body.appendChild(area);
+        area.focus?.();
+        area.select?.();
+        const copied = document.execCommand('copy');
+        area.remove();
+        if (copied) return { ok: true, method: 'execCommand' };
+      }
+    } catch (error) {
+      lastError = compact(error?.message || error, 300);
+    }
+    return { ok: false, method: 'none', error: lastError || 'clipboard_unavailable' };
+  };
+  const viewerSetStatusMessage = (message, isError = false) => {
+    const status = Memory.ledgerViewer.root?.querySelector?.('#hayakuViewerStatus');
+    if (!status) return;
+    status.textContent = text(message || '');
+    status.style.color = isError ? 'var(--hv-red)' : '';
+  };
+  const viewerDownloadJson = (filename, payload) => {
+    const body = typeof payload === 'string' ? payload : viewerPrettyJson(payload);
+    try {
+      if (
+        typeof document === 'undefined'
+        || typeof Blob === 'undefined'
+        || typeof URL === 'undefined'
+        || typeof URL.createObjectURL !== 'function'
+      ) return false;
+      const blob = new Blob([body], { type: 'application/json;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = filename;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  };
+  const viewerRenderDebugExportText = () => {
+    const root = Memory.ledgerViewer.root;
+    const panel = root?.querySelector?.('#hayakuViewerDebugExportPanel');
+    const area = root?.querySelector?.('#hayakuViewerDebugExportText');
+    const body = text(Memory.ledgerViewer.debugExportText || '');
+    if (panel) panel.hidden = !body;
+    if (area) area.value = body;
+  };
   const viewerPacketObject = record => {
     const parsed = safeJsonParse(record?.raw, null);
     return parsed && typeof parsed === 'object' ? parsed : null;
@@ -21448,8 +21756,10 @@ const MODE_PROFILES = Object.freeze({
     root.querySelectorAll?.('[data-hayaku-viewer-panel]')?.forEach(node => {
       node.classList.toggle('active', node.getAttribute('data-hayaku-viewer-panel') === active);
     });
-    if (active === 'logs') viewerRenderOperationLog();
-    else {
+    if (active === 'logs') {
+      viewerRenderOperationLog();
+      viewerRenderDebugExportText();
+    } else {
       viewerRenderRecall();
       viewerRenderRecords();
     }
@@ -21649,38 +21959,57 @@ const MODE_PROFILES = Object.freeze({
     const scope = Memory.ledgerViewer.scope;
     const ledger = Memory.ledgerViewer.ledger;
     if (!ledger) return false;
-    const payload = viewerPrettyJson({
+    const payload = {
       exportedAt: new Date().toISOString(),
       plugin: PLUGIN_NAME,
       pluginVersion: PLUGIN_VERSION,
-      scope,
-      ledger
-    });
-    try {
-      if (
-        typeof document === 'undefined'
-        || typeof Blob === 'undefined'
-        || typeof URL === 'undefined'
-        || typeof URL.createObjectURL !== 'function'
-      ) {
-        console.log(payload);
-        return false;
-      }
-      const blob = new Blob([payload], { type: 'application/json;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      anchor.download = `hayaku-ledger-${scope?.key || 'current'}-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 500);
-      return true;
-    } catch (error) {
-      console.warn('[HAYAKU] ledger JSON download failed.', error);
-      console.log(payload);
-      return false;
+      scope: debugScopeForExport(scope),
+      ledger: debugSanitizeForExport(ledger)
+    };
+    const ok = viewerDownloadJson(
+      `hayaku-ledger-${scope?.key || 'current'}-${new Date().toISOString().replace(/[:.]/g, '-')}.json`,
+      payload
+    );
+    if (!ok) console.warn('[HAYAKU] ledger JSON download API is unavailable.');
+    return ok;
+  };
+  const showHayakuOperationDebugJson = async (message = '디버그 JSON을 아래 영역에 표시했습니다.', isError = false) => {
+    const payload = await buildHayakuOperationDebugExport();
+    Memory.ledgerViewer.debugExportText = viewerPrettyJson(payload);
+    viewerRenderDebugExportText();
+    viewerSetStatusMessage(message, isError);
+    return payload;
+  };
+  const copyHayakuOperationDebugJson = async () => {
+    const payload = await buildHayakuOperationDebugExport();
+    const body = viewerPrettyJson(payload);
+    const result = await viewerCopyTextWithFallback(body);
+    if (result.ok) {
+      Memory.ledgerViewer.debugExportText = '';
+      viewerRenderDebugExportText();
+      viewerSetStatusMessage(result.method === 'clipboard' ? '디버그 JSON을 복사했습니다.' : '디버그 JSON을 대체 복사 방식으로 복사했습니다.');
+    } else {
+      Memory.ledgerViewer.debugExportText = body;
+      viewerRenderDebugExportText();
+      viewerSetStatusMessage(`클립보드 복사가 차단되어 아래 영역에 표시했습니다. ${result.error}`, true);
     }
+    return result;
+  };
+  const downloadHayakuOperationDebugJson = async () => {
+    const payload = await buildHayakuOperationDebugExport();
+    const scopeKey = payload?.scope?.key || 'current';
+    const filename = `hayaku-debug-${scopeKey}-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+    const ok = viewerDownloadJson(filename, payload);
+    if (ok) {
+      Memory.ledgerViewer.debugExportText = '';
+      viewerRenderDebugExportText();
+      viewerSetStatusMessage('HAYAKU 디버그 JSON 파일을 생성했습니다.');
+    } else {
+      Memory.ledgerViewer.debugExportText = viewerPrettyJson(payload);
+      viewerRenderDebugExportText();
+      viewerSetStatusMessage('파일 저장 API를 사용할 수 없어 아래 영역에 표시했습니다.', true);
+    }
+    return ok;
   };
   const closeLedgerViewer = async () => {
     Memory.ledgerViewer.visible = false;
@@ -21698,7 +22027,18 @@ const MODE_PROFILES = Object.freeze({
     if (!root) return;
     root.querySelector?.('#closeHayakuViewer')?.addEventListener('click', () => closeLedgerViewer());
     root.querySelector?.('#refreshHayakuViewer')?.addEventListener('click', () => refreshLedgerViewer());
-    root.querySelector?.('#refreshHayakuLog')?.addEventListener('click', () => viewerRenderOperationLog());
+    root.querySelector?.('#refreshHayakuLog')?.addEventListener('click', () => {
+      viewerRenderOperationLog();
+      viewerRenderDebugExportText();
+    });
+    root.querySelector?.('#copyHayakuDebug')?.addEventListener('click', () => copyHayakuOperationDebugJson());
+    root.querySelector?.('#exportHayakuDebug')?.addEventListener('click', () => downloadHayakuOperationDebugJson());
+    root.querySelector?.('#showHayakuDebug')?.addEventListener('click', () => showHayakuOperationDebugJson());
+    root.querySelector?.('#clearHayakuDebugText')?.addEventListener('click', () => {
+      Memory.ledgerViewer.debugExportText = '';
+      viewerRenderDebugExportText();
+      viewerSetStatusMessage('디버그 JSON 표시를 닫았습니다.');
+    });
     root.querySelector?.('#exportHayakuViewer')?.addEventListener('click', () => downloadLedgerViewerJson());
     root.querySelector?.('#hayakuViewerState')?.addEventListener('change', event => {
       Memory.ledgerViewer.stateFilter = text(event?.target?.value || 'all');
@@ -21733,7 +22073,7 @@ const MODE_PROFILES = Object.freeze({
       .hv-tools{display:grid;grid-template-columns:180px 210px minmax(220px,1fr) auto;gap:9px;align-items:center;margin-bottom:12px}.hv-tools select,.hv-tools input{width:100%;min-height:38px;padding:7px 10px;border:1px solid var(--hv-line);border-radius:11px;background:var(--hv-card);color:var(--hv-text);font:12px inherit}.hv-tools small{color:var(--hv-muted);text-align:right}
       .hv-records{display:grid;gap:10px}.hv-record{padding:15px;border:1px solid var(--hv-line);border-radius:16px;background:var(--hv-card);box-shadow:0 4px 14px rgba(29,43,75,.04)}.hv-record-head{display:flex;justify-content:space-between;gap:14px}.hv-record-head>div{display:grid;gap:4px;min-width:0}.hv-record-head strong{font-size:14px}.hv-record-head span{color:var(--hv-muted);white-space:pre-wrap;overflow-wrap:anywhere}.hv-record-head em{height:max-content;padding:3px 8px;border-radius:999px;font-style:normal;font-size:10px;font-weight:800}.hv-record-head em.is-live{background:var(--hv-green-soft);color:var(--hv-green)}.hv-record-head em.is-retired{background:var(--hv-red-soft);color:var(--hv-red)}.hv-record-head em.is-pending{background:var(--hv-primary-soft);color:var(--hv-primary)}.hv-meta{display:flex;flex-wrap:wrap;gap:10px;margin-top:9px;color:var(--hv-muted);font-size:10px}.hv-tags{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}.hv-tags span{padding:2px 7px;border-radius:999px;background:var(--hv-primary-soft);color:var(--hv-primary);font-size:9px}.hv-record details,.hv-diagnostics details,.hv-log-entry details{margin-top:10px}.hv-record summary,.hv-diagnostics summary,.hv-log-entry summary{cursor:pointer;color:var(--hv-muted);font-weight:650}.hv-record pre,.hv-diagnostics pre,.hv-log-entry pre{max-height:430px;overflow:auto;padding:12px;border:1px solid var(--hv-line);border-radius:11px;background:var(--hv-soft);color:#44506a;white-space:pre-wrap;overflow-wrap:anywhere;font:11px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace}
       .hv-diagnostics{margin-top:14px;padding:14px;border:1px solid var(--hv-line);border-radius:16px;background:var(--hv-card)}.hv-empty{min-height:220px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;border:1px dashed var(--hv-line);border-radius:16px;color:var(--hv-muted)}.hv-empty strong{color:var(--hv-text)}.hayaku-viewer.is-busy{opacity:.68;pointer-events:none}
-      .hv-log-summary{margin:15px 0;padding:13px 15px;border:1px solid var(--hv-line);border-radius:14px;background:var(--hv-card);color:var(--hv-muted)}.hv-log-summary strong{color:var(--hv-text);font-size:18px}.hv-log-list{display:grid;gap:9px}.hv-log-entry{padding:13px 14px;border:1px solid var(--hv-line);border-left:3px solid var(--hv-primary);border-radius:14px;background:var(--hv-card)}.hv-log-entry.success{border-left-color:var(--hv-green)}.hv-log-entry.warn{border-left-color:var(--hv-warn)}.hv-log-entry.error{border-left-color:var(--hv-red)}.hv-log-head{display:flex;justify-content:space-between;gap:12px}.hv-log-head>div{display:grid;gap:3px}.hv-log-head strong{font-size:12px}.hv-log-head span{color:var(--hv-muted);font:10px ui-monospace,SFMono-Regular,Consolas,monospace}.hv-log-head time{color:var(--hv-muted);font-size:10px;white-space:nowrap}
+      .hv-log-summary{margin:15px 0;padding:13px 15px;border:1px solid var(--hv-line);border-radius:14px;background:var(--hv-card);color:var(--hv-muted)}.hv-log-summary strong{color:var(--hv-text);font-size:18px}.hv-debug-export{margin:0 0 14px;padding:14px;border:1px solid var(--hv-line);border-radius:16px;background:var(--hv-card)}.hv-debug-export[hidden]{display:none}.hv-debug-export-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.hv-debug-export-head>div{display:grid;gap:4px}.hv-debug-export-head strong{font-size:13px}.hv-debug-export-head span{color:var(--hv-muted);font-size:10px}.hv-debug-export textarea{width:100%;min-height:280px;max-height:560px;margin-top:10px;padding:12px;resize:vertical;border:1px solid var(--hv-line);border-radius:11px;background:var(--hv-soft);color:var(--hv-text);white-space:pre;font:10px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace}.hv-log-list{display:grid;gap:9px}.hv-log-entry{padding:13px 14px;border:1px solid var(--hv-line);border-left:3px solid var(--hv-primary);border-radius:14px;background:var(--hv-card)}.hv-log-entry.success{border-left-color:var(--hv-green)}.hv-log-entry.warn{border-left-color:var(--hv-warn)}.hv-log-entry.error{border-left-color:var(--hv-red)}.hv-log-head{display:flex;justify-content:space-between;gap:12px}.hv-log-head>div{display:grid;gap:3px}.hv-log-head strong{font-size:12px}.hv-log-head span{color:var(--hv-muted);font:10px ui-monospace,SFMono-Regular,Consolas,monospace}.hv-log-head time{color:var(--hv-muted);font-size:10px;white-space:nowrap}
       @media(max-width:900px){.hv-metrics{grid-template-columns:repeat(4,1fr)}.hv-tools{grid-template-columns:1fr 1fr}.hv-tools small{grid-column:1/-1;text-align:left}.hv-recall-head{grid-template-columns:1fr}}
       @media(max-width:680px){.hayaku-viewer{height:100vh;border-radius:0}.hv-top{padding:0 12px}.hv-status{display:none}.hv-workspace{grid-template-columns:1fr;grid-template-rows:auto minmax(0,1fr)}.hv-sidebar{padding:7px 10px;border-right:0;border-bottom:1px solid var(--hv-line);flex-direction:row}.hv-nav{min-height:42px;display:flex;flex:1;justify-content:center}.hv-nav span:first-child{width:28px;height:28px}.hv-panel{padding:16px 12px}.hv-heading{align-items:flex-start;flex-direction:column}.hv-metrics{grid-template-columns:repeat(2,1fr)}.hv-tools{grid-template-columns:1fr}.hv-tools small{grid-column:auto}.hv-scope>div{display:grid;gap:2px}}
       @media(prefers-color-scheme:dark){#${LEDGER_VIEWER_ROOT_ID}{--hv-bg:#0d1320;--hv-card:#141c2b;--hv-soft:#101827;--hv-line:#29354a;--hv-text:#eef3ff;--hv-muted:#9aa8c1;--hv-primary-soft:#222b55;--hv-green-soft:#153b32;--hv-red-soft:#44252b}.hv-record pre,.hv-diagnostics pre,.hv-log-entry pre{color:#c8d2e6}}
@@ -21776,8 +22116,9 @@ const MODE_PROFILES = Object.freeze({
             </div>
           </main>
           <main class="hv-panel" data-hayaku-viewer-panel="logs">
-            <div class="hv-heading"><div><small class="hv-eyebrow">현재 플러그인 실행에서 발생한 요청·회상·캡처·결속 작업입니다.</small><h1>작동 로그</h1><p>최근 작업부터 확인할 수 있으며 API 키 등 민감한 인증 값은 기록하지 않습니다.</p></div><div class="hv-actions"><button id="refreshHayakuLog" class="hv-btn primary">새로고침</button></div></div>
+            <div class="hv-heading"><div><small class="hv-eyebrow">현재 플러그인 실행에서 발생한 요청·회상·캡처·결속 작업입니다.</small><h1>작동 로그</h1><p>최근 작동 로그와 요청·회상·패킷·캡처·결속 상태를 한 번에 JSON으로 내보냅니다. 인증 값은 자동으로 제거됩니다.</p></div><div class="hv-actions"><button id="copyHayakuDebug" class="hv-btn">디버그 JSON 복사</button><button id="exportHayakuDebug" class="hv-btn">디버그 JSON 파일로 저장</button><button id="showHayakuDebug" class="hv-btn">디버그 JSON 표시</button><button id="refreshHayakuLog" class="hv-btn primary">새로고침</button></div></div>
             <div class="hv-log-summary">현재 실행 로그 <strong id="hayakuViewerLogCount">0</strong>개</div>
+            <section id="hayakuViewerDebugExportPanel" class="hv-debug-export" hidden><div class="hv-debug-export-head"><div><strong>HAYAKU 디버그 JSON</strong><span>클립보드나 파일 저장이 차단된 환경에서는 아래 내용을 직접 복사할 수 있습니다.</span></div><button id="clearHayakuDebugText" class="hv-btn" type="button">닫기</button></div><textarea id="hayakuViewerDebugExportText" readonly></textarea></section>
             <div id="hayakuViewerOperationLog" class="hv-log-list"><div class="hv-empty"><strong>작동 로그가 없습니다.</strong><span>HAYAKU가 요청을 처리하면 여기에 기록됩니다.</span></div></div>
           </main>
         </div>
@@ -21787,6 +22128,7 @@ const MODE_PROFILES = Object.freeze({
     if (search) search.value = Memory.ledgerViewer.search || '';
     bindLedgerViewerUi();
     viewerSetTab(Memory.ledgerViewer.activeTab || 'packets');
+    viewerRenderDebugExportText();
     return root;
   };
   const showLedgerViewer = async () => {
@@ -21939,7 +22281,9 @@ const MODE_PROFILES = Object.freeze({
       refreshUi: refreshLedgerViewer,
       lastRecall: () => clone(Memory.lastViewerRecall, null),
       activityLog: {
-        list: operationLogSnapshot
+        list: operationLogSnapshot,
+        snapshot: options => buildHayakuOperationDebugExport(options),
+        export: async options => viewerPrettyJson(await buildHayakuOperationDebugExport(options))
       },
       packet: HayakuPacketRuntimeApi,
       memoryNote: HayakuMemoryNoteRuntimeApi,
@@ -22084,6 +22428,8 @@ const MODE_PROFILES = Object.freeze({
       _test: {
         pushOperationLog,
         operationLogSnapshot,
+        buildHayakuOperationDebugExport,
+        debugSanitizeForExport,
         reconcileTurnWorldline,
         normalizeTurnWorldline,
         authoritativeChatSnapshot,
