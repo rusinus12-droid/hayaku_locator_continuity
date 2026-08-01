@@ -1,8 +1,9 @@
 //@name hayaku_locator_continuity
-//@display-name HAYAKU · Locator Continuity v2.3.25
+//@display-name HAYAKU · Locator Continuity v2.3.26
 //@author rusinus12@gmail.com
 //@api 3.0
-//@version 2.3.25
+//@version 2.3.26
+//@allowed-ipc flashback_hayaku_bridge
 //@update-url https://raw.githubusercontent.com/rusinus12-droid/hayaku_locator_continuity/main/hayaku_locator_continuity.js
 //@arg hayaku_enabled string true|false
 //@arg hayaku_mode string auto|balanced|fast|deep
@@ -89,7 +90,7 @@
   }
 
   const PLUGIN_NAME = 'HAYAKU';
-  const PLUGIN_VERSION = '2.3.25';
+  const PLUGIN_VERSION = '2.3.26';
   const LEGACY_STORAGE_PREFIXES = Object.freeze(['hayaku.v1', 'hayaku.archive.v1']);
   const TURN_WORLDLINE_VERSION = 'hayaku_turn_worldline_v2';
   const STORAGE_LEDGER_VERSION = 'hayaku_storage_ledger_v2';
@@ -100,6 +101,10 @@
   const MEMORY_SESSION_BRIDGE_COLD_START_PREFIX = 'memory_session_bridge:hayaku_cold_start:';
   const MEMORY_SESSION_BRIDGE_INCREMENTAL_RECOVERY_SCHEMA = 'memory-session-bridge-hayaku-incremental-recovery-v1';
   const MEMORY_SESSION_BRIDGE_INCREMENTAL_RECOVERY_PREFIX = 'memory_session_bridge:hayaku_incremental_recovery:';
+  const MEMORY_SESSION_BRIDGE_PLUGIN_ID = 'flashback_hayaku_bridge';
+  const MEMORY_SESSION_BRIDGE_HAYAKU_IPC_SCHEMA = 'hayaku-memory-bridge-ipc-v1';
+  const MEMORY_SESSION_BRIDGE_HAYAKU_REQUEST_CHANNEL = 'hayaku_memory_bridge_request_v1';
+  const MEMORY_SESSION_BRIDGE_HAYAKU_RESPONSE_CHANNEL = 'hayaku_memory_bridge_response_v1';
   const STORAGE_LEDGER_MAX_RECORDS = 192;
   const STORAGE_LEDGER_MAX_SLOT_HEADS = 768;
   const STORAGE_LEDGER_MAX_TOMBSTONES = 256;
@@ -19421,6 +19426,91 @@ const MODE_PROFILES = Object.freeze({
       incrementalRecovery
     };
   };
+  let memoryBridgeIpcRegistered = false;
+  const registerMemoryBridgeIpc = async () => {
+    if (memoryBridgeIpcRegistered) return true;
+    const api = apiCandidates().find(candidate => (
+      typeof candidate?.addPluginChannelListener === 'function'
+      && typeof candidate?.postPluginChannelMessage === 'function'
+    )) || RisuCompat.api();
+    if (typeof api?.addPluginChannelListener !== 'function'
+      || typeof api?.postPluginChannelMessage !== 'function') return false;
+    await api.addPluginChannelListener(
+      MEMORY_SESSION_BRIDGE_HAYAKU_REQUEST_CHANNEL,
+      async (message, metadata = {}) => {
+        const request = message && typeof message === 'object' && !Array.isArray(message)
+          ? message
+          : {};
+        const requestId = text(request.requestId || '').trim();
+        const action = text(request.action || '').trim();
+        if (request.schema !== MEMORY_SESSION_BRIDGE_HAYAKU_IPC_SCHEMA
+          || request.kind !== 'request'
+          || !requestId
+          || !action) return;
+        const sender = text(metadata?.sender || '').trim();
+        if (sender && sender !== MEMORY_SESSION_BRIDGE_PLUGIN_ID) return;
+        let result = null;
+        let errorText = '';
+        try {
+          if (action === 'adopt_cold_start') {
+            result = await adoptBridgeColdStartCapsule(request.payload?.capsule || null);
+          } else if (action === 'adopt_incremental_recovery') {
+            result = await adoptBridgeIncrementalRecoveryCapsule(request.payload?.capsule || null);
+          } else if (action === 'sync_analysis_capsules') {
+            result = await syncBridgeAnalysisCapsules();
+          } else if (action === 'inspect') {
+            const scope = await RisuCompat.currentChatScope();
+            if (!scope?.confident || !scope?.key) {
+              result = { available: false, reason: scope?.reason || 'scope_unavailable' };
+            } else {
+              const bridgeSync = await syncBridgeAnalysisCapsules();
+              const ledger = await loadStorageLedger(scope);
+              result = {
+                available: ledger.enabled === true,
+                version: ledger.version,
+                scopeKey: ledger.scopeKey,
+                enabled: ledger.enabled,
+                reason: ledger.reason,
+                storageKey: ledger.storageKey,
+                updatedAt: ledger.updatedAt,
+                migration: ledger.migration,
+                coldStart: ledger.coldStart,
+                incrementalRecovery: ledger.incrementalRecovery,
+                worldline: ledger.worldline,
+                records: ensureArray(ledger.records),
+                slotHeads: ensureArray(ledger.slotHeads),
+                tombstones: ensureArray(ledger.tombstones),
+                bridgeSync
+              };
+            }
+          } else {
+            throw new Error(`Unsupported HAYAKU bridge IPC action: ${action}`);
+          }
+        } catch (error) {
+          errorText = compact(error?.message || error || 'hayaku_bridge_ipc_failed', 900);
+        }
+        try {
+          await api.postPluginChannelMessage(
+            MEMORY_SESSION_BRIDGE_PLUGIN_ID,
+            MEMORY_SESSION_BRIDGE_HAYAKU_RESPONSE_CHANNEL,
+            {
+              schema: MEMORY_SESSION_BRIDGE_HAYAKU_IPC_SCHEMA,
+              kind: 'response',
+              requestId,
+              action,
+              ok: !errorText,
+              result: errorText ? null : clone(result, result),
+              error: errorText
+            }
+          );
+        } catch (error) {
+          debugError('bridge:ipc_response_failed', error, { action, requestId });
+        }
+      }
+    );
+    memoryBridgeIpcRegistered = true;
+    return true;
+  };
   const expectedCapturePacketTypes = pending => (
     pending?.recoveryRequired === true
       ? ['recovery_snapshot', 'current_snapshot']
@@ -22668,6 +22758,12 @@ const MODE_PROFILES = Object.freeze({
       await RisuCompat.purgeLegacyHayakuStorage();
       debugLog('install:settings', Memory.settings);
       exposeApi();
+      try {
+        const bridgeIpc = await registerMemoryBridgeIpc();
+        debugLog('install:bridge_ipc', { registered: bridgeIpc === true });
+      } catch (error) {
+        debugError('install:bridge_ipc_failed', error);
+      }
       try {
         const viewerRegistration = await registerLedgerViewerUi();
         debugLog('install:ledger_viewer', viewerRegistration);
