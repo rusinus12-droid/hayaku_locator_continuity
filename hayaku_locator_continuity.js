@@ -1,8 +1,8 @@
 //@name hayaku_locator_continuity
-//@display-name HAYAKU · Locator Continuity v2.3.24
+//@display-name HAYAKU · Locator Continuity v2.3.25
 //@author rusinus12@gmail.com
 //@api 3.0
-//@version 2.3.24
+//@version 2.3.25
 //@update-url https://raw.githubusercontent.com/rusinus12-droid/hayaku_locator_continuity/main/hayaku_locator_continuity.js
 //@arg hayaku_enabled string true|false
 //@arg hayaku_mode string auto|balanced|fast|deep
@@ -89,7 +89,7 @@
   }
 
   const PLUGIN_NAME = 'HAYAKU';
-  const PLUGIN_VERSION = '2.3.24';
+  const PLUGIN_VERSION = '2.3.25';
   const LEGACY_STORAGE_PREFIXES = Object.freeze(['hayaku.v1', 'hayaku.archive.v1']);
   const TURN_WORLDLINE_VERSION = 'hayaku_turn_worldline_v2';
   const STORAGE_LEDGER_VERSION = 'hayaku_storage_ledger_v2';
@@ -16560,11 +16560,6 @@ const MODE_PROFILES = Object.freeze({
             chatScope
           ));
           storageLedger = bridgeColdStartImport.ledger;
-          const bridgeIncrementalRecoveryImport = await stageAsync(
-            'importBridgeIncrementalRecovery',
-            () => importBridgeIncrementalRecoveryIntoStorageLedger(storageLedger, chatScope)
-          );
-          storageLedger = bridgeIncrementalRecoveryImport.ledger;
           storageMigration = stage('importLegacyChatPackets', () => importChatPacketsIntoStorageLedger(
             storageLedger,
             authoritativeSnapshot,
@@ -16590,6 +16585,16 @@ const MODE_PROFILES = Object.freeze({
               chatScope
             ))
             : normalizeTurnWorldline(storageLedger.worldline);
+          storageLedger = { ...storageLedger, worldline };
+          // Bridge recovery packets are generated from completed transcript
+          // pairs, not from HAYAKU's own packet hashes. Import them only after
+          // the authoritative U+A worldline exists so the importer can attach
+          // the exact active turn identity in one pass.
+          const bridgeIncrementalRecoveryImport = await stageAsync(
+            'importBridgeIncrementalRecovery',
+            () => importBridgeIncrementalRecoveryIntoStorageLedger(storageLedger, chatScope)
+          );
+          storageLedger = bridgeIncrementalRecoveryImport.ledger;
           const binding = stage('bindStorageLedger', () => bindStorageLedgerToSnapshot(
             storageLedger,
             authoritativeSnapshot,
@@ -20685,6 +20690,55 @@ const MODE_PROFILES = Object.freeze({
     }).filter(Boolean);
     return { records, merged, changed: merged > 0 };
   };
+  const repairBridgeRecoveryRecordIdentities = (ledger, snapshot, worldline = ledger?.worldline) => {
+    const records = ensureArray(ledger?.records).map(record => ({ ...record }));
+    const pairsByIndex = new Map(ensureArray(snapshot?.conversationPairs)
+      .map(pair => [Number(pair?.pairIndex || 0), pair])
+      .filter(([pairIndex]) => pairIndex > 0));
+    const activeNodesByPairIndex = worldlineNodesByPairIndex(worldline, { activeOnly: true });
+    let changed = false;
+    let repaired = 0;
+    for (const record of records) {
+      if (record?.captureSource !== 'bridge_incremental_recovery'
+        || record?.inheritedSessionHistory === true
+        || ['tombstoned', 'quarantined', 'detached', 'orphaned', 'superseded'].includes(record?.recordState)) {
+        continue;
+      }
+      const pair = pairsByIndex.get(Number(record?.targetPairIndex || 0)) || null;
+      const owner = pair
+        ? activeWorldlineNodeForPair(worldline, pair, activeNodesByPairIndex)
+        : null;
+      if (!pair?.userHash
+        || (!pair?.assistantVisibleHash && !pair?.assistantMessageIdHash)
+        || !owner) continue;
+      if (record.userHash && record.userHash !== pair.userHash) continue;
+      if (record.userMessageIdHash && pair.userMessageIdHash
+        && record.userMessageIdHash !== pair.userMessageIdHash) continue;
+      if (record.assistantVisibleHash && pair.assistantVisibleHash
+        && record.assistantVisibleHash !== pair.assistantVisibleHash) continue;
+      if (record.assistantMessageIdHash && pair.assistantMessageIdHash
+        && record.assistantMessageIdHash !== pair.assistantMessageIdHash) continue;
+      const next = {
+        ...record,
+        userHash: compact(pair.userHash || '', 96),
+        userMessageIdHash: compact(pair.userMessageIdHash || '', 96),
+        assistantVisibleHash: compact(pair.assistantVisibleHash || '', 96),
+        assistantMessageIdHash: compact(pair.assistantMessageIdHash || '', 96),
+        ownerTurnNodeId: compact(owner.turnNodeId || '', 96),
+        logicalTurnId: compact(owner.logicalTurnId || '', 96),
+        parentTurnNodeId: compact(owner.parentTurnNodeId || '', 96),
+        recordState: 'active',
+        boundAt: Number(record.boundAt || 0) > 0 ? record.boundAt : now()
+      };
+      next.slotId = storageRecordSlotId(next);
+      if (JSON.stringify(next) !== JSON.stringify(record)) {
+        Object.assign(record, next);
+        changed = true;
+        repaired += 1;
+      }
+    }
+    return { records, changed, repaired };
+  };
   const storageRecordNodeMatchEvidence = (record, node) => {
     if (Number(record?.targetPairIndex || 0) !== Number(node?.pairIndex || 0)) return false;
     if (record?.hash && ensureArray(node?.quarantinedPacketHashes).includes(record.hash)) return false;
@@ -20731,7 +20785,11 @@ const MODE_PROFILES = Object.freeze({
       || Number(b.node?.updatedAt || 0) - Number(a.node?.updatedAt || 0)
     ))[0]?.node || null;
   const bindStorageLedgerToSnapshot = (ledger, snapshot, worldline = ledger?.worldline) => {
-    const identityRepair = repairSelectedUnboundRecordIdentities(ledger, snapshot);
+    const bridgeIdentityRepair = repairBridgeRecoveryRecordIdentities(ledger, snapshot, worldline);
+    const identityRepair = repairSelectedUnboundRecordIdentities({
+      ...ledger,
+      records: bridgeIdentityRepair.records
+    }, snapshot);
     let records = identityRepair.records;
     const nodes = normalizeTurnWorldline(worldline).nodes;
     const pairsByIndex = new Map(ensureArray(snapshot?.conversationPairs)
@@ -20755,7 +20813,7 @@ const MODE_PROFILES = Object.freeze({
     const tombstonesBySlot = new Map(ensureArray(ledger?.tombstones)
       .map(normalizeStorageTombstone).filter(tombstone => tombstone?.active === true)
       .map(tombstone => [tombstone.slotId, tombstone]));
-    let changed = identityRepair.changed;
+    let changed = bridgeIdentityRepair.changed || identityRepair.changed;
     let ownerRebindings = 0;
     let staleOwnerDetections = 0;
     for (const record of records) {
@@ -20951,7 +21009,7 @@ const MODE_PROFILES = Object.freeze({
       ledger: { ...ledger, records },
       activeRecords,
       changed,
-      identityRepairs: identityRepair.repaired,
+      identityRepairs: bridgeIdentityRepair.repaired + identityRepair.repaired,
       mergedDuplicates: coalesced.merged,
       ownerRebindings,
       staleOwnerDetections
