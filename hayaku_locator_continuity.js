@@ -1,13 +1,14 @@
 //@name hayaku_locator_continuity
-//@display-name HAYAKU · Locator Continuity v2.3.26
+//@display-name HAYAKU · Locator Continuity v2.3.29
 //@author rusinus12@gmail.com
 //@api 3.0
-//@version 2.3.26
+//@version 2.3.29
 //@allowed-ipc flashback_hayaku_bridge
 //@update-url https://raw.githubusercontent.com/rusinus12-droid/hayaku_locator_continuity/main/hayaku_locator_continuity.js
 //@arg hayaku_enabled string true|false
 //@arg hayaku_mode string auto|balanced|fast|deep
 //@arg hayaku_prompt_mode string auto|balanced|full
+//@arg hayaku_prompt_cache string off|structural|native
 //@arg hayaku_max_items_per_axis string 3
 //@arg hayaku_bm25_channel string true|false
 //@arg hayaku_bm25_weight string 0.08
@@ -90,7 +91,7 @@
   }
 
   const PLUGIN_NAME = 'HAYAKU';
-  const PLUGIN_VERSION = '2.3.26';
+  const PLUGIN_VERSION = '2.3.29';
   const LEGACY_STORAGE_PREFIXES = Object.freeze(['hayaku.v1', 'hayaku.archive.v1']);
   const TURN_WORLDLINE_VERSION = 'hayaku_turn_worldline_v2';
   const STORAGE_LEDGER_VERSION = 'hayaku_storage_ledger_v2';
@@ -138,6 +139,13 @@
   const PACKET_CORE_WRITE_START = '[HAYAKU PACKET WRITE]';
   const PACKET_CORE_WRITE_END = '[/HAYAKU PACKET WRITE]';
   const RUNTIME_CONTEXT_MEMO = 'hayaku-runtime-context-v3';
+  const CACHE_STATIC_CONTEXT_MEMO = 'hayaku-cache-static-v1';
+  const CACHE_STATIC_ENVELOPE_VERSION = 'v2';
+  const CACHE_STATIC_START_PREFIX = `[HAYAKU_CACHE_STATIC_START ${CACHE_STATIC_ENVELOPE_VERSION}`;
+  const CACHE_STATIC_END = '[HAYAKU_CACHE_STATIC_END]';
+  const CACHE_STATIC_PROFILE_FULL = 'p3-full';
+  const CACHE_STATIC_PROFILE_COMPACT = 'p3-compact';
+  const CACHE_STATIC_PROFILE_CRITICAL = 'p3-critical';
   const PACKET_START = 'HAYAKU_STATE_PACKET_START';
   const PACKET_END = 'HAYAKU_STATE_PACKET_END';
   // Packet-core prompt markers.
@@ -288,6 +296,7 @@
     enabled: true,
     mode: 'auto',
     promptMode: 'auto',
+    promptCache: 'structural',
     injectionCaps: MODE_INJECTION_CAPS,
     maxItemsPerAxis: 3,
     bm25Channel: true,
@@ -382,8 +391,11 @@
   const KNOWLEDGE_STATES = Object.freeze(['known', 'suspected', 'uncertain', 'misunderstood', 'forgotten', 'hidden']);
   const PRIVACY_STATES = Object.freeze(['public', 'shared', 'private', 'secret', 'internal']);
   const TRUTH_STATES = Object.freeze(['true', 'false', 'contested', 'unknown']);
-  const TAIL_CURRENT_PACKET_EXAMPLE = '{"meta":{"schema":"hayaku_packet_v1","packet_type":"current_snapshot","packet_schema_rev":2,"scene_id":"scene:stable_current","turn_anchor":"one compact decisive change","confidence":0.6,"summary_memory":{"summary":"compact continuity needed after this turn","recallAnchors":["native phrase / canonical_token"],"recallAliases":{},"canonicalAnchors":["event:stable_anchor"],"mentionedEntityNames":[],"confidence":0.6}},"entity":{"characters":[],"relations":[],"pov_memories":[],"secrets":[]},"world":{"location":"","time":"","active_events":[]},"narrative":{"scene_phase":"","conflict_traces":[]},"planner":{"continuity_locks":[],"do_not_resolve_yet":[]},"importance":{"overall":0.4,"reason":[]}}';
-  const TAIL_RECOVERY_PACKET_EXAMPLE = '{"meta":{"schema":"hayaku_packet_v1","packet_type":"recovery_snapshot","packet_schema_rev":2,"confidence":0.45},"entity":{"characters":[],"relations":[],"pov_memories":[],"secrets":[]},"world":{"location":"","time":"","active_events":[]},"narrative":{"scene_phase":"","conflict_traces":[]},"planner":{"continuity_locks":[],"do_not_resolve_yet":[]},"importance":{"overall":0.3,"reason":[]}}';
+  // Safe structural fixtures only. Runtime packet templates are generated with
+  // exact request lineage and the active scene id; they never contain invented
+  // story facts or natural-language placeholders.
+  const TAIL_CURRENT_PACKET_EXAMPLE = '{"meta":{"schema":"hayaku_packet_v1","packet_type":"current_snapshot","packet_schema_rev":2,"scene_id":"","turn_anchor":"","confidence":0.2,"summary_memory":{"summary":"","recallAnchors":[],"recallAliases":{},"canonicalAnchors":[],"mentionedEntityNames":[],"confidence":0.2}},"entity":{},"world":{},"narrative":{},"planner":{},"importance":{"overall":0.1,"reason":[]}}';
+  const TAIL_RECOVERY_PACKET_EXAMPLE = '{"meta":{"schema":"hayaku_packet_v1","packet_type":"recovery_snapshot","packet_schema_rev":2,"scene_id":"","turn_anchor":"","confidence":0.2,"summary_memory":{"summary":"","recallAnchors":[],"recallAliases":{},"canonicalAnchors":[],"mentionedEntityNames":[],"confidence":0.2}},"entity":{},"world":{},"narrative":{},"planner":{},"importance":{"overall":0.1,"reason":[]}}';
 
   
 
@@ -1592,6 +1604,32 @@ const MODE_PROFILES = Object.freeze({
       handler: null,
       registeredModes: []
     },
+    promptCache: {
+      nativePolicy: 'structural_alias',
+      nativeReason: 'stock_risu_transport_metadata_insufficient',
+      permission: 'not_requested',
+      registered: false,
+      registerAttempted: false,
+      registerError: '',
+      interceptorId: '',
+      handler: null,
+      runCount: 0,
+      appliedCount: 0,
+      lastRunAt: 0,
+      lastProviderFamily: '',
+      lastApiShape: '',
+      lastInterceptorTypeHash: '',
+      lastTransportClass: '',
+      lastDirectProviderProven: false,
+      lastProviderEvidence: '',
+      lastSkipReason: '',
+      lastCacheKeyHash: '',
+      lastBreakpointApplied: false,
+      lastExistingConfigPreserved: false,
+      lastBelowEstimatedProviderMinimum: false,
+      lastContractAttested: false,
+      circuitByAdapter: {}
+    },
     ledgerViewer: {
       root: null,
       visible: false,
@@ -1717,6 +1755,8 @@ const MODE_PROFILES = Object.freeze({
         hasRemoveReplacer: has('removeRisuReplacer'),
         hasDisplayHandler: has('addRisuScriptHandler'),
         hasRemoveDisplayHandler: has('removeRisuScriptHandler'),
+        hasBodyInterceptor: has('registerBodyIntercepter'),
+        hasRemoveBodyInterceptor: has('unregisterBodyIntercepter'),
         hasPermissionApi: has('requestPluginPermission'),
         hasRuntimeInfo: has('getRuntimeInfo'),
         directLocalStorage: false
@@ -2091,6 +2131,95 @@ const MODE_PROFILES = Object.freeze({
       Memory.replacer.registered = false;
       Memory.replacer.handler = null;
     };
+    const addBodyInterceptor = async handler => {
+      if (Memory.promptCache.registerAttempted) return Memory.promptCache.registered === true;
+      Memory.promptCache.registerAttempted = true;
+      await refreshInfo();
+      const current = host('registerBodyIntercepter');
+      if (typeof current?.registerBodyIntercepter !== 'function') {
+        Memory.promptCache.permission = 'api_unavailable';
+        Memory.promptCache.registerError = 'registerBodyIntercepter_unavailable';
+        return false;
+      }
+      const wrapped = async (body, requestType = '') => {
+        Memory.promptCache.runCount += 1;
+        Memory.promptCache.lastRunAt = now();
+        try {
+          const result = await handler(body, requestType);
+          const diagnostics = result?.diagnostics || {};
+          Memory.promptCache.lastProviderFamily = text(diagnostics.providerFamily || '');
+          Memory.promptCache.lastApiShape = text(diagnostics.apiShape || '');
+          Memory.promptCache.lastInterceptorTypeHash = text(diagnostics.interceptorTypeHash || '');
+          Memory.promptCache.lastTransportClass = text(diagnostics.transportClass || '');
+          Memory.promptCache.lastDirectProviderProven = diagnostics.directProviderProven === true;
+          Memory.promptCache.lastProviderEvidence = text(diagnostics.providerEvidence || '');
+          Memory.promptCache.lastSkipReason = text(diagnostics.skipReason || '');
+          Memory.promptCache.lastCacheKeyHash = text(diagnostics.cacheKeyHash || '');
+          Memory.promptCache.lastBreakpointApplied = diagnostics.breakpointApplied === true;
+          Memory.promptCache.lastExistingConfigPreserved = diagnostics.existingConfigPreserved === true;
+          Memory.promptCache.lastBelowEstimatedProviderMinimum = diagnostics.belowEstimatedProviderMinimum === true;
+          Memory.promptCache.lastContractAttested = diagnostics.contractAttested === true;
+          Memory.promptCache.effectiveMode = diagnostics.applied === true ? 'native' : 'structural';
+          if (diagnostics.applied === true) Memory.promptCache.appliedCount += 1;
+          if (objectish(Memory.lastBeforeRequest?.cacheSafety)) {
+            Object.assign(Memory.lastBeforeRequest.cacheSafety, {
+              interceptorRunCount: Memory.promptCache.runCount,
+              interceptorAppliedCount: Memory.promptCache.appliedCount,
+              providerFamily: Memory.promptCache.lastProviderFamily,
+              apiShape: Memory.promptCache.lastApiShape,
+              interceptorTypeHash: Memory.promptCache.lastInterceptorTypeHash,
+              transportClass: Memory.promptCache.lastTransportClass,
+              directProviderProven: Memory.promptCache.lastDirectProviderProven,
+              providerEvidence: Memory.promptCache.lastProviderEvidence,
+              effectiveMode: diagnostics.applied === true ? 'native' : 'structural',
+              nativeApplied: diagnostics.applied === true,
+              nativeSkipReason: Memory.promptCache.lastSkipReason,
+              breakpointApplied: Memory.promptCache.lastBreakpointApplied,
+              cacheKeyHash: Memory.promptCache.lastCacheKeyHash,
+              existingUserCacheConfigPreserved: Memory.promptCache.lastExistingConfigPreserved,
+              belowEstimatedProviderMinimum: Memory.promptCache.lastBelowEstimatedProviderMinimum,
+              contractAttested: Memory.promptCache.lastContractAttested
+            });
+          }
+          return result && Object.prototype.hasOwnProperty.call(result, 'body') ? result.body : body;
+        } catch (error) {
+          Memory.promptCache.lastSkipReason = `transform_error:${compact(error?.message || error, 120)}`;
+          return body;
+        }
+      };
+      try {
+        const registration = await current.registerBodyIntercepter(wrapped);
+        const interceptorId = text(registration?.id || (typeof registration === 'string' ? registration : '')).trim();
+        if (!interceptorId) {
+          Memory.promptCache.permission = 'denied';
+          Memory.promptCache.registerError = 'permission_denied_or_registration_failed';
+          return false;
+        }
+        Memory.promptCache.permission = 'granted';
+        Memory.promptCache.registered = true;
+        Memory.promptCache.registerError = '';
+        Memory.promptCache.interceptorId = interceptorId;
+        Memory.promptCache.handler = wrapped;
+        await refreshInfo();
+        return true;
+      } catch (error) {
+        Memory.promptCache.permission = 'registration_failed';
+        Memory.promptCache.registered = false;
+        Memory.promptCache.registerError = compact(error?.message || error || 'register_failed', 240);
+        return false;
+      }
+    };
+    const removeBodyInterceptor = async () => {
+      try {
+        const current = host('unregisterBodyIntercepter');
+        if (Memory.promptCache.interceptorId && typeof current?.unregisterBodyIntercepter === 'function') {
+          await current.unregisterBodyIntercepter(Memory.promptCache.interceptorId);
+        }
+      } catch (_) {}
+      Memory.promptCache.registered = false;
+      Memory.promptCache.handler = null;
+      Memory.promptCache.interceptorId = '';
+    };
     const addAfterRequest = async handler => {
       await refreshInfo();
       const current = host('addRisuReplacer');
@@ -2268,12 +2397,14 @@ const MODE_PROFILES = Object.freeze({
       outputHandlerRunCount: Memory.outputHandler.runCount || 0,
       outputHandlerRegisterError: Memory.outputHandler.registerError || '',
       lastOutputHandlerError: Memory.outputHandler.lastError || '',
+      promptCache: clone(Memory.promptCache, {}),
       boundedHostCalls: clone(Memory.compatCallStats, {})
     });
     return Object.freeze({
       api, has, hasPluginStorage, refreshInfo, snapshot, getArgument, getStorageItem, setStorageItem, contextBudget,
       purgeLegacyHayakuStorage, copiedChatSourceId, memorySessionBridgeMarker, inferCopiedChatSource, currentChatScope,
       addBeforeRequest, removeBeforeRequest, addAfterRequest, removeAfterRequest,
+      addBodyInterceptor, removeBodyInterceptor,
       addDisplayHandler, removeDisplayHandler, addOutputHandler, removeOutputHandler, onUnload
     });
   })();
@@ -2328,6 +2459,465 @@ const MODE_PROFILES = Object.freeze({
       return `h64${hash.toString(36)}`;
     } catch (_) {
       return stableHash64Fallback(src);
+    }
+  };
+  const canonicalPromptCacheStringify = value => {
+    const seen = new WeakSet();
+    const visit = item => {
+      if (Array.isArray(item)) return item.map(visit);
+      if (!item || typeof item !== 'object') return item;
+      if (seen.has(item)) throw new TypeError('circular_prompt_cache_value');
+      seen.add(item);
+      try {
+        return Object.keys(item).sort().reduce((out, key) => {
+          out[key] = visit(item[key]);
+          return out;
+        }, {});
+      } finally {
+        seen.delete(item);
+      }
+    };
+    return JSON.stringify(visit(value));
+  };
+  const promptCacheBodyHasField = (value, field, seen = new WeakSet()) => {
+    if (!value || typeof value !== 'object') return false;
+    if (seen.has(value)) return false;
+    seen.add(value);
+    if (Object.prototype.hasOwnProperty.call(value, field)) return true;
+    for (const key of Object.keys(value)) {
+      if (promptCacheBodyHasField(value[key], field, seen)) return true;
+    }
+    return false;
+  };
+  const promptCacheStringOccurrenceCount = (source = '', needle = '') => {
+    const value = text(source);
+    if (!needle) return 0;
+    let count = 0;
+    let offset = 0;
+    while (offset <= value.length) {
+      const found = value.indexOf(needle, offset);
+      if (found < 0) break;
+      count += 1;
+      offset = found + needle.length;
+    }
+    return count;
+  };
+  const promptCacheMarkerInventory = body => {
+    const inventory = { starts: 0, ends: 0, carriers: [] };
+    const seen = new WeakSet();
+    const visit = (value, path = []) => {
+      if (typeof value === 'string') {
+        const starts = promptCacheStringOccurrenceCount(value, CACHE_STATIC_START_PREFIX);
+        const ends = promptCacheStringOccurrenceCount(value, CACHE_STATIC_END);
+        inventory.starts += starts;
+        inventory.ends += ends;
+        if (starts || ends) inventory.carriers.push({ path, value, starts, ends });
+        return;
+      }
+      if (!value || typeof value !== 'object' || seen.has(value)) return;
+      seen.add(value);
+      for (const key of Object.keys(value)) visit(value[key], [...path, key]);
+    };
+    visit(body);
+    return inventory;
+  };
+  const promptCacheTransportInfo = requestType => {
+    const metadata = objectish(requestType) ? requestType : {};
+    const rawType = objectish(requestType)
+      ? text(metadata.type || metadata.requestType || metadata.interceptor || '')
+      : text(requestType || '');
+    const normalizedType = rawType.trim().toLowerCase();
+    const knownType = /^(?:openai_(?:basic|streaming|tool)|openai_response_api(?:_streaming|_tool)?|anthropic_(?:http|streaming|streaming_retry|batching|bedrock)|gemini_(?:base|base_stream|tool)|meta_gemini(?:_stream)?)$/.test(normalizedType);
+    let transportClass = 'unknown';
+    let expectedProviderFamily = '';
+    let expectedApiShape = '';
+    if (/^openai_response_api(?:_|$)/.test(normalizedType)) {
+      transportClass = 'openai_compatible_responses';
+      expectedProviderFamily = 'openai';
+      expectedApiShape = 'responses';
+    } else if (/^openai_(?:basic|streaming|tool)$/.test(normalizedType)) {
+      transportClass = 'openai_compatible_chat';
+      expectedProviderFamily = 'openai';
+      expectedApiShape = 'chat_completions';
+    } else if (/^anthropic_/.test(normalizedType)) {
+      transportClass = 'anthropic_compatible_messages';
+      expectedProviderFamily = 'anthropic';
+      expectedApiShape = 'messages';
+    } else if (/^(?:gemini_|meta_gemini)/.test(normalizedType)) {
+      transportClass = 'gemini_automatic';
+      expectedProviderFamily = 'gemini';
+      expectedApiShape = 'automatic';
+    }
+    const endpoint = text(metadata.endpoint || metadata.url || metadata.requestUrl || '').trim();
+    const claimedProvider = text(metadata.providerFamily || metadata.provider || '').trim().toLowerCase();
+    const endpointProvider = /^https:\/\/api\.openai\.com(?:\/|$)/i.test(endpoint)
+      ? 'openai'
+      : /^https:\/\/api\.anthropic\.com(?:\/|$)/i.test(endpoint)
+        ? 'anthropic'
+        : '';
+    const directProviderProven = metadata.directProviderProven === true
+      && Boolean(endpointProvider)
+      && (!claimedProvider || claimedProvider === endpointProvider);
+    return {
+      normalizedType,
+      interceptorTypeHash: normalizedType ? stableHash64(normalizedType) : '',
+      knownType,
+      transportClass,
+      expectedProviderFamily,
+      expectedApiShape,
+      directProviderProven,
+      directProviderFamily: directProviderProven ? endpointProvider : '',
+      providerEvidence: directProviderProven ? 'trusted_host_endpoint_metadata' : 'unverified_transport_metadata',
+      auxiliary: /^meta_/.test(normalizedType) || metadata.auxiliary === true
+    };
+  };
+  const promptCacheProxyIndicator = body => {
+    const model = text(body?.model || '').trim();
+    if (/(?:openrouter|proxy|gateway|\/)/i.test(model)) return true;
+    return ['provider', 'route', 'router', 'endpoint', 'endpoint_url', 'base_url', 'api_base', 'custom_url', 'customURL', 'reverse_proxy']
+      .some(key => Object.prototype.hasOwnProperty.call(body || {}, key));
+  };
+  const detectPromptCacheProvider = (body, requestType = '') => {
+    const transport = promptCacheTransportInfo(requestType);
+    const model = text(body?.model || '').trim().toLowerCase();
+    const proxied = promptCacheProxyIndicator(body);
+    const finish = (providerFamily, apiShape) => {
+      const shapeMatches = !transport.expectedApiShape || transport.expectedApiShape === apiShape;
+      const providerMatches = !transport.expectedProviderFamily || transport.expectedProviderFamily === providerFamily;
+      const directProviderProven = !proxied && shapeMatches && providerMatches
+        && transport.directProviderProven === true && transport.directProviderFamily === providerFamily;
+      return {
+        providerFamily, apiShape, model, proxied, ...transport,
+        directProviderProven,
+        providerEvidence: proxied
+          ? 'body_proxy_indicator'
+          : directProviderProven
+            ? transport.providerEvidence
+            : transport.providerEvidence
+      };
+    };
+    if (!proxied && /^gpt-5\.6(?:-|$)/i.test(model)) {
+      if (Array.isArray(body?.messages) && !Array.isArray(body?.input)) return finish('openai', 'chat_completions');
+      if (Array.isArray(body?.input) && !Array.isArray(body?.messages)) return finish('openai', 'responses');
+    }
+    if (!proxied && /^claude-(?:opus-5|fable-5)(?:-|$)/i.test(model)
+      && Object.prototype.hasOwnProperty.call(body || {}, 'system') && Array.isArray(body?.messages)) {
+      return finish('anthropic', 'messages');
+    }
+    if (/^gemini-3\.(?:1-pro|6-flash)(?:-|$)/i.test(model)) return finish('gemini', 'automatic');
+    if (/^deepseek-v4(?:-(?:pro|flash))?(?:-|$)/i.test(model)) return finish('deepseek', 'automatic');
+    if (/^(?:kimi-k3|moonshot.*k3)(?:-|$)/i.test(model)) return finish('kimi', 'automatic');
+    if (/^(?:zai[-_/]?)?glm-?5\.2(?:-|$)/i.test(model)) return finish('zai', 'automatic');
+    return finish('unknown', '');
+  };
+  const promptCacheTextOfBlock = block => typeof block === 'string' ? block : text(block?.text || '');
+  const splitPromptCacheMarkerText = value => {
+    const source = text(value);
+    const markerAt = source.indexOf(CACHE_STATIC_END);
+    if (markerAt < 0) return null;
+    const end = markerAt + CACHE_STATIC_END.length;
+    return { prefix: source.slice(0, end), suffix: source.slice(end) };
+  };
+  const promptCacheCarrierForProvider = (body, provider) => {
+    const allowed = [];
+    if (provider.apiShape === 'chat_completions' || provider.apiShape === 'responses') {
+      const sourceKey = provider.apiShape === 'chat_completions' ? 'messages' : 'input';
+      const expectedBlockType = provider.apiShape === 'chat_completions' ? 'text' : 'input_text';
+      for (let itemIndex = 0; itemIndex < ensureArray(body?.[sourceKey]).length; itemIndex += 1) {
+        const item = body[sourceKey][itemIndex];
+        if (!/^(?:system|developer)$/i.test(text(item?.role || ''))) continue;
+        if (typeof item?.content === 'string' && item.content.includes(CACHE_STATIC_START_PREFIX)) {
+          allowed.push({ sourceKey, itemIndex, blockIndex: -1, value: item.content, expectedBlockType });
+        } else if (Array.isArray(item?.content)) {
+          item.content.forEach((block, blockIndex) => {
+            if (text(block?.type || '') !== expectedBlockType) return;
+            const value = promptCacheTextOfBlock(block);
+            if (value.includes(CACHE_STATIC_START_PREFIX)) allowed.push({ sourceKey, itemIndex, blockIndex, value, expectedBlockType });
+          });
+        }
+      }
+    } else if (provider.apiShape === 'messages') {
+      if (typeof body?.system === 'string' && body.system.includes(CACHE_STATIC_START_PREFIX)) {
+        allowed.push({ sourceKey: 'system', itemIndex: -1, blockIndex: -1, value: body.system, expectedBlockType: 'text' });
+      } else if (Array.isArray(body?.system)) {
+        body.system.forEach((block, blockIndex) => {
+          if (text(block?.type || '') !== 'text') return;
+          const value = promptCacheTextOfBlock(block);
+          if (value.includes(CACHE_STATIC_START_PREFIX)) allowed.push({ sourceKey: 'system', itemIndex: -1, blockIndex, value, expectedBlockType: 'text' });
+        });
+      }
+    }
+    return allowed.length === 1 ? allowed[0] : null;
+  };
+  const attestPromptCacheStaticContract = (body, provider) => {
+    const inventory = promptCacheMarkerInventory(body);
+    if (inventory.starts !== 1 || inventory.ends !== 1 || inventory.carriers.length !== 1) {
+      return { ok: false, reason: 'static_marker_pair_invalid', inventory };
+    }
+    const carrier = promptCacheCarrierForProvider(body, provider);
+    if (!carrier || carrier.value !== inventory.carriers[0].value) {
+      return { ok: false, reason: 'static_marker_outside_allowed_system_block', inventory };
+    }
+    const startAt = carrier.value.indexOf(CACHE_STATIC_START_PREFIX);
+    const startEndAt = carrier.value.indexOf(']', startAt);
+    const endAt = carrier.value.indexOf(CACHE_STATIC_END, startEndAt);
+    if (startAt < 0 || startEndAt < 0 || endAt < 0 || endAt < startEndAt) {
+      return { ok: false, reason: 'static_marker_order_invalid', inventory };
+    }
+    const startMarker = carrier.value.slice(startAt, startEndAt + 1);
+    const match = /^\[HAYAKU_CACHE_STATIC_START v2 profile=(p3-(?:full|compact|critical)) schema=(\d+) lang=(ko|en|ja|zh|source) contract=(h64[a-z0-9]+)\]$/.exec(startMarker);
+    if (!match) return { ok: false, reason: 'static_envelope_metadata_invalid', inventory };
+    const [, profile, schemaRevision, memoryLanguage, contractCoreHash] = match;
+    const expected = packetCacheStaticContract({ memoryLanguage }, profile);
+    const contractEndAt = endAt + CACHE_STATIC_END.length;
+    const exactContract = carrier.value.slice(startAt, contractEndAt);
+    if (Number(schemaRevision) !== HAYAKU_PACKET_SCHEMA_V2.revision
+      || contractCoreHash !== expected.contractCoreHash
+      || exactContract !== expected.text) {
+      return { ok: false, reason: 'static_contract_attestation_failed', inventory };
+    }
+    return {
+      ok: true,
+      reason: '',
+      ...carrier,
+      startAt,
+      endAt: contractEndAt,
+      profile,
+      schemaRevision: Number(schemaRevision),
+      memoryLanguage,
+      contractHash: expected.hash,
+      contractCoreHash
+    };
+  };
+  const promptCachePrefixFingerprint = (body, provider = detectPromptCacheProvider(body), attestation = attestPromptCacheStaticContract(body, provider)) => {
+    const base = {
+      model: body?.model || '',
+      tools: body?.tools || [],
+      response_format: body?.response_format || null,
+      text: body?.text || null
+    };
+    if (provider.apiShape === 'chat_completions' || provider.apiShape === 'responses') {
+      const source = provider.apiShape === 'chat_completions' ? body.messages : body.input;
+      const prefix = [];
+      let done = false;
+      for (const item of source || []) {
+        if (done) break;
+        const copy = item && typeof item === 'object' ? { ...item } : item;
+        const content = copy?.content;
+        if (typeof content === 'string') {
+          const split = splitPromptCacheMarkerText(content);
+          if (split) {
+            copy.content = split.prefix;
+            done = true;
+          }
+        } else if (Array.isArray(content)) {
+          const blocks = [];
+          for (const block of content) {
+            if (done) break;
+            const blockCopy = block && typeof block === 'object' ? { ...block } : block;
+            const split = splitPromptCacheMarkerText(promptCacheTextOfBlock(blockCopy));
+            if (split) {
+              blockCopy.text = split.prefix;
+              blocks.push(blockCopy);
+              done = true;
+            } else blocks.push(blockCopy);
+          }
+          copy.content = blocks;
+        }
+        prefix.push(copy);
+      }
+      base[provider.apiShape === 'chat_completions' ? 'messages' : 'input'] = prefix;
+    }
+    const canonical = canonicalPromptCacheStringify(base);
+    return { canonical, hash: stableHash64(canonical), chars: canonical.length, estimatedTokens: Math.ceil(canonical.length / 4), attestation };
+  };
+  const sha256PromptCacheHex = async value => {
+    const subtle = globalThis?.crypto?.subtle;
+    if (!subtle || typeof TextEncoder !== 'function') return '';
+    const bytes = new TextEncoder().encode(text(value));
+    const digest = await subtle.digest('SHA-256', bytes);
+    return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+  };
+  const promptCacheCircuitDecision = (provider, fingerprint, profile = '') => {
+    const adapterKey = `${provider.providerFamily}:${provider.apiShape}:${provider.model}`;
+    const states = Memory.promptCache.circuitByAdapter || (Memory.promptCache.circuitByAdapter = {});
+    const state = states[adapterKey] || (states[adapterKey] = { open: false, hashes: [], profile: '', transitions: 0 });
+    if (state.open) return { allowed: false, reason: 'native_adapter_circuit_open', adapterKey };
+    if (state.profile && state.profile !== profile) {
+      state.hashes = [];
+      state.transitions = 0;
+    }
+    state.profile = profile;
+    const previous = state.hashes[state.hashes.length - 1] || '';
+    if (previous && previous !== fingerprint.hash) state.transitions += 1;
+    state.hashes = [...state.hashes, fingerprint.hash].slice(-5);
+    if (state.transitions >= 2) {
+      state.open = true;
+      return { allowed: false, reason: 'unstable_static_prefix_circuit_opened', adapterKey };
+    }
+    return { allowed: true, reason: '', adapterKey };
+  };
+  const applyOpenAIPromptCache = async (body, provider, attestation = attestPromptCacheStaticContract(body, provider)) => {
+    const diagnostics = { ...provider, applied: false, breakpointApplied: false, existingConfigPreserved: false, contractAttested: attestation?.ok === true, skipReason: '' };
+    if (['prompt_cache_key', 'prompt_cache_options', 'prompt_cache_breakpoint'].some(field => promptCacheBodyHasField(body, field))) {
+      diagnostics.existingConfigPreserved = true;
+      diagnostics.skipReason = 'existing_user_cache_config';
+      return { body, diagnostics };
+    }
+    if (!attestation?.ok) {
+      diagnostics.skipReason = attestation?.reason || 'static_contract_not_attested';
+      return { body, diagnostics };
+    }
+    const fingerprint = promptCachePrefixFingerprint(body, provider, attestation);
+    diagnostics.prefixChars = fingerprint.chars;
+    diagnostics.prefixEstimatedTokens = fingerprint.estimatedTokens;
+    diagnostics.belowEstimatedProviderMinimum = fingerprint.estimatedTokens < 1280;
+    if (diagnostics.belowEstimatedProviderMinimum) {
+      diagnostics.skipReason = 'below_safe_provider_minimum';
+      return { body, diagnostics };
+    }
+    const circuit = promptCacheCircuitDecision(provider, fingerprint, attestation.profile);
+    if (!circuit.allowed) {
+      diagnostics.skipReason = circuit.reason;
+      return { body, diagnostics };
+    }
+    const digest = await sha256PromptCacheHex(fingerprint.canonical);
+    if (!digest) {
+      diagnostics.skipReason = 'sha256_unavailable';
+      return { body, diagnostics };
+    }
+    const key = attestation.sourceKey;
+    const source = body[key];
+    const nextSource = source.map((item, itemIndex) => {
+      if (itemIndex !== attestation.itemIndex) return item;
+      if (attestation.blockIndex < 0) {
+        const prefix = item.content.slice(0, attestation.endAt);
+        const suffix = item.content.slice(attestation.endAt);
+        const blocks = [{ type: attestation.expectedBlockType, text: prefix, prompt_cache_breakpoint: { mode: 'explicit' } }];
+        if (suffix) blocks.push({ type: attestation.expectedBlockType, text: suffix });
+        return { ...item, content: blocks };
+      }
+      const nextContent = item.content.flatMap((block, blockIndex) => {
+        if (blockIndex !== attestation.blockIndex) return [block];
+        const value = promptCacheTextOfBlock(block);
+        const prefix = value.slice(0, attestation.endAt);
+        const suffix = value.slice(attestation.endAt);
+        const split = [{ ...block, text: prefix, prompt_cache_breakpoint: { mode: 'explicit' } }];
+        if (suffix) split.push({ ...block, text: suffix });
+        return split;
+      });
+      return { ...item, content: nextContent };
+    });
+    diagnostics.applied = true;
+    diagnostics.breakpointApplied = true;
+    diagnostics.cacheKeyHash = digest.slice(0, 32);
+    return {
+      body: {
+        ...body,
+        [key]: nextSource,
+        prompt_cache_key: `hayaku:v2:openai:${provider.apiShape}:${attestation.profile}:${diagnostics.cacheKeyHash}`,
+        prompt_cache_options: { mode: 'explicit' }
+      },
+      diagnostics
+    };
+  };
+  const applyAnthropicPromptCache = async (body, provider, attestation = attestPromptCacheStaticContract(body, provider)) => {
+    const diagnostics = { ...provider, applied: false, breakpointApplied: false, existingConfigPreserved: false, contractAttested: attestation?.ok === true, skipReason: '' };
+    if (promptCacheBodyHasField(body, 'cache_control')) {
+      diagnostics.existingConfigPreserved = true;
+      diagnostics.skipReason = 'existing_user_cache_config';
+      return { body, diagnostics };
+    }
+    if (!attestation?.ok) {
+      diagnostics.skipReason = attestation?.reason || 'static_contract_not_attested';
+      return { body, diagnostics };
+    }
+    const prefixChars = attestation.blockIndex < 0
+      ? attestation.endAt
+      : ensureArray(body.system).slice(0, attestation.blockIndex).reduce((sum, block) => sum + promptCacheTextOfBlock(block).length, 0) + attestation.endAt;
+    const estimatedTokens = Math.ceil(prefixChars / 4);
+    diagnostics.prefixChars = prefixChars;
+    diagnostics.prefixEstimatedTokens = estimatedTokens;
+    diagnostics.belowEstimatedProviderMinimum = estimatedTokens < 640;
+    if (diagnostics.belowEstimatedProviderMinimum) {
+      diagnostics.skipReason = 'below_safe_provider_minimum';
+      return { body, diagnostics };
+    }
+    const fingerprint = { hash: stableHash64(`${provider.model}\u0001${attestation.contractHash}\u0001${prefixChars}`) };
+    const circuit = promptCacheCircuitDecision(provider, fingerprint, attestation.profile);
+    if (!circuit.allowed) {
+      diagnostics.skipReason = circuit.reason;
+      return { body, diagnostics };
+    }
+    let nextSystem;
+    if (attestation.blockIndex < 0) {
+      const prefix = body.system.slice(0, attestation.endAt);
+      const suffix = body.system.slice(attestation.endAt);
+      nextSystem = [{ type: 'text', text: prefix, cache_control: { type: 'ephemeral' } }];
+      if (suffix) nextSystem.push({ type: 'text', text: suffix });
+    } else {
+      nextSystem = body.system.flatMap((block, blockIndex) => {
+        if (blockIndex !== attestation.blockIndex) return [block];
+        const value = promptCacheTextOfBlock(block);
+        const prefix = value.slice(0, attestation.endAt);
+        const suffix = value.slice(attestation.endAt);
+        const split = [{ ...block, text: prefix, cache_control: { type: 'ephemeral' } }];
+        if (suffix) split.push({ ...block, text: suffix });
+        return split;
+      });
+    }
+    diagnostics.applied = true;
+    diagnostics.breakpointApplied = true;
+    diagnostics.cacheKeyHash = fingerprint.hash;
+    return { body: { ...body, system: nextSystem }, diagnostics };
+  };
+  const transformPromptCacheBody = async (body, requestType = '') => {
+    const original = body;
+    try {
+      if (!body || typeof body !== 'object') return { body: original, diagnostics: { providerFamily: 'unknown', apiShape: '', applied: false, skipReason: 'invalid_body' } };
+      const provider = detectPromptCacheProvider(body, requestType);
+      if (provider.auxiliary) {
+        return { body: original, diagnostics: { ...provider, applied: false, skipReason: 'auxiliary_request' } };
+      }
+      if (provider.apiShape === 'automatic') {
+        return { body: original, diagnostics: { ...provider, applied: false, contractAttested: false, skipReason: 'provider_automatic_cache_structural_only' } };
+      }
+      if (provider.providerFamily === 'unknown') {
+        return { body: original, diagnostics: { ...provider, applied: false, contractAttested: false, skipReason: 'unsupported_or_opaque_provider' } };
+      }
+      // RisuAI currently supplies protocol-stage strings such as openai_basic and
+      // anthropic_http for both direct and compatible/proxy transports. Never scan
+      // or mutate the full body until trusted host metadata proves the endpoint.
+      if (!provider.directProviderProven) {
+        return { body: original, diagnostics: { ...provider, applied: false, contractAttested: false, skipReason: provider.proxied ? 'proxy_or_custom_endpoint' : 'direct_provider_not_proven' } };
+      }
+      if (provider.expectedApiShape && provider.expectedApiShape !== provider.apiShape) {
+        return { body: original, diagnostics: { ...provider, applied: false, contractAttested: false, skipReason: 'transport_api_shape_mismatch' } };
+      }
+      if (['prompt_cache_key', 'prompt_cache_options', 'prompt_cache_breakpoint', 'cache_control']
+        .some(field => promptCacheBodyHasField(body, field))) {
+        return {
+          body: original,
+          diagnostics: { ...provider, applied: false, existingConfigPreserved: true, skipReason: 'existing_user_cache_config' }
+        };
+      }
+      const attestation = attestPromptCacheStaticContract(body, provider);
+      if (!attestation.ok) {
+        return { body: original, diagnostics: { ...provider, applied: false, contractAttested: false, skipReason: attestation.reason } };
+      }
+      if (provider.providerFamily === 'openai') return await applyOpenAIPromptCache(body, provider, attestation);
+      if (provider.providerFamily === 'anthropic') return await applyAnthropicPromptCache(body, provider, attestation);
+      return {
+        body: original,
+        diagnostics: {
+          ...provider,
+          applied: false,
+          contractAttested: true,
+          skipReason: 'unsupported_or_opaque_provider'
+        }
+      };
+    } catch (error) {
+      return { body: original, diagnostics: { providerFamily: 'unknown', apiShape: '', applied: false, skipReason: `transform_error:${compact(error?.message || error, 120)}` } };
     }
   };
   const normalizeKey = (value = '') => text(value)
@@ -3884,10 +4474,10 @@ const MODE_PROFILES = Object.freeze({
       };
     }
     const sourceEvidence = normalizeSourceEvidence(sourceMeta.sourceEvidence);
-    const sourceText = [
-      ...mergeValues([sourceEvidence?.lines, sourceEvidence?.allLines], 18),
-      sourceEvidence?.allText || ''
-    ].filter(Boolean).join('\n');
+    // Packet quality is judged against established outcome evidence. A user's
+    // request or attempted action is useful provenance, but it is not proof
+    // that the requested event happened.
+    const sourceText = packetEvidenceSupportText(sourceEvidence);
     const breadthPenalty = clamp(
       Math.max(0, totalItems - 18) * 0.015
       + Math.max(0, counts.characters - 6) * 0.025
@@ -4596,6 +5186,7 @@ const MODE_PROFILES = Object.freeze({
       enabledRaw,
       modeRaw,
       promptModeRaw,
+      promptCacheRaw,
       maxItemsPerAxisRaw,
       bm25ChannelRaw,
       bm25WeightRaw,
@@ -4609,6 +5200,7 @@ const MODE_PROFILES = Object.freeze({
       readArg('hayaku_enabled', String(DEFAULT_SETTINGS.enabled)),
       readArg('hayaku_mode', DEFAULT_SETTINGS.mode),
       readArg('hayaku_prompt_mode', DEFAULT_SETTINGS.promptMode),
+      readArg('hayaku_prompt_cache', DEFAULT_SETTINGS.promptCache),
       readArg('hayaku_max_items_per_axis', DEFAULT_SETTINGS.maxItemsPerAxis),
       readArg('hayaku_bm25_channel', String(DEFAULT_SETTINGS.bm25Channel)),
       readArg('hayaku_bm25_weight', String(DEFAULT_SETTINGS.bm25Weight)),
@@ -4626,6 +5218,7 @@ const MODE_PROFILES = Object.freeze({
       enabled: falsySetting(enabledRaw) ? false : true,
       mode: ['auto', 'fast', 'balanced', 'deep'].includes(text(modeRaw).trim()) ? text(modeRaw).trim() : DEFAULT_SETTINGS.mode,
       promptMode: ['auto', 'balanced', 'full'].includes(text(promptModeRaw).trim()) ? text(promptModeRaw).trim() : DEFAULT_SETTINGS.promptMode,
+      promptCache: ['off', 'structural', 'native'].includes(text(promptCacheRaw).trim()) ? text(promptCacheRaw).trim() : DEFAULT_SETTINGS.promptCache,
       injectionCaps: MODE_INJECTION_CAPS,
       maxItemsPerAxis: Math.max(1, Math.min(12, Number.isFinite(maxItemsPerAxis) ? maxItemsPerAxis : DEFAULT_SETTINGS.maxItemsPerAxis)),
       bm25Channel: falsySetting(bm25ChannelRaw) ? false : true,
@@ -5024,7 +5617,7 @@ const MODE_PROFILES = Object.freeze({
     return false;
   };
   const shouldDropOutgoingMessage = msg => {
-    if (text(msg?.memo || msg?.metadata?.memo).trim() === RUNTIME_CONTEXT_MEMO) return true;
+    if ([RUNTIME_CONTEXT_MEMO, CACHE_STATIC_CONTEXT_MEMO].includes(text(msg?.memo || msg?.metadata?.memo).trim())) return true;
     const body = messageContent(msg);
     if (!body.trim()) return !hasOpaqueProviderPayload(msg);
     if (currentInputFrom(body)) return false;
@@ -5691,11 +6284,23 @@ const MODE_PROFILES = Object.freeze({
       .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label))
       .slice(0, PACKET_COVERAGE_SURFACE_CANDIDATE_LIMIT);
   };
-  const packetCoveragePolarityConflicts = (sourceText = '', packetRaw = '') => {
+  const packetCoveragePolarityConflicts = (sourceText = '', packetRaw = '', outcomeSegments = []) => {
     const packetTokens = packetCoverageCanonicalTokens(packetRaw);
     const conflicts = [];
     PACKET_COVERAGE_NEGATED_CANONICAL_RULES.forEach(rule => {
-      if (!rule.pattern.test(text(sourceText))) return;
+      const orderedSegments = ensureArray(outcomeSegments)
+        .filter(segment => objectish(segment) && segment.text)
+        .sort((a, b) => Number(a.order || 0) - Number(b.order || 0));
+      let finalPolarity = '';
+      orderedSegments.forEach(segment => {
+        const body = text(segment.text);
+        if (rule.pattern.test(body) || segment.kind === 'negated') {
+          if (rule.pattern.test(body)) finalPolarity = 'negative';
+          return;
+        }
+        if (packetCoverageCanonicalTokens(body).some(token => rule.tokens.test(text(token)))) finalPolarity = 'positive';
+      });
+      if (orderedSegments.length ? finalPolarity !== 'negative' : !rule.pattern.test(text(sourceText))) return;
       const hits = packetTokens.filter(token => rule.tokens.test(text(token)));
       hits.forEach(token => conflicts.push({ token, reason: 'source_negated_packet_asserted' }));
     });
@@ -5707,11 +6312,10 @@ const MODE_PROFILES = Object.freeze({
       return { active: false, requestLocal: true, reason: settings?.packetCoverageAudit === false ? 'disabled' : 'lightweight_ingest' };
     }
     const sourceEvidence = normalizeSourceEvidence(sourceMeta?.sourceEvidence || packetQuality?.sourceEvidence);
-    const sourceText = text([
-      ...mergeValues([sourceEvidence?.lines, sourceEvidence?.allLines], 18),
-      sourceEvidence?.allText || packetQuality?.sourceText || ''
-    ].filter(Boolean).join('\n')).trim();
-    if (!sourceText) return { active: false, requestLocal: true, reason: 'missing_source_evidence' };
+    const sourceText = text(packetEvidenceOutcomeText(sourceEvidence)).trim();
+    const supportText = text(packetEvidenceSupportText(sourceEvidence) || packetQuality?.sourceText || '').trim();
+    const intentText = text(packetEvidenceIntentText(sourceEvidence)).trim();
+    if (!sourceText && !supportText) return { active: false, requestLocal: true, reason: 'missing_source_evidence' };
     const sourceCanonical = packetCoverageCanonicalTokens(sourceText).slice(0, 24);
     const packetCanonical = packetCoverageCanonicalTokens(packetRaw).slice(0, 48);
     const packetCanonicalKeys = new Set(packetCanonical.map(normalizeKey));
@@ -5733,14 +6337,14 @@ const MODE_PROFILES = Object.freeze({
     const missingKnownEntities = knownEntityMentions
       .filter(name => !queryMentionsAny(packetRaw, [name]) && !packetEntityNames.some(value => normalizedSurface(value) === normalizedSurface(name)))
       .slice(0, 8);
-    const polarityConflicts = packetCoveragePolarityConflicts(sourceText, packetRaw);
+    const polarityConflicts = packetCoveragePolarityConflicts(supportText, packetRaw, sourceEvidence?.outcomeSegments);
     const sourceSignalCount = sourceCanonical.length + sourceSurfaces.length + knownEntityMentions.length;
     const penalty = Math.min(0.46, missingCanonicalSignals.length * 0.085)
       + Math.min(0.28, missingKnownEntities.length * 0.12)
       + Math.min(0.18, missingSurfaceSignals.length * 0.055)
       + Math.min(0.48, polarityConflicts.length * 0.24);
-    const coverageScore = sourceSignalCount > 0 ? clamp(1 - penalty, 0, 1, 1) : 1;
-    const restrictedRisk = PACKET_COVERAGE_RESTRICTED_SOURCE_RE.test(sourceText);
+    const coverageScore = clamp(1 - penalty, 0, 1, 1);
+    const restrictedRisk = PACKET_COVERAGE_RESTRICTED_SOURCE_RE.test([supportText, intentText].filter(Boolean).join('\n'));
     const fallbackEligible = coverageScore < PACKET_COVERAGE_MIN_SCORE
       && !restrictedRisk
       && (missingCanonicalSignals.length > 0 || missingKnownEntities.length > 0 || missingSurfaceSignals.length > 0)
@@ -5748,7 +6352,13 @@ const MODE_PROFILES = Object.freeze({
     return {
       active: true,
       requestLocal: true,
-      reason: fallbackEligible ? 'coverage_gap_with_safe_source_evidence' : (coverageScore < PACKET_COVERAGE_MIN_SCORE ? 'coverage_gap_detected' : 'coverage_ok'),
+      reason: polarityConflicts.length
+        ? 'polarity_conflict'
+        : (fallbackEligible
+            ? 'coverage_gap_with_safe_source_evidence'
+            : (coverageScore < PACKET_COVERAGE_MIN_SCORE
+                ? 'coverage_gap_detected'
+                : (sourceSignalCount === 0 ? 'no_asserted_outcome_signals' : 'coverage_ok'))),
       packetHash: sourceMeta?.packetHash || '',
       messageIndex: Number.isFinite(Number(sourceMeta?.messageIndex)) ? Number(sourceMeta.messageIndex) : null,
       turn: Number(store?.turn || 0),
@@ -5763,10 +6373,14 @@ const MODE_PROFILES = Object.freeze({
       polarityConflicts,
       restrictedRisk,
       fallbackEligible,
-      sourceExcerpt: compact(sourceEvidence?.allLines?.join(' | ') || sourceEvidence?.lines?.join(' | ') || sourceText, PACKET_COVERAGE_FALLBACK_MAX_CHARS),
+      sourceExcerpt: compact(sourceEvidence?.outcomeLines?.join(' | ') || sourceText, PACKET_COVERAGE_FALLBACK_MAX_CHARS),
       sourceTokens: tokenize(sourceText, 220),
+      supportExcerpt: compact(supportText, PACKET_COVERAGE_FALLBACK_MAX_CHARS),
+      intentExcerpt: compact(intentText, PACKET_COVERAGE_FALLBACK_MAX_CHARS),
+      intentTokens: tokenize(intentText, 120),
       sourceEvidenceMode: sourceEvidence?.mode || '',
-      sourceRoles: uniq(sourceEvidence?.roles || [], 8)
+      sourceRoles: uniq(sourceEvidence?.roles || [], 8),
+      sourceRolePolicy: sourceEvidence?.roleSeparated === true ? 'outcome_over_intent_v1' : 'legacy_unseparated'
     };
   };
   const recordPacketCoverageAudit = (store = {}, audit = null) => {
@@ -5945,9 +6559,49 @@ const MODE_PROFILES = Object.freeze({
     if (/^(?:-{3,}|={3,}|<\/?[A-Z][A-Z0-9_-]+\/?>)$/i.test(line)) return '';
     return compact(line, maxLength);
   };
+  const packetEvidenceUserOutcomeIsAuthoritative = message => {
+    if (!objectish(message)) return false;
+    const meta = objectish(message.meta) ? message.meta : {};
+    const metadata = objectish(message.metadata) ? message.metadata : {};
+    return message.hayakuAuthoritativeOutcome === true
+      || message.hayaku_authoritative_outcome === true
+      || meta.hayakuAuthoritativeOutcome === true
+      || meta.hayaku_authoritative_outcome === true
+      || metadata.hayakuAuthoritativeOutcome === true
+      || metadata.hayaku_authoritative_outcome === true;
+  };
+  const packetEvidenceClassForMessage = message => {
+    const role = roleOf(message) || 'unknown';
+    if (/^(?:assistant|model)$/i.test(role)) return 'outcome';
+    if (/^(?:user|human)$/i.test(role)) {
+      return packetEvidenceUserOutcomeIsAuthoritative(message) ? 'authoritative_user_outcome' : 'intent';
+    }
+    return 'other';
+  };
+  const packetEvidenceMessageText = message => compact(
+    stripNarrativeTags(sanitizeEvidenceBody(messageContent(message || ''))),
+    9000
+  );
+  const PACKET_EVIDENCE_NEGATED_OR_REFUSED_RE = /(?:하지\s*않|하지\s*못|않았|않는다|못했|못한다|실패(?:했|한다)?|거절(?:했|한다)?|취소(?:했|한다)?|철회(?:했|한다)?|중단(?:했|한다)?|아직\s+[^.!?。！？]{0,24}(?:않|못)|\b(?:did\s+not|does\s+not|do\s+not|didn['’]?t|doesn['’]?t|cannot|can['’]?t|could\s+not|couldn['’]?t|never|failed\s+to|refused\s+to|declined\s+to|cancelled|canceled|withdrew)\b|(?:しなかった|していない|できなかった|拒否した|失敗した|取り消した|撤回した)|(?:没有|未能|拒绝|失败|取消|撤回))/i;
+  const PACKET_EVIDENCE_NONASSERTIVE_RE = /(?:[?？]\s*$|\b(?:maybe|perhaps|possibly|might|could|should|would|if|unless|suppose|imagine|plan(?:s|ned)?\s+to|intend(?:s|ed)?\s+to|want(?:s|ed)?\s+to|propose(?:s|d)?|suggest(?:s|ed)?)\b|(?:할까|할지도|하려고|하고\s*싶|계획(?:했|한다)?|제안(?:했|한다)?|가정(?:하면|했다)?|만약)|(?:かもしれない|つもり|したい|提案|もし)|(?:也许|可能|打算|想要|建议|如果))/i;
+  const packetEvidenceSegmentsForText = (value = '', role = 'assistant') => {
+    const body = text(value)
+      .replace(/([.!?。！？;；]+)\s*/g, '$1\n')
+      .replace(/\s+(but|however|instead|yet|nevertheless)\s+/gi, '\n$1 ')
+      .replace(/\s*(하지만|그러나|대신|다만|그렇지만|けれども|しかし|代わりに|但是|然而|相反)\s*/g, '\n$1 ');
+    return body.split(/\r?\n+/).map(raw => sanitizeEvidenceLine(raw, 520)).filter(Boolean).map((segment, order) => ({
+      order,
+      role,
+      kind: PACKET_EVIDENCE_NEGATED_OR_REFUSED_RE.test(segment)
+        ? 'negated'
+        : (PACKET_EVIDENCE_NONASSERTIVE_RE.test(segment) ? 'nonassertive' : 'asserted'),
+      text: segment
+    }));
+  };
   const evidenceCandidateLines = (message = {}, maxLines = 60) => {
     const role = roleOf(message) || 'unknown';
     if (/system|developer|tool/i.test(role)) return [];
+    const evidenceClass = packetEvidenceClassForMessage(message);
     let body = messageContent(message);
     const current = currentInputFrom(body);
     if (current) body = current;
@@ -5957,11 +6611,11 @@ const MODE_PROFILES = Object.freeze({
       const line = sanitizeEvidenceLine(raw);
       if (!line) return;
       if (lines.some(existing => normalizeKey(existing.text) === normalizeKey(line))) return;
-      lines.push({ role, text: line, fullText: sanitizeEvidenceLine(raw, 520) || line });
+      lines.push({ role, evidenceClass, text: line, fullText: sanitizeEvidenceLine(raw, 520) || line });
     });
     if (lines.length) return lines.slice(0, maxLines);
     const compactBody = sanitizeEvidenceLine(body);
-    return compactBody ? [{ role, text: compactBody }] : [];
+    return compactBody ? [{ role, evidenceClass, text: compactBody }] : [];
   };
   const buildPacketCoverageSourceEvidence = (messages = [], messageIndex = 0) => {
     const list = ensureArray(messages);
@@ -5975,18 +6629,51 @@ const MODE_PROFILES = Object.freeze({
       });
     });
     if (!rows.length) return null;
+    const outcomeRows = rows.filter(row => /^(?:outcome|authoritative_user_outcome)$/.test(row.evidenceClass));
+    const intentRows = rows.filter(row => row.evidenceClass === 'intent');
+    const outcomeSegments = outcomeRows.flatMap((row, rowIndex) => packetEvidenceSegmentsForText(
+      row.fullText || row.text,
+      row.evidenceClass === 'authoritative_user_outcome' ? 'user' : row.role
+    ).map(segment => ({ ...segment, order: rowIndex * 100 + segment.order })));
+    const assertedOutcomeSegments = outcomeSegments.filter(segment => segment.kind === 'asserted');
+    const preferredRows = assertedOutcomeSegments.length
+      ? assertedOutcomeSegments
+      : (outcomeRows.length ? outcomeRows : rows);
     const allLines = rows.slice(0, 12).map(row => compact(row.fullText || row.text, 520));
     const allText = compact(sourceIndexes
-      .map(index => stripNarrativeTags(sanitizeEvidenceBody(messageContent(list[index] || ''))))
+      .map(index => packetEvidenceMessageText(list[index]))
+      .filter(Boolean)
+      .join('\n'), 9000);
+    const outcomeText = compact(assertedOutcomeSegments.map(segment => segment.text).join('\n'), 9000);
+    const supportText = compact(sourceIndexes
+      .filter(index => /^(?:outcome|authoritative_user_outcome)$/.test(packetEvidenceClassForMessage(list[index])))
+      .map(index => packetEvidenceMessageText(list[index]))
+      .filter(Boolean)
+      .join('\n'), 9000);
+    const intentText = compact(sourceIndexes
+      .filter(index => packetEvidenceClassForMessage(list[index]) === 'intent')
+      .map(index => packetEvidenceMessageText(list[index]))
       .filter(Boolean)
       .join('\n'), 9000);
     return {
       mode: 'packet_neighbor_coverage_evidence',
       messageIndex,
-      lines: rows.slice(0, 3).map(row => compact(row.text, 220)),
+      lines: preferredRows.slice(0, 3).map(row => compact(row.text, 220)),
       allLines,
       allText,
-      roles: rows.slice(0, 3).map(row => row.role),
+      roles: preferredRows.slice(0, 3).map(row => row.role),
+      outcomeLines: assertedOutcomeSegments.slice(0, 12).map(segment => segment.text),
+      supportLines: outcomeRows.slice(0, 12).map(row => compact(row.fullText || row.text, 520)),
+      intentLines: intentRows.slice(0, 12).map(row => compact(row.fullText || row.text, 520)),
+      authoritativeUserLines: outcomeRows
+        .filter(row => row.evidenceClass === 'authoritative_user_outcome')
+        .slice(0, 6)
+        .map(row => compact(row.fullText || row.text, 520)),
+      outcomeText,
+      supportText,
+      intentText,
+      outcomeSegments,
+      roleSeparated: true,
       confidence: 0.78
     };
   };
@@ -5995,7 +6682,7 @@ const MODE_PROFILES = Object.freeze({
     const tokenScore = lexicalStats(packetTokens, tokenize(body, 96));
     const conceptScore = softWeightedJaccard(packetConcepts, conceptTokensForText(body));
     const frameScore = softWeightedJaccard(packetFrames, semanticFrameTokensForText(body));
-    const roleBoost = /user|human/i.test(line?.role || '') ? 0.025 : 0;
+    const roleBoost = /assistant|model/i.test(line?.role || '') ? 0.025 : 0;
     return clamp(
       Math.max(tokenScore.coverage, tokenScore.jaccard)
       + Math.max(conceptScore.coverage, conceptScore.jaccard) * 0.45
@@ -6039,7 +6726,29 @@ const MODE_PROFILES = Object.freeze({
       .map(line => compact(line.fullText || line.text, 520));
     if (!selected.length) return null;
     const allText = compact(sourceIndexes
-      .map(index => stripNarrativeTags(sanitizeEvidenceBody(messageContent(list[index] || ''))))
+      .map(index => packetEvidenceMessageText(list[index]))
+      .filter(Boolean)
+      .join('\n'), allTextCap);
+    // `candidates` is score-sorted above. Restore chat chronology before
+    // building polarity segments so a later correction wins deterministically.
+    const outcomeRows = candidates
+      .filter(line => /^(?:outcome|authoritative_user_outcome)$/.test(line.evidenceClass))
+      .sort((a, b) => a.messageIndex - b.messageIndex || a.lineIndex - b.lineIndex);
+    const intentRows = candidates.filter(line => line.evidenceClass === 'intent');
+    const outcomeSegments = outcomeRows.flatMap((line, lineIndex) => packetEvidenceSegmentsForText(
+      line.fullText || line.text,
+      line.evidenceClass === 'authoritative_user_outcome' ? 'user' : line.role
+    ).map(segment => ({ ...segment, order: lineIndex * 100 + segment.order })));
+    const assertedOutcomeSegments = outcomeSegments.filter(segment => segment.kind === 'asserted');
+    const outcomeText = compact(assertedOutcomeSegments.map(segment => segment.text).join('\n'), allTextCap);
+    const supportText = compact(sourceIndexes
+      .filter(index => /^(?:outcome|authoritative_user_outcome)$/.test(packetEvidenceClassForMessage(list[index])))
+      .map(index => packetEvidenceMessageText(list[index]))
+      .filter(Boolean)
+      .join('\n'), allTextCap);
+    const intentText = compact(sourceIndexes
+      .filter(index => packetEvidenceClassForMessage(list[index]) === 'intent')
+      .map(index => packetEvidenceMessageText(list[index]))
       .filter(Boolean)
       .join('\n'), allTextCap);
     return {
@@ -6049,6 +6758,18 @@ const MODE_PROFILES = Object.freeze({
       allLines,
       allText,
       roles: selected.map(line => line.role),
+      outcomeLines: assertedOutcomeSegments.slice(0, allLinesCap).map(segment => segment.text),
+      supportLines: outcomeRows.slice(0, allLinesCap).map(line => compact(line.fullText || line.text, 520)),
+      intentLines: intentRows.slice(0, allLinesCap).map(line => compact(line.fullText || line.text, 520)),
+      authoritativeUserLines: outcomeRows
+        .filter(line => line.evidenceClass === 'authoritative_user_outcome')
+        .slice(0, allLinesCap)
+        .map(line => compact(line.fullText || line.text, 520)),
+      outcomeText,
+      supportText,
+      intentText,
+      outcomeSegments,
+      roleSeparated: true,
       confidence: clamp(selected[0]?.score || 0.08, 0, 1, 0.08)
     };
   };
@@ -6061,19 +6782,97 @@ const MODE_PROFILES = Object.freeze({
       ...ensureArray(evidence.allLines || evidence.all_lines).map(line => sanitizeEvidenceLine(line, 520)).filter(Boolean)
     ], 12);
     const allText = compact(stripNarrativeTags(sanitizeEvidenceBody(evidence.allText || evidence.all_text || '')), 14000);
+    const roles = ensureArray(evidence.roles).map(role => compact(role, 24)).slice(0, lines.length);
+    const explicitlySeparated = evidence.roleSeparated === true
+      || Object.prototype.hasOwnProperty.call(evidence, 'outcomeLines')
+      || Object.prototype.hasOwnProperty.call(evidence, 'outcomeText')
+      || Object.prototype.hasOwnProperty.call(evidence, 'intentLines')
+      || Object.prototype.hasOwnProperty.call(evidence, 'intentText');
+    let outcomeLines = uniq(ensureArray(evidence.outcomeLines || evidence.outcome_lines)
+      .map(line => sanitizeEvidenceLine(line, 520)).filter(Boolean), 12);
+    let supportLines = uniq(ensureArray(evidence.supportLines || evidence.support_lines)
+      .map(line => sanitizeEvidenceLine(line, 520)).filter(Boolean), 12);
+    let intentLines = uniq(ensureArray(evidence.intentLines || evidence.intent_lines)
+      .map(line => sanitizeEvidenceLine(line, 520)).filter(Boolean), 12);
+    if (!explicitlySeparated) {
+      lines.forEach((line, index) => {
+        const role = roles[index] || roles[0] || '';
+        if (/user|human/i.test(role)) intentLines.push(line);
+        else outcomeLines.push(line);
+      });
+      outcomeLines = uniq(outcomeLines.length ? outcomeLines : allLines, 12);
+      supportLines = uniq(supportLines.length ? supportLines : outcomeLines, 12);
+      intentLines = uniq(intentLines, 12);
+    }
+    const outcomeTextRaw = evidence.outcomeText || evidence.outcome_text || '';
+    const supportTextRaw = evidence.supportText || evidence.support_text || '';
+    const intentTextRaw = evidence.intentText || evidence.intent_text || '';
+    const outcomeText = compact(
+      stripNarrativeTags(sanitizeEvidenceBody(outcomeTextRaw || outcomeLines.join('\n'))),
+      14000
+    );
+    const supportText = compact(
+      stripNarrativeTags(sanitizeEvidenceBody(supportTextRaw || supportLines.join('\n') || outcomeText)),
+      14000
+    );
+    const intentText = compact(
+      stripNarrativeTags(sanitizeEvidenceBody(intentTextRaw || intentLines.join('\n'))),
+      14000
+    );
     return {
       mode: evidence.mode || 'packet_neighbor_excerpt',
       messageIndex: Number.isFinite(Number(evidence.messageIndex)) ? Number(evidence.messageIndex) : null,
       lines,
       allLines,
       allText,
-      roles: ensureArray(evidence.roles).map(role => compact(role, 24)).slice(0, lines.length),
+      roles,
+      outcomeLines,
+      supportLines,
+      intentLines,
+      authoritativeUserLines: uniq(ensureArray(evidence.authoritativeUserLines || evidence.authoritative_user_lines)
+        .map(line => sanitizeEvidenceLine(line, 520)).filter(Boolean), 6),
+      outcomeText,
+      supportText,
+      intentText,
+      outcomeSegments: ensureArray(evidence.outcomeSegments || evidence.outcome_segments)
+        .filter(segment => objectish(segment) && segment.text)
+        .slice(0, 24)
+        .map((segment, index) => ({
+          order: Number.isFinite(Number(segment.order)) ? Number(segment.order) : index,
+          role: compact(segment.role || '', 24),
+          kind: /^(?:asserted|negated|nonassertive)$/.test(text(segment.kind)) ? text(segment.kind) : 'asserted',
+          text: sanitizeEvidenceLine(segment.text, 520)
+        }))
+        .filter(segment => segment.text),
+      roleSeparated: explicitlySeparated,
       confidence: clamp(evidence.confidence, 0, 1, 0.08)
     };
   };
+  const packetEvidenceOutcomeText = evidence => {
+    const normalized = evidence?.outcomeLines && Object.prototype.hasOwnProperty.call(evidence, 'roleSeparated')
+      ? evidence
+      : normalizeSourceEvidence(evidence);
+    if (!normalized) return '';
+    return text(normalized.outcomeText || ensureArray(normalized.outcomeLines).join('\n')).trim();
+  };
+  const packetEvidenceIntentText = evidence => {
+    const normalized = evidence?.intentLines && Object.prototype.hasOwnProperty.call(evidence, 'roleSeparated')
+      ? evidence
+      : normalizeSourceEvidence(evidence);
+    if (!normalized) return '';
+    return text(normalized.intentText || ensureArray(normalized.intentLines).join('\n')).trim();
+  };
+  const packetEvidenceSupportText = evidence => {
+    const normalized = evidence?.supportLines && Object.prototype.hasOwnProperty.call(evidence, 'roleSeparated')
+      ? evidence
+      : normalizeSourceEvidence(evidence);
+    if (!normalized) return '';
+    return text(normalized.supportText || ensureArray(normalized.supportLines).join('\n')).trim();
+  };
   const filterSourceEvidenceForRow = (evidence, axis, category, subject = '', value = {}) => {
     const normalized = normalizeSourceEvidence(evidence);
-    if (!normalized?.lines?.length) return null;
+    const evidenceLines = uniq(normalized?.outcomeLines || [], 12);
+    if (!normalized || !evidenceLines.length) return null;
     const body = [
       subject,
       category,
@@ -6085,8 +6884,8 @@ const MODE_PROFILES = Object.freeze({
     if (!rowTokens.length) return null;
     const rowConcepts = conceptTokensForText(body);
     const rowFrames = semanticFrameTokensForText(body);
-    const scored = mergeValues([normalized.lines, normalized.allLines], 12).map((line, index) => {
-      const role = normalized.roles?.[index] || '';
+    const scored = evidenceLines.map((line, index) => {
+      const role = normalized.authoritativeUserLines?.includes(line) ? 'user' : 'assistant';
       return {
         line,
         role,
@@ -6100,6 +6899,13 @@ const MODE_PROFILES = Object.freeze({
     return {
       ...normalized,
       lines: selected.map(item => item.line),
+      allLines: evidenceLines,
+      allText: packetEvidenceOutcomeText(normalized),
+      outcomeLines: evidenceLines,
+      outcomeText: packetEvidenceOutcomeText(normalized),
+      intentLines: [],
+      intentText: '',
+      roleSeparated: true,
       roles: selected.map(item => item.role),
       confidence: clamp(Math.max(normalized.confidence || 0, selected[0]?.score || 0), 0, 1, normalized.confidence || 0.08)
     };
@@ -8851,9 +9657,7 @@ const MODE_PROFILES = Object.freeze({
 
   const packetRecordVisibleEvidenceText = (sourceMeta = {}) => {
     const evidence = normalizeSourceEvidence(sourceMeta?.sourceEvidence);
-    const primary = text(evidence?.allText || '').trim();
-    const fallback = mergeValues([evidence?.allLines, evidence?.lines], 24).join('\n');
-    return sanitizeEvidenceBody(primary || fallback);
+    return sanitizeEvidenceBody(packetEvidenceOutcomeText(evidence));
   };
   const packetRecordItemBody = value => compact(itemText(value), 1400);
   const packetRecordTerms = value => uniq(tokenize(value, 180)
@@ -15357,6 +16161,20 @@ const MODE_PROFILES = Object.freeze({
       ? { ...settings, requestLineage: null }
       : settings
   );
+  const promptCacheModeOf = settings => {
+    const mode = text(settings?.promptCache || DEFAULT_SETTINGS.promptCache).trim().toLowerCase();
+    return ['off', 'structural', 'native'].includes(mode) ? mode : DEFAULT_SETTINGS.promptCache;
+  };
+  const packetCacheStableSettings = (settings = Memory.settings || DEFAULT_SETTINGS) => ({
+    memoryLanguage: normalizeMemoryLanguage(settings?.memoryLanguage || DEFAULT_SETTINGS.memoryLanguage),
+    requestPressure: 'normal',
+    requestLineage: null,
+    packetRecoveryRequest: null,
+    sceneBaton: null,
+    sceneAnchors: null,
+    packetHealth: null,
+    outputContract: null
+  });
   const packetRequestLineageInstruction = settings => {
     const lineage = requestPacketLineageObject(settings);
     if (!lineage) return '';
@@ -15374,51 +16192,98 @@ const MODE_PROFILES = Object.freeze({
     const locale = memoryNoteLocale(configured);
     return `Write all human-readable JSON values in ${locale.promptLabel}. Only meta.summary_memory.recallAliases may carry compact ko/en/ja/zh paraphrases of the same fact; each paraphrase must add no new detail. Preserve JSON keys, enum tokens, refs, names, and canonical anchors.`;
   };
-  const packetMultilingualRecallAliasExample = () => ({
-    ko: ['[형식 예시: 실제 한국어 검색 별칭으로 교체]'],
-    en: ['[format example: replace with an actual English recall phrase]'],
-    ja: ['[形式例：実際の日本語検索別名に置換]'],
-    zh: ['[格式示例：替换为实际中文检索别名]']
-  });
-  const packetLanguageExampleText = language => {
-    const normalized = normalizeMemoryLanguage(language);
-    if (normalized === 'ko') return {
-      turnAnchor: '[형식 예시—현재 증거의 실제 변화로 교체]',
-      summary: '[형식 예시—확립된 연속성만 작성]',
-      recallAnchor: '[형식 예시—원문 표현 또는 canonical_token으로 교체]'
+  const packetActiveSceneIdForSettings = settings => {
+    const sceneBaton = objectish(settings?.sceneBaton) ? settings.sceneBaton : {};
+    const explicit = compact(sceneBaton.sceneId || settings?.sceneAnchors?.sceneId || '', 120);
+    if (explicit) return explicit;
+    const epoch = compact(sceneBaton.sceneEpoch || '', 96);
+    return epoch ? `epoch:${epoch}` : '';
+  };
+  const minimalPacketSkeletonObject = (
+    settings = Memory.settings || DEFAULT_SETTINGS,
+    packetType = 'current_snapshot'
+  ) => {
+    const type = packetType === 'recovery_snapshot' ? 'recovery_snapshot' : 'current_snapshot';
+    const lineage = requestPacketLineageObject(settings);
+    const packet = {
+      meta: {
+        schema: HAYAKU_PACKET_SCHEMA_V2.schema,
+        packet_type: type,
+        packet_schema_rev: HAYAKU_PACKET_SCHEMA_V2.revision,
+        scene_id: packetActiveSceneIdForSettings(settings),
+        turn_anchor: '',
+        confidence: 0.2,
+        summary_memory: {
+          summary: '',
+          recallAnchors: [],
+          recallAliases: {},
+          canonicalAnchors: [],
+          mentionedEntityNames: [],
+          confidence: 0.2
+        }
+      },
+      entity: {},
+      world: {},
+      narrative: {},
+      planner: {},
+      importance: { overall: 0.1, reason: [] }
     };
-    if (normalized === 'ja') return {
-      turnAnchor: '[形式例—現在の根拠にある実際の変化へ置換]',
-      summary: '[形式例—確立済みの連続性だけを記録]',
-      recallAnchor: '[形式例—原文表現またはcanonical_tokenへ置換]'
-    };
-    if (normalized === 'zh') return {
-      turnAnchor: '[格式示例—替换为当前证据中的实际变化]',
-      summary: '[格式示例—仅记录已确立的连续性]',
-      recallAnchor: '[格式示例—替换为原文表达或canonical_token]'
-    };
-    return {
-      turnAnchor: '[format example—replace with an actual evidence-backed change]',
-      summary: '[format example—write only established continuity]',
-      recallAnchor: '[format example—replace with a source phrase or canonical_token]'
-    };
+    if (lineage) packet.meta.lineage = lineage;
+    return packet;
   };
   const packetExampleForSettings = (baseExample = TAIL_CURRENT_PACKET_EXAMPLE, settings = Memory.settings || DEFAULT_SETTINGS) => {
-    const parsed = safeJsonParse(baseExample, {});
-    const lineage = requestPacketLineageObject(settings);
-    if (lineage && objectish(parsed?.meta)) parsed.meta.lineage = lineage;
-    if (objectish(parsed?.meta)) {
-      const configured = normalizeMemoryLanguage(settings?.memoryLanguage || DEFAULT_SETTINGS.memoryLanguage);
-      const effective = configured === 'source' ? 'en' : configured;
-      const localized = packetLanguageExampleText(effective);
-      parsed.meta.turn_anchor = localized.turnAnchor;
-      if (objectish(parsed.meta.summary_memory)) {
-        parsed.meta.summary_memory.summary = localized.summary;
-        parsed.meta.summary_memory.recallAnchors = [localized.recallAnchor];
-        parsed.meta.summary_memory.recallAliases = packetMultilingualRecallAliasExample();
-      }
+    const type = recoveryPacketTypeOf(safeJsonParse(baseExample, {})) === 'recovery_snapshot'
+      ? 'recovery_snapshot'
+      : 'current_snapshot';
+    return JSON.stringify(minimalPacketSkeletonObject(settings, type));
+  };
+  const buildPacketHealthRepairHint = (settings = Memory.settings || DEFAULT_SETTINGS) => {
+    const health = objectish(settings?.packetHealth) ? settings.packetHealth : {};
+    const repairs = [];
+    const add = value => {
+      if (value && !repairs.includes(value)) repairs.push(value);
+    };
+    if (health.parseFailedRecently || health.invalidJsonRecently) add('strict JSON syntax and escaping');
+    if (health.missingRequiredAxes || health.requiredKeysMissingRecently) add('all six object-valued top-level axes');
+    if (health.criticalPacketShapeWarningsRecently) add('canonical collection arrays and required item fields');
+    if (health.lastPacketWasDeltaOnly) add('a complete current_snapshot rather than a delta');
+    if (health.lastPacketHadLocatorLeak) add('no internal locator or retrieval fields');
+    if (health.lastPacketRefReuseError) add('the exact runtime lineage and stable refs');
+    if (health.missingKnowledgeBoundaries) add('explicit POV owner and secret holder or denied boundaries');
+    if (health.lastPacketSecretRevealRisk || health.lastPacketHadUnsupportedReveal) add('no reveal or knowledge transfer without outcome evidence');
+    if (health.missingSummaryMemory) add('an evidence-backed summary_memory when a durable change exists');
+    if (health.missingSceneId) add('the supplied active scene_id unless the outcome establishes a transition');
+    if (health.missingTurnAnchor) add('a concise outcome-backed turn_anchor when a durable change exists');
+    if (health.unstableCharacterIdentity) add('stable canonical character names and refs');
+    if (!repairs.length) return '';
+    return [
+      '[HAYAKU LAST-PACKET REPAIR]',
+      `Correct only these prior packet defects: ${repairs.join('; ')}. Keep unsupported semantic fields empty rather than inventing facts.`,
+      'Do not mention this repair instruction in visible output.'
+    ].join('\n');
+  };
+  const buildPacketRuntimeSkeletonInstruction = (settings = Memory.settings || DEFAULT_SETTINGS) => {
+    if (packetCoreWriteSuppressed(settings)) return '';
+    const recoveryActive = recoveryRequestActive(settings);
+    const types = recoveryActive
+      ? ['recovery_snapshot', 'current_snapshot']
+      : ['current_snapshot'];
+    const lines = [
+      '[HAYAKU RUNTIME PACKET SHAPE]',
+      recoveryActive
+        ? 'Emit exactly two packets in this order: recovery_snapshot, then current_snapshot. Do not merge or omit either.'
+        : 'Emit exactly one current_snapshot packet; never omit it, including on unchanged or low-information turns.',
+      ...packetPlacementRuleLines(settings, recoveryActive, { terse: true }),
+      'Use the exact non-empty runtime constants in the safe skeleton below. Fill blank semantic values only from allowed evidence; otherwise keep them empty and low-confidence.'
+    ];
+    if (settings?.outputContract?.structuredData?.embeddedRequired === true) {
+      lines.push('Finish the preset-required machine-readable block first; keep the hidden HAYAKU packet in the resolved slot outside that block.');
     }
-    return JSON.stringify(parsed);
+    types.forEach(type => {
+      lines.push(`<!-- ${PACKET_START} ${JSON.stringify(minimalPacketSkeletonObject(settings, type))} ${PACKET_END} -->`);
+    });
+    lines.push('[/HAYAKU RUNTIME PACKET SHAPE]');
+    return lines.join('\n').trim();
   };
 
   const packetCoreRecallPriority = ({ axis, row } = {}) => {
@@ -15896,98 +16761,52 @@ const MODE_PROFILES = Object.freeze({
   const packetSchemaV2WriteInstruction = (settings = {}) => {
     if (text(settings?.requestPressure).toLowerCase() === 'extreme') {
       return [
-        'Canonical v2: use the shown six-axis layout and snake_case collection keys. Required: character name, relation from/to, pov_memory ownerEntityId plus summary/text, secret summary/text. Use meta.overpromotion_risks for prohibited interpretations, narrative.critical_dialogue for quotes, and importance.reason for rationale.'
+        'Schema/revision: meta.schema="hayaku_packet_v1" and meta.packet_schema_rev=2. Use object-valued meta, entity, world, narrative, planner, and importance with canonical snake_case collection keys.',
+        'Required item fields: character.name; relation.from/to; pov_memory.ownerEntityId plus summary/text; secret.summary/text; critical_dialogue.text/quote. Use meta.overpromotion_risks for prohibited interpretations.'
       ];
     }
     return [
-    `Canonical v2: meta[summary_memory, ${HAYAKU_PACKET_SCHEMA_V2.canonicalCollections.meta.join(', ')}, optional consent_memory]; entity[${HAYAKU_PACKET_SCHEMA_V2.canonicalCollections.entity.join(', ')}]; world[state scalars, ${HAYAKU_PACKET_SCHEMA_V2.canonicalCollections.world.join(', ')}]; narrative[state scalars, ${HAYAKU_PACKET_SCHEMA_V2.canonicalCollections.narrative.join(', ')}]; planner[${HAYAKU_PACKET_SCHEMA_V2.canonicalCollections.planner.join(', ')}]. Use these locations and snake_case collection keys.`,
-    'Required: character name; relation from/to; pov_memory ownerEntityId plus summary/text; secret summary/text; critical_dialogue text/quote and speaker when known.',
-    'Use meta.overpromotion_risks for prohibited interpretations, narrative.critical_dialogue for quotes, importance.reason for rationale. summary_memory: summary, recallAnchors, recallAliases, canonicalAnchors, mentionedEntityNames, directEvidenceSnippets, related_refs, compression_seed, confidence, importance, salience, status, time_scope. No filler.'
-    ];
-  };
-  const packetFinalSilentCheckLines = (recoveryActive = false) => {
-    const count = recoveryActive
-      ? 'exactly two packets in recovery_snapshot then current_snapshot order'
-      : 'exactly one current_snapshot packet';
-    return [
-      '## FINAL SILENT CHECK',
-      `Validate silently: (1) ${count}; (2) strict JSON parses with all six top-level keys; (3) every fact has an allowed source, with no invented event, emotion, relationship change, knowledge, or future; (4) values use the configured memory language and only recallAliases are multilingual; (5) no format-example placeholder or control text was copied; (6) the sequence occupies the resolved slot and ends with the correct marker.`,
-      'Do not print the checklist, validation notes, scores, or schema commentary. Complete visible content under the active preset, then append only the required hidden packet sequence.'
+      'Schema/revision: meta.schema="hayaku_packet_v1" and meta.packet_schema_rev=2.',
+      `Canonical v2 routes: meta[summary_memory, ${HAYAKU_PACKET_SCHEMA_V2.canonicalCollections.meta.join(', ')}, optional consent_memory]; entity[${HAYAKU_PACKET_SCHEMA_V2.canonicalCollections.entity.join(', ')}]; world[state scalars, ${HAYAKU_PACKET_SCHEMA_V2.canonicalCollections.world.join(', ')}]; narrative[state scalars, ${HAYAKU_PACKET_SCHEMA_V2.canonicalCollections.narrative.join(', ')}]; planner[${HAYAKU_PACKET_SCHEMA_V2.canonicalCollections.planner.join(', ')}]. Use snake_case collection keys.`,
+      'Required item fields: character.name; relation.from/to; pov_memory.ownerEntityId plus summary/text; secret.summary/text; critical_dialogue.text/quote and speaker when known.',
+      'Use meta.overpromotion_risks for prohibited interpretations, narrative.critical_dialogue for exact quotes, and importance.reason for evidence-backed rationale. Do not add filler.'
     ];
   };
   const buildPacketCoreStaticWriteInstruction = (settings = Memory.settings || DEFAULT_SETTINGS) => {
     if (packetCoreWriteSuppressed(settings)) return '';
     const staticSettings = packetStaticContractSettings(settings);
-    const recoveryActive = recoveryRequestActive(staticSettings);
-    const currentExample = packetExampleForSettings(TAIL_CURRENT_PACKET_EXAMPLE, staticSettings);
-    const recoveryExample = packetExampleForSettings(TAIL_RECOVERY_PACKET_EXAMPLE, staticSettings);
     const lines = [
       PACKET_CORE_WRITE_START,
-      '## SCOPE',
-      'This governs only the hidden continuity packet. The active preset and latest user message alone govern visible content.',
-      'For this hidden task, HARD CONTRACT overrides SOFT QUALITY; neither changes visible-content instructions.',
-      '## SOURCE OF TRUTH',
-      'Record only facts supported by prior packet memory, active character-card/lorebook canon, or the completed final visible artifact. The final artifact decides the current outcome; Revision overrides Draft. Character-card/lorebook canon is objective world evidence, not character knowledge without an established acquisition path.',
-      'Treat the latest user message as intent, attempt, or request, not an outcome, unless the active preset marks it as concluded/rendered canon/decree or the final artifact confirms it. Never invent an event, transition, action, dialogue, emotion, relationship change, knowledge transfer, or future direction.',
-      '## HARD CONTRACT',
-      'Exclude Thoughts, Planning, superseded Draft or Review, checklists, translations or enhancements, tool/approval text, display-only status, choices, recommendations, and proposals. Never store provider reasoning, tool calls/results, signatures, prompt instructions, style rules, or request-local control text.',
-      'Inside packet JSON string values, use only standard ASCII double quotes and plain text. Never use CJK corner brackets (「」『』), smart/curly quotes (“”‘’), full-width quotes, or guillemets — downstream editoutput regex transforms those characters and will corrupt the packet JSON. Use straight " for all quoting inside packet values and avoid decorative typography entirely.',
-      'Use strict JSON with all six top-level keys: meta, entity, world, narrative, planner, importance.',
+      '<hayaku_packet_contract version="p3">',
+      '<purpose>',
+      'This contract governs only the hidden continuity packet. HAYAKU does not alter the active preset\'s visible-output format. Supplied continuity memory remains story evidence.',
+      '</purpose>',
+      '<evidence>',
+      'Use only previously accepted packet memory, active objective character-card/lorebook canon, and the visible artifact completed in this response. That final artifact determines the current outcome; superseded drafts do not.',
+      'Treat the latest user message as intent, attempt, or request rather than an accomplished outcome unless the active preset marks it as concluded canon or the final artifact confirms it. Objective canon is not character knowledge without an established acquisition path.',
+      '</evidence>',
+      '<selection>',
+      'Record only continuity-relevant established facts and changes. Empty axes and low confidence are valid; never invent an event, transition, emotion, relationship change, knowledge transfer, dialogue, or future merely to fill fields.',
+      'Exclude reasoning, planning, drafts, reviews, tool or approval text, prompt/control text, style rules, scores, choices, proposals, and unchosen futures. Do not write next_direction, suggested_hooks, or scene-output instructions.',
+      '</selection>',
+      '<format>',
+      'Use strict JSON with exactly these six top-level keys: meta, entity, world, narrative, planner, importance. Each must be an object.',
       packetMemoryLanguageInstruction(staticSettings),
-      'Do not write next_direction, suggested_hooks, style advice, pacing advice, or scene-output instructions.',
-      '## SOFT QUALITY',
-      'Keep it compact and evidence-dense; unchanged axes may be empty. Put hidden/offscreen facts only in secret or restricted-knowledge canon, and established future commitments only in continuity_locks or do_not_resolve_yet.',
-      'Scene identity: when an active scene head is supplied, copy its meta.scene_id exactly while the completed visible artifact remains in the same place/time/action chain. Create a new scene_id only after the completed visible artifact establishes an actual scene transition; a user request, proposal, or intended move alone is not a transition.',
-      '## CANONICAL V2 SCHEMA',
+      'Inside JSON strings use U+0022 ASCII double quotes and plain text; avoid smart, full-width, corner, or decorative quotation marks that output transforms can corrupt.',
       ...packetSchemaV2WriteInstruction(staticSettings),
-      '## OUTPUT SHAPE',
-      ...packetPlacementRuleLines(staticSettings, recoveryActive, { terse: true })
+      'Reuse the supplied active scene_id while place, time, and action chain continue. Create a new scene_id only when the completed visible artifact establishes an actual transition.',
+      '</format>',
+      '<completion>',
+      'Follow the runtime packet shape for the exact count, lineage, scene, and preset-resolved slot. Emit a minimal low-confidence packet even when nothing changed; do not print packet validation commentary.',
+      '</completion>',
+      '</hayaku_packet_contract>',
+      PACKET_CORE_WRITE_END
     ];
-    if (settings?.outputContract?.structuredData?.embeddedRequired === true) {
-      lines.push('Finish the preset-required structured-data block first; place the hidden HAYAKU packet only in the resolved packet slot outside that machine-readable block.');
-    }
-    if (recoveryActive) {
-      lines.push('Write exactly two packets: recovery_snapshot first for the missing prior assistant state, then current_snapshot for the state after this response. Do not merge them.');
-      lines.push('The packets below show JSON shape only. Replace all values with allowed current evidence; never copy or paraphrase bracketed format-example placeholders.');
-      lines.push(`<!-- ${PACKET_START} ${recoveryExample} ${PACKET_END} -->`);
-      lines.push(`<!-- ${PACKET_START} ${currentExample} ${PACKET_END} -->`);
-    } else {
-      lines.push('Write exactly one current_snapshot packet. If nothing changed, emit a minimal low-confidence packet rather than fabricating change.');
-      lines.push('The packet below shows JSON shape only. Replace all values with allowed current evidence; never copy or paraphrase bracketed format-example placeholders.');
-      lines.push(`<!-- ${PACKET_START} ${currentExample} ${PACKET_END} -->`);
-    }
-    lines.push(...packetFinalSilentCheckLines(recoveryActive));
-    lines.push(PACKET_CORE_WRITE_END);
     return lines.join('\n').trim();
   };
 
   const compactPacketExampleForSettings = (settings = {}, packetType = 'current_snapshot') => {
-    const recovery = packetType === 'recovery_snapshot';
-    const packet = {
-      meta: {
-        schema: 'hayaku_packet_v1',
-        packet_type: recovery ? 'recovery_snapshot' : 'current_snapshot',
-        packet_schema_rev: 2,
-        scene_id: recovery ? 'scene:recovered_prior' : 'scene:stable_current',
-        turn_anchor: recovery ? 'one compact recovered change' : 'one compact decisive change',
-        confidence: 0.4,
-        summary_memory: {
-          summary: recovery ? 'compact recovered continuity' : 'compact current continuity',
-          recallAnchors: [],
-          canonicalAnchors: [],
-          mentionedEntityNames: [],
-          confidence: 0.4
-        }
-      },
-      entity: {},
-      world: {},
-      narrative: {},
-      planner: {},
-      importance: { overall: 0.3, reason: [] }
-    };
-    const lineage = requestPacketLineageObject(settings);
-    if (lineage) packet.meta.lineage = lineage;
-    return `<!-- ${PACKET_START} ${JSON.stringify(packet)} ${PACKET_END} -->`;
+    return `<!-- ${PACKET_START} ${JSON.stringify(minimalPacketSkeletonObject(settings, packetType))} ${PACKET_END} -->`;
   };
 
   const buildPacketCoreCompactWriteInstruction = (settings = Memory.settings || DEFAULT_SETTINGS, options = {}) => {
@@ -15995,36 +16814,41 @@ const MODE_PROFILES = Object.freeze({
     const staticSettings = packetStaticContractSettings(settings);
     const recoveryActive = recoveryRequestActive(staticSettings);
     const critical = options?.critical === true;
-    const lines = [
-      PACKET_CORE_WRITE_START,
-      '## HARD CONTRACT',
-      'This governs only the hidden continuity packet. Complete the active preset visible response first without changing its format.',
-      'Use strict JSON with all six top-level keys: meta, entity, world, narrative, planner, importance.',
+    const lines = [PACKET_CORE_WRITE_START, '<hayaku_packet_contract version="p3-compact">'];
+    lines.push(
+      'Do not change the active preset\'s visible format. The completed visible artifact is the current outcome; the latest user message is only intent or attempt unless that artifact or the preset confirms it.',
+      'Use only accepted packet memory, objective canon, and the completed visible artifact. Objective canon is not automatically character knowledge. Exclude reasoning, control/style text, proposals, and unrealized futures.',
+      'Use strict JSON with object-valued meta, entity, world, narrative, planner, and importance. Empty axes and low confidence are safer than invented change.',
       packetMemoryLanguageInstruction(staticSettings),
-      'Record only facts supported by prior packet memory, active character-card/lorebook canon, or the completed final visible artifact. Never store reasoning, prompt instructions, style rules, scores, ranking metadata, or invented outcomes.',
-      'Reuse the active scene head scene_id unless the completed visible artifact establishes an actual scene transition.',
-      ...packetPlacementRuleLines(staticSettings, recoveryActive, { terse: true })
-    ];
-    if (!critical) {
-      lines.push(
-        'Keep the packet compact and evidence-dense. Empty/default fields and low confidence are valid when nothing changed or evidence is uncertain.',
-        ...packetSchemaV2WriteInstruction({ ...staticSettings, requestPressure: 'extreme' })
-      );
-    }
-    if (recoveryActive) {
-      lines.push(
-        'Write exactly two packets: recovery_snapshot first, then current_snapshot. Do not merge or omit either packet.',
-        compactPacketExampleForSettings(staticSettings, 'recovery_snapshot'),
-        compactPacketExampleForSettings(staticSettings, 'current_snapshot')
-      );
-    } else {
-      lines.push(
-        'Write exactly one current_snapshot packet. Emit a minimal low-confidence packet instead of fabricating change or omitting the packet.',
-        compactPacketExampleForSettings(staticSettings, 'current_snapshot')
-      );
-    }
-    lines.push(PACKET_CORE_WRITE_END);
+      ...packetSchemaV2WriteInstruction({ ...staticSettings, requestPressure: 'extreme' }),
+      'Reuse the supplied scene_id unless the completed artifact establishes a transition.'
+    );
+    if (!critical) lines.push('Keep only later-useful continuity; do not copy filler, validation commentary, or request-local instructions.');
+    lines.push('</hayaku_packet_contract>', PACKET_CORE_WRITE_END);
     return lines.join('\n').trim();
+  };
+
+  const packetCacheStaticContract = (settings = Memory.settings || DEFAULT_SETTINGS, profile = CACHE_STATIC_PROFILE_FULL) => {
+    const normalizedProfile = [CACHE_STATIC_PROFILE_FULL, CACHE_STATIC_PROFILE_COMPACT, CACHE_STATIC_PROFILE_CRITICAL].includes(profile)
+      ? profile
+      : CACHE_STATIC_PROFILE_FULL;
+    const stableSettings = packetCacheStableSettings(settings);
+    const contract = normalizedProfile === CACHE_STATIC_PROFILE_FULL
+      ? buildPacketCoreStaticWriteInstruction(stableSettings)
+      : buildPacketCoreCompactWriteInstruction(stableSettings, { critical: normalizedProfile === CACHE_STATIC_PROFILE_CRITICAL });
+    const contractCoreHash = stableHash64(contract);
+    const envelopeStart = `${CACHE_STATIC_START_PREFIX} profile=${normalizedProfile} schema=${HAYAKU_PACKET_SCHEMA_V2.revision} lang=${stableSettings.memoryLanguage} contract=${contractCoreHash}]`;
+    const value = [envelopeStart, contract, CACHE_STATIC_END].filter(Boolean).join('\n').trim();
+    return {
+      profile: normalizedProfile,
+      text: value,
+      hash: stableHash64(value),
+      contractCoreHash,
+      chars: value.length,
+      estimatedTokens: Math.ceil(value.length / 4),
+      schemaRevision: HAYAKU_PACKET_SCHEMA_V2.revision,
+      memoryLanguage: stableSettings.memoryLanguage
+    };
   };
 
   const packetTerminalFinalSealLine = (settings = Memory.settings || DEFAULT_SETTINGS, recoveryActive = false) => {
@@ -16047,40 +16871,14 @@ const MODE_PROFILES = Object.freeze({
   const buildPacketTerminalCompletionSeal = (settings = Memory.settings || DEFAULT_SETTINGS, options = {}) => {
     if (packetCoreWriteSuppressed(settings)) return '';
     const recoveryActive = recoveryRequestActive(settings);
-    const critical = options?.critical === true;
-    const compactMode = critical || options?.compact === true;
     const packetRequirement = recoveryActive
-      ? 'the required two-packet sequence (recovery_snapshot first, current_snapshot second)'
-      : 'the required one-packet current_snapshot sequence';
-    const plan = recoveryActive
-      ? '[HAYAKU THREE-PART COMPLETION PLAN]'
-      : '[HAYAKU TWO-PART COMPLETION PLAN]';
-    if (critical) {
-      return [
-        SIDE_WRITE_TAIL_MARKER,
-        `${plan} Finish the active-preset visible output, then ${packetRequirement}; do not stop early.`,
-        'Visible output and the hidden packet are both mandatory; neither replaces the other.',
-        'Packet JSON must contain meta, entity, world, narrative, planner, and importance.',
-        packetTerminalFinalSealLine(settings, recoveryActive)
-      ].join('\n').trim();
-    }
+      ? 'exactly two packets (recovery_snapshot first, current_snapshot second)'
+      : 'exactly one current_snapshot packet';
     const lines = [
       SIDE_WRITE_TAIL_MARKER,
-      `${plan} Before generation, reserve output space for the complete active-preset visible response and ${packetRequirement}. Do not stop after the visible response.`,
-      '[HAYAKU PRESET + PACKET CUMULATIVE COMPLETION: REQUIRED]',
-      'Complete every visible-output obligation from the active preset first, including any required visible tags, asset/media commands, interfaces, wrappers, or structured blocks. HAYAKU adds no visible format and must not alter, suppress, or replace them.',
-      `The visible deliverable and ${packetRequirement} are cumulative requirements; neither replaces the other.`,
-      `The response is complete only after the visible deliverable and ${packetRequirement} are written.`,
-      'If the visible response is already complete but the required packet appendix is missing, continue immediately with the packet appendix.',
-      'Use strict JSON with meta, entity, world, narrative, planner, and importance. If uncertain or unchanged, emit a compact low-confidence packet instead of inventing change or omitting it.'
+      `Complete every active-preset visible obligation and emit ${packetRequirement} in the resolved slot; neither replaces the other and the response is incomplete without both.`,
+      packetTerminalFinalSealLine(settings, recoveryActive)
     ];
-    if (!compactMode) {
-      lines.push(
-        'Never skip the packet for a simple, short, unchanged, emotional, dialogue-only, or low-information turn.',
-        'Before stopping, silently verify that all active-preset visible obligations are complete, the required packet count is exact, the JSON parses, and the resolved final placement is satisfied.'
-      );
-    }
-    lines.push(packetTerminalFinalSealLine(settings, recoveryActive));
     return lines.join('\n').trim();
   };
 
@@ -16148,11 +16946,34 @@ const MODE_PROFILES = Object.freeze({
     capChars = 0
   } = {}) => {
     const cap = Math.max(0, Number(capChars || 0) || 0);
+    const structuralCache = promptCacheModeOf(settings) !== 'off';
     const outputContractSuppressed = packetCoreWriteSuppressed(settings);
-    const fullStaticWrite = buildPacketCoreStaticWriteInstruction(settings);
-    const compactStaticWrite = buildPacketCoreCompactWriteInstruction(settings);
-    const criticalStaticWrite = buildPacketCoreCompactWriteInstruction(settings, { critical: true });
-    const lineageInstruction = packetRequestLineageInstruction(settings);
+    const staticCandidates = structuralCache
+      ? [
+          packetCacheStaticContract(settings, CACHE_STATIC_PROFILE_FULL),
+          packetCacheStaticContract(settings, CACHE_STATIC_PROFILE_COMPACT),
+          packetCacheStaticContract(settings, CACHE_STATIC_PROFILE_CRITICAL)
+        ]
+      : [
+          { profile: CACHE_STATIC_PROFILE_FULL, text: buildPacketCoreStaticWriteInstruction(settings) },
+          { profile: CACHE_STATIC_PROFILE_COMPACT, text: buildPacketCoreCompactWriteInstruction(settings) },
+          { profile: CACHE_STATIC_PROFILE_CRITICAL, text: buildPacketCoreCompactWriteInstruction(settings, { critical: true }) }
+        ].map(candidate => ({
+          ...candidate,
+          hash: stableHash64(candidate.text),
+          chars: candidate.text.length,
+          estimatedTokens: Math.ceil(candidate.text.length / 4)
+        }));
+    const [fullStaticContract, compactStaticContract, criticalStaticContract] = staticCandidates;
+    const fullStaticWrite = fullStaticContract.text;
+    const compactStaticWrite = compactStaticContract.text;
+    const criticalStaticWrite = criticalStaticContract.text;
+    const healthRepairHint = buildPacketHealthRepairHint(settings);
+    const runtimeSkeletonInstruction = buildPacketRuntimeSkeletonInstruction(settings);
+    // Keep the legacy diagnostic field as an alias for one release; the exact
+    // lineage now lives once inside the runtime skeleton rather than in a
+    // separate repeated instruction.
+    const lineageInstruction = runtimeSkeletonInstruction;
     const fullTerminalSeal = buildPacketTerminalCompletionSeal(settings);
     const compactTerminalSeal = buildPacketTerminalCompletionSeal(settings, { compact: true });
     const criticalTerminalSeal = buildPacketTerminalCompletionSeal(settings, { critical: true });
@@ -16160,7 +16981,7 @@ const MODE_PROFILES = Object.freeze({
     const selectedRowKeys = uniq(packetCoreRows.map(({ axis, row }) => packetCoreRecallDeliveryRowKey(axis, row)).filter(Boolean), 128);
     const atomicMinimumChars = outputContractSuppressed
       ? 0
-      : packetCoreJoinLength([criticalStaticWrite, lineageInstruction, criticalTerminalSeal]);
+      : packetCoreJoinLength([criticalStaticWrite, healthRepairHint, runtimeSkeletonInstruction, criticalTerminalSeal]);
     const inactive = reason => ({
       active: false,
       reason,
@@ -16169,10 +16990,15 @@ const MODE_PROFILES = Object.freeze({
       outputContractSuppressed,
       fullStaticWrite,
       fullLineageInstruction: lineageInstruction,
+      fullRuntimeSkeletonInstruction: runtimeSkeletonInstruction,
+      healthRepairHint,
       fullTerminalSeal,
       packetCoreRows,
       staticWrite: '',
+      staticProfile: '',
+      staticContractHash: '',
       lineageInstruction: '',
+      runtimeSkeletonInstruction: '',
       terminalSeal: '',
       sceneBatonText: '',
       memoryContextResult: emptyPacketCoreMemoryResult(selectedRowKeys),
@@ -16185,35 +17011,53 @@ const MODE_PROFILES = Object.freeze({
     });
     if (outputContractSuppressed) return inactive('structured_output_only');
     if (cap <= 0) return inactive('insufficient_context_budget');
-    if (!criticalStaticWrite || !criticalTerminalSeal || atomicMinimumChars <= 0 || atomicMinimumChars > cap) {
+    if (!criticalStaticWrite || !runtimeSkeletonInstruction || !criticalTerminalSeal || atomicMinimumChars <= 0 || atomicMinimumChars > cap) {
       return inactive('insufficient_context_budget');
     }
 
     const terminalSeal = [fullTerminalSeal, compactTerminalSeal, criticalTerminalSeal]
-      .find(candidate => candidate && packetCoreJoinLength([criticalStaticWrite, lineageInstruction, candidate]) <= cap)
+      .find(candidate => candidate && packetCoreJoinLength([criticalStaticWrite, healthRepairHint, runtimeSkeletonInstruction, candidate]) <= cap)
       || criticalTerminalSeal;
-    const sceneBudget = packetCoreAvailablePartChars([], [criticalStaticWrite, lineageInstruction, terminalSeal], cap);
-    let sceneBatonText = fitPacketCoreWholeLinesToBudget(sceneBaton?.text || '', sceneBudget, 2);
-    const memoryBudgetWithCritical = packetCoreAvailablePartChars(
-      [sceneBatonText],
-      [criticalStaticWrite, lineageInstruction, terminalSeal],
-      cap
-    );
-    const desiredMemoryFloor = packetCoreRows.length
-      ? Math.min(PACKET_CORE_MIN_MEMORY_CHARS, memoryBudgetWithCritical)
-      : 0;
-    const staticWrite = [fullStaticWrite, compactStaticWrite, criticalStaticWrite]
-      .find(candidate => candidate
-        && packetCoreJoinLength([sceneBatonText, candidate, lineageInstruction, terminalSeal]) <= cap
-        && packetCoreAvailablePartChars(
-          [sceneBatonText],
-          [candidate, lineageInstruction, terminalSeal],
-          cap
-        ) >= desiredMemoryFloor)
-      || criticalStaticWrite;
+    let sceneBatonText = '';
+    let selectedStaticContract = criticalStaticContract;
+    if (structuralCache) {
+      // Cache profile changes invalidate the provider prefix. Exhaust the
+      // variable scene/recall allowance before lowering full -> compact -> critical.
+      selectedStaticContract = staticCandidates.find(candidate => candidate.text
+        && packetCoreJoinLength([candidate.text, healthRepairHint, runtimeSkeletonInstruction, terminalSeal]) <= cap)
+        || criticalStaticContract;
+      const sceneBudget = packetCoreAvailablePartChars(
+        [],
+        [selectedStaticContract.text, healthRepairHint, runtimeSkeletonInstruction, terminalSeal],
+        cap
+      );
+      sceneBatonText = fitPacketCoreWholeLinesToBudget(sceneBaton?.text || '', sceneBudget, 2);
+    } else {
+      // Preserve the v2.3.26 off-mode budget and byte layout exactly.
+      const sceneBudget = packetCoreAvailablePartChars([], [criticalStaticWrite, healthRepairHint, runtimeSkeletonInstruction, terminalSeal], cap);
+      sceneBatonText = fitPacketCoreWholeLinesToBudget(sceneBaton?.text || '', sceneBudget, 2);
+      const memoryBudgetWithCritical = packetCoreAvailablePartChars(
+        [sceneBatonText],
+        [criticalStaticWrite, healthRepairHint, runtimeSkeletonInstruction, terminalSeal],
+        cap
+      );
+      const desiredMemoryFloor = packetCoreRows.length
+        ? Math.min(PACKET_CORE_MIN_MEMORY_CHARS, memoryBudgetWithCritical)
+        : 0;
+      selectedStaticContract = staticCandidates
+        .find(candidate => candidate.text
+          && packetCoreJoinLength([sceneBatonText, candidate.text, healthRepairHint, runtimeSkeletonInstruction, terminalSeal]) <= cap
+          && packetCoreAvailablePartChars(
+            [sceneBatonText],
+            [candidate.text, healthRepairHint, runtimeSkeletonInstruction, terminalSeal],
+            cap
+          ) >= desiredMemoryFloor)
+        || criticalStaticContract;
+    }
+    const staticWrite = selectedStaticContract.text;
     let memoryBudgetChars = packetCoreAvailablePartChars(
       [sceneBatonText],
-      [staticWrite, lineageInstruction, terminalSeal],
+      [staticWrite, healthRepairHint, runtimeSkeletonInstruction, terminalSeal],
       cap
     );
     const contextSettings = {
@@ -16230,28 +17074,36 @@ const MODE_PROFILES = Object.freeze({
       memoryBlock = '';
     }
 
-    let block = packetCoreJoinParts([sceneBatonText, memoryBlock, staticWrite, lineageInstruction]);
-    let totalChars = packetCoreJoinLength([sceneBatonText, memoryBlock, staticWrite, lineageInstruction, terminalSeal]);
+    let block = packetCoreJoinParts(structuralCache
+      ? [sceneBatonText, memoryBlock, healthRepairHint, runtimeSkeletonInstruction]
+      : [sceneBatonText, memoryBlock, staticWrite, healthRepairHint, runtimeSkeletonInstruction]);
+    let totalChars = packetCoreJoinLength([sceneBatonText, memoryBlock, staticWrite, healthRepairHint, runtimeSkeletonInstruction, terminalSeal]);
     let budgetSafeFallbackApplied = false;
     if (totalChars > cap && memoryBlock) {
       budgetSafeFallbackApplied = true;
       memoryContextResult = emptyPacketCoreMemoryResult(memoryContextResult?.selectedRowKeys || selectedRowKeys);
       memoryBlock = '';
       memoryBudgetChars = 0;
-      block = packetCoreJoinParts([sceneBatonText, staticWrite, lineageInstruction]);
-      totalChars = packetCoreJoinLength([sceneBatonText, staticWrite, lineageInstruction, terminalSeal]);
+      block = packetCoreJoinParts(structuralCache
+        ? [sceneBatonText, healthRepairHint, runtimeSkeletonInstruction]
+        : [sceneBatonText, staticWrite, healthRepairHint, runtimeSkeletonInstruction]);
+      totalChars = packetCoreJoinLength([sceneBatonText, staticWrite, healthRepairHint, runtimeSkeletonInstruction, terminalSeal]);
     }
     if (totalChars > cap && sceneBatonText) {
       budgetSafeFallbackApplied = true;
       sceneBatonText = '';
-      block = packetCoreJoinParts([staticWrite, lineageInstruction]);
-      totalChars = packetCoreJoinLength([staticWrite, lineageInstruction, terminalSeal]);
+      block = packetCoreJoinParts(structuralCache
+        ? [healthRepairHint, runtimeSkeletonInstruction]
+        : [staticWrite, healthRepairHint, runtimeSkeletonInstruction]);
+      totalChars = packetCoreJoinLength([staticWrite, healthRepairHint, runtimeSkeletonInstruction, terminalSeal]);
     }
     if (totalChars > cap) {
       budgetSafeFallbackApplied = true;
-      block = packetCoreJoinParts([criticalStaticWrite, lineageInstruction]);
-      totalChars = packetCoreJoinLength([criticalStaticWrite, lineageInstruction, criticalTerminalSeal]);
-      if (totalChars > cap) return inactive('atomic_contract_fit_failed');
+      block = packetCoreJoinParts(structuralCache
+        ? [healthRepairHint, runtimeSkeletonInstruction]
+        : [criticalStaticWrite, healthRepairHint, runtimeSkeletonInstruction]);
+      totalChars = packetCoreJoinLength([criticalStaticWrite, healthRepairHint, runtimeSkeletonInstruction, criticalTerminalSeal]);
+      if (totalChars > cap) return inactive('insufficient_context_budget');
       return {
         active: true,
         reason: 'atomic_critical_fallback',
@@ -16260,10 +17112,15 @@ const MODE_PROFILES = Object.freeze({
         outputContractSuppressed,
         fullStaticWrite,
         fullLineageInstruction: lineageInstruction,
+        fullRuntimeSkeletonInstruction: runtimeSkeletonInstruction,
+        healthRepairHint,
         fullTerminalSeal,
         packetCoreRows,
         staticWrite: criticalStaticWrite,
+        staticProfile: criticalStaticContract.profile,
+        staticContractHash: criticalStaticContract.hash,
         lineageInstruction,
+        runtimeSkeletonInstruction,
         terminalSeal: criticalTerminalSeal,
         sceneBatonText: '',
         memoryContextResult: emptyPacketCoreMemoryResult(selectedRowKeys),
@@ -16283,10 +17140,15 @@ const MODE_PROFILES = Object.freeze({
       outputContractSuppressed,
       fullStaticWrite,
       fullLineageInstruction: lineageInstruction,
+      fullRuntimeSkeletonInstruction: runtimeSkeletonInstruction,
+      healthRepairHint,
       fullTerminalSeal,
       packetCoreRows,
       staticWrite,
+      staticProfile: selectedStaticContract.profile,
+      staticContractHash: selectedStaticContract.hash,
       lineageInstruction,
+      runtimeSkeletonInstruction,
       terminalSeal,
       sceneBatonText,
       memoryContextResult,
@@ -16301,12 +17163,53 @@ const MODE_PROFILES = Object.freeze({
 
   const buildPacketCoreWriteInstruction = (settings = Memory.settings || DEFAULT_SETTINGS) => {
     const staticContract = buildPacketCoreStaticWriteInstruction(settings);
-    const lineageInstruction = packetRequestLineageInstruction(settings);
+    const healthRepairHint = buildPacketHealthRepairHint(settings);
+    const runtimeSkeletonInstruction = buildPacketRuntimeSkeletonInstruction(settings);
     const terminalSeal = buildPacketTerminalCompletionSeal(settings);
-    return [staticContract, lineageInstruction, terminalSeal].filter(Boolean).join('\n\n').trim();
+    return [staticContract, healthRepairHint, runtimeSkeletonInstruction, terminalSeal].filter(Boolean).join('\n\n').trim();
   };
 
-  const injectPrompt = (messages = [], block = '', tail = '', settings = Memory.settings || DEFAULT_SETTINGS) => {
+  const findHayakuStableSystemPrefixBoundary = (messages = []) => {
+    const list = ensureArray(messages);
+    const prefixBreakReasons = [];
+    let index = 0;
+    for (; index < list.length; index += 1) {
+      const message = list[index];
+      const role = roleOf(message).toLowerCase();
+      if (!/^(?:system|developer)$/.test(role)) {
+        prefixBreakReasons.push(`role:${role || 'unknown'}@${index}`);
+        break;
+      }
+      const body = messageContent(message);
+      if (!body.trim() && !hasOpaqueProviderPayload(message)) {
+        prefixBreakReasons.push(`empty_system@${index}`);
+        break;
+      }
+      if (/(?:\b(?:nonce|request_nonce|generated_at|timestamp|scene_id|logical_turn_id)\b\s*[:=]|\[HAYAKU (?:PACKET MEMORY|RUNTIME|LAST-PACKET)|\[FLASHBACK (?:MEMORY|RUNTIME))/i.test(body)) {
+        prefixBreakReasons.push(`dynamic_system@${index}`);
+        break;
+      }
+    }
+    if (index >= list.length) prefixBreakReasons.push('end_of_messages');
+    return { index, prefixBreakReasons };
+  };
+
+  const promptInjectionIndex = messages => {
+    const clean = ensureArray(messages);
+    const resolved = resolveHayakuCurrentTurn(clean);
+    if (Number(resolved?.index) >= 0) {
+      const requestedIndex = Number(resolved.index);
+      const terminalPrefillIndex = Number(resolved?.terminalPrefillIndex ?? findHayakuTerminalAssistantPrefillIndex(clean));
+      const strongResolution = /(?:wrapper|provenance)/i.test(`${resolved?.source || ''} ${resolved?.confidence || ''}`);
+      return !strongResolution && terminalPrefillIndex >= 0 && requestedIndex > terminalPrefillIndex
+        ? terminalPrefillIndex
+        : requestedIndex;
+    }
+    const terminalPrefillIndex = findHayakuTerminalAssistantPrefillIndex(clean);
+    return terminalPrefillIndex >= 0 ? terminalPrefillIndex : clean.length;
+  };
+
+  const injectPromptDetailed = (messages = [], block = '', tail = '', settings = Memory.settings || DEFAULT_SETTINGS, staticText = '') => {
     const sourceMessages = ensureArray(messages);
     const clean = sourceMessages
       .filter(msg => !shouldDropOutgoingMessage(msg))
@@ -16315,28 +17218,67 @@ const MODE_PROFILES = Object.freeze({
         const body = messageContent(msg);
         return body.trim() || hasOpaqueProviderPayload(msg);
       });
-    if (!block && !(settings?.allowTailOnly === true && tail)) return clean;
-    const insertAt = (() => {
-      const resolved = resolveHayakuCurrentTurn(clean);
-      if (Number(resolved?.index) >= 0) {
-        const requestedIndex = Number(resolved.index);
-        const terminalPrefillIndex = Number(resolved?.terminalPrefillIndex ?? findHayakuTerminalAssistantPrefillIndex(clean));
-        const strongResolution = /(?:wrapper|provenance)/i.test(`${resolved?.source || ''} ${resolved?.confidence || ''}`);
-        return !strongResolution && terminalPrefillIndex >= 0 && requestedIndex > terminalPrefillIndex
-          ? terminalPrefillIndex
-          : requestedIndex;
-      }
-      const terminalPrefillIndex = findHayakuTerminalAssistantPrefillIndex(clean);
-      if (terminalPrefillIndex >= 0) return terminalPrefillIndex;
-      return clean.length;
-    })();
     const ownedContext = [text(block).trim(), text(tail).trim()].filter(Boolean).join('\n\n');
-    return [
-      ...clean.slice(0, insertAt),
-      { role: 'user', content: ownedContext, memo: RUNTIME_CONTEXT_MEMO },
-      ...clean.slice(insertAt)
+    const configuredMode = promptCacheModeOf(settings);
+    const structural = configuredMode !== 'off' && text(staticText).includes(CACHE_STATIC_END);
+    if (!ownedContext && !structural) {
+      return { messages: clean, diagnostics: { configuredMode, effectiveMode: 'off', staticIndex: -1, dynamicIndex: -1, prefixBreakReasons: ['empty_injection'] } };
+    }
+    if (!structural) {
+      const dynamicIndex = promptInjectionIndex(clean);
+      return {
+        messages: [
+          ...clean.slice(0, dynamicIndex),
+          { role: 'user', content: ownedContext, memo: RUNTIME_CONTEXT_MEMO },
+          ...clean.slice(dynamicIndex)
+        ],
+        diagnostics: {
+          configuredMode,
+          effectiveMode: 'off',
+          staticIndex: -1,
+          dynamicIndex,
+          staticRole: '',
+          dynamicRole: 'user',
+          prefixBreakReasons: ['legacy_single_message']
+        }
+      };
+    }
+    const boundary = findHayakuStableSystemPrefixBoundary(clean);
+    const staticIndex = boundary.index;
+    const withStatic = [
+      ...clean.slice(0, staticIndex),
+      { role: 'system', content: text(staticText).trim(), memo: CACHE_STATIC_CONTEXT_MEMO },
+      ...clean.slice(staticIndex)
     ];
+    const dynamicIndex = promptInjectionIndex(withStatic);
+    const output = [
+      ...withStatic.slice(0, dynamicIndex),
+      { role: 'user', content: ownedContext, memo: RUNTIME_CONTEXT_MEMO },
+      ...withStatic.slice(dynamicIndex)
+    ];
+    const staticPrefix = output.slice(0, staticIndex + 1).map(message => ({ role: roleOf(message), content: messageContent(message) }));
+    const canonicalPrefix = canonicalPromptCacheStringify(staticPrefix);
+    return {
+      messages: output,
+      diagnostics: {
+        configuredMode,
+        effectiveMode: configuredMode,
+        staticIndex,
+        dynamicIndex,
+        staticRole: 'system',
+        dynamicRole: 'user',
+        staticPrefixHash: stableHash64(canonicalPrefix),
+        staticPrefixChars: canonicalPrefix.length,
+        staticPrefixEstimatedTokens: Math.ceil(canonicalPrefix.length / 4),
+        firstDynamicDivergenceIndex: canonicalPrefix.length,
+        prefixBreakReasons: boundary.prefixBreakReasons
+      }
+    };
   };
+
+  const injectPrompt = (messages = [], block = '', tail = '', settings = Memory.settings || DEFAULT_SETTINGS, staticText = '') => (
+    injectPromptDetailed(messages, block, tail, settings, staticText).messages
+  );
 
   const handleBeforeRequest = async (messages = [], requestType = 'model') => {
     const startedAt = now();
@@ -16964,10 +17906,13 @@ const MODE_PROFILES = Object.freeze({
         requestLineage,
         sceneBaton
       };
-      const fullStaticWrite = stage('buildPacketCoreStaticWrite', () => buildPacketCoreStaticWriteInstruction(promptSettings));
-      const fullLineageInstruction = stage('buildPacketRequestLineage', () => packetRequestLineageInstruction(promptSettings));
+      const fullStaticWrite = stage('buildPacketCoreStaticWrite', () => promptCacheModeOf(promptSettings) === 'off'
+        ? buildPacketCoreStaticWriteInstruction(promptSettings)
+        : packetCacheStaticContract(promptSettings, CACHE_STATIC_PROFILE_FULL).text);
+      const fullHealthRepairHint = stage('buildPacketHealthRepairHint', () => buildPacketHealthRepairHint(promptSettings));
+      const fullRuntimeSkeletonInstruction = stage('buildPacketRuntimeSkeleton', () => buildPacketRuntimeSkeletonInstruction(promptSettings));
+      const fullLineageInstruction = fullRuntimeSkeletonInstruction;
       const fullTerminalSeal = stage('buildPacketTerminalSeal', () => buildPacketTerminalCompletionSeal(promptSettings));
-      const fullWriteInstruction = [fullStaticWrite, fullLineageInstruction, fullTerminalSeal].filter(Boolean).join('\n\n').trim();
       const selfAnchorChars = 0;
       const adaptiveCapChars = adaptiveInjectionCap(promptMode, budgetMessages, hostContextBudget);
       const injectionCapChars = adaptiveCapChars;
@@ -17006,6 +17951,10 @@ const MODE_PROFILES = Object.freeze({
       const tailChars = text(tail).length;
       const lineageInstruction = packetBudgetPlan.lineageInstruction || '';
       const lineageInstructionChars = text(lineageInstruction).length;
+      const runtimeSkeletonInstruction = packetBudgetPlan.runtimeSkeletonInstruction || lineageInstruction;
+      const runtimeSkeletonChars = text(runtimeSkeletonInstruction).length;
+      const healthRepairHint = packetBudgetPlan.healthRepairHint || '';
+      const healthRepairHintChars = text(healthRepairHint).length;
       const sceneBatonText = packetBudgetPlan.sceneBatonText || '';
       const sceneBatonChars = sceneBatonText.length;
       const packetCoreRows = ensureArray(packetBudgetPlan.packetCoreRows);
@@ -17016,12 +17965,81 @@ const MODE_PROFILES = Object.freeze({
         ...promptSettings,
         promptMode,
         injectionCapChars,
-        tailReserveChars: tailChars + lineageInstructionChars + sceneBatonChars + staticWriteChars + selfAnchorChars,
+        tailReserveChars: tailChars + runtimeSkeletonChars + healthRepairHintChars + sceneBatonChars + staticWriteChars + selfAnchorChars,
         allowTailOnly: packetWriteActive
       };
       let memoryContextResult = packetBudgetPlan.memoryContextResult || emptyPacketCoreMemoryResult();
       let memoryBlock = text(packetBudgetPlan.memoryBlock || '');
       const block = packetBudgetPlan.block || '';
+      const injectionResult = stage('injectPrompt', () => injectPromptDetailed(
+        messages,
+        block,
+        tail,
+        contextSettings,
+        promptCacheModeOf(promptSettings) === 'off' ? '' : staticWrite
+      ));
+      const configuredPromptCacheMode = promptCacheModeOf(promptSettings);
+      const effectivePromptCacheMode = configuredPromptCacheMode === 'off' ? 'off' : 'structural';
+      const previousStaticProfile = text(Memory.promptCache.staticProfile || '');
+      const cacheSafety = {
+        configuredMode: configuredPromptCacheMode,
+        effectiveMode: effectivePromptCacheMode,
+        nativeAlias: configuredPromptCacheMode === 'native',
+        nativePolicy: Memory.promptCache.nativePolicy,
+        nativeUnavailableReason: configuredPromptCacheMode === 'native' ? Memory.promptCache.nativeReason : '',
+        staticProfile: packetBudgetPlan.staticProfile || '',
+        previousStaticProfile,
+        profileChanged: Boolean(previousStaticProfile && previousStaticProfile !== packetBudgetPlan.staticProfile),
+        profileChangeReason: previousStaticProfile && previousStaticProfile !== packetBudgetPlan.staticProfile
+          ? `budget_profile_change:${previousStaticProfile}->${packetBudgetPlan.staticProfile}`
+          : '',
+        contractHash: packetBudgetPlan.staticContractHash || stableHash64(staticWrite),
+        staticChars: staticWriteChars,
+        staticEstimatedTokens: Math.ceil(staticWriteChars / 4),
+        staticIndex: Number(injectionResult.diagnostics?.staticIndex ?? -1),
+        dynamicIndex: Number(injectionResult.diagnostics?.dynamicIndex ?? -1),
+        staticRole: text(injectionResult.diagnostics?.staticRole || ''),
+        dynamicRole: text(injectionResult.diagnostics?.dynamicRole || ''),
+        staticPrefixHash: text(injectionResult.diagnostics?.staticPrefixHash || ''),
+        staticPrefixChars: Number(injectionResult.diagnostics?.staticPrefixChars || 0),
+        staticPrefixEstimatedTokens: Number(injectionResult.diagnostics?.staticPrefixEstimatedTokens || 0),
+        firstDynamicDivergenceIndex: Number(injectionResult.diagnostics?.firstDynamicDivergenceIndex ?? -1),
+        prefixBreakReasons: ensureArray(injectionResult.diagnostics?.prefixBreakReasons),
+        interceptorRegistered: Memory.promptCache.registered === true,
+        interceptorPermission: Memory.promptCache.permission,
+        interceptorRunCount: Memory.promptCache.runCount,
+        interceptorAppliedCount: Memory.promptCache.appliedCount,
+        providerFamily: Memory.promptCache.lastProviderFamily,
+        apiShape: Memory.promptCache.lastApiShape,
+        interceptorTypeHash: Memory.promptCache.lastInterceptorTypeHash,
+        transportClass: Memory.promptCache.lastTransportClass,
+        directProviderProven: Memory.promptCache.lastDirectProviderProven,
+        providerEvidence: Memory.promptCache.lastProviderEvidence,
+        nativeSkipReason: Memory.promptCache.lastSkipReason,
+        breakpointApplied: Memory.promptCache.lastBreakpointApplied,
+        cacheKeyHash: Memory.promptCache.lastCacheKeyHash,
+        existingUserCacheConfigPreserved: Memory.promptCache.lastExistingConfigPreserved,
+        belowEstimatedProviderMinimum: Memory.promptCache.lastBelowEstimatedProviderMinimum,
+        contractAttested: Memory.promptCache.lastContractAttested
+      };
+      Object.assign(Memory.promptCache, {
+        configuredMode: cacheSafety.configuredMode,
+        effectiveMode: cacheSafety.effectiveMode,
+        nativeAlias: cacheSafety.nativeAlias,
+        nativePolicy: cacheSafety.nativePolicy,
+        nativeUnavailableReason: cacheSafety.nativeUnavailableReason,
+        staticProfile: cacheSafety.staticProfile,
+        contractHash: cacheSafety.contractHash,
+        staticChars: cacheSafety.staticChars,
+        staticEstimatedTokens: cacheSafety.staticEstimatedTokens,
+        staticIndex: cacheSafety.staticIndex,
+        dynamicIndex: cacheSafety.dynamicIndex,
+        staticPrefixHash: cacheSafety.staticPrefixHash,
+        staticPrefixChars: cacheSafety.staticPrefixChars,
+        staticPrefixEstimatedTokens: cacheSafety.staticPrefixEstimatedTokens,
+        firstDynamicDivergenceIndex: cacheSafety.firstDynamicDivergenceIndex,
+        prefixBreakReasons: cacheSafety.prefixBreakReasons
+      });
       const blockBudgetChars = Math.max(0, injectionCapChars - tailChars);
       const injectedPacketCoreRows = ensureArray(memoryContextResult?.deliveredRowKeys).length;
       const recallDelivery = {
@@ -17118,6 +18136,11 @@ const MODE_PROFILES = Object.freeze({
         lineageInstructionChars,
         fullLineageInstructionChars: text(fullLineageInstruction).length,
         lineageInstructionPreserved: !requestLineage || (packetWriteActive && lineageInstructionChars > 0),
+        runtimeSkeletonChars,
+        fullRuntimeSkeletonChars: text(fullRuntimeSkeletonInstruction).length,
+        runtimeSkeletonPreserved: packetCoreWriteSuppressed(promptSettings) || (packetWriteActive && runtimeSkeletonChars > 0),
+        healthRepairHintChars,
+        fullHealthRepairHintChars: text(fullHealthRepairHint).length,
         terminalSealChars: tailChars,
         fullTerminalSealChars: text(fullTerminalSeal).length,
         terminalSealBudgetTrimmed: text(fullTerminalSeal).length > tailChars,
@@ -17131,6 +18154,7 @@ const MODE_PROFILES = Object.freeze({
         packetWriteSuppressedInsufficientContext: !packetWriteActive && packetBudgetPlan.reason === 'insufficient_context_budget',
         atomicPacketContractMinChars: Number(packetBudgetPlan.atomicMinimumChars || 0),
         atomicPacketContractPreserved: packetBudgetPlan.atomicContractPreserved === true,
+        cacheSafety,
         captureOriginRegistered: Boolean(captureOrigin),
         injectedRuntimePrompt: {
           memo: RUNTIME_CONTEXT_MEMO,
@@ -17281,7 +18305,7 @@ const MODE_PROFILES = Object.freeze({
         previousTurnRecallBridge: previousTurnRecallBridge?.active === true ? previousTurnRecallBridge.reason : '',
         selected: Object.fromEntries(Object.entries(selectedForModel).map(([axis, rows]) => [axis, rows.length]))
       });
-      return injectPrompt(messages, block, tail, contextSettings);
+      return injectionResult.messages;
     } catch (error) {
       const detail = debugError('beforeRequest_failed', error, {
         requestType,
@@ -22536,6 +23560,7 @@ const MODE_PROFILES = Object.freeze({
         displayHandler: clone(Memory.displayHandler, {}),
         afterRequest: clone(Memory.afterRequest, {}),
         outputHandler: clone(Memory.outputHandler, {}),
+        promptCache: clone(Memory.promptCache, {}),
         lastStorageCapture: clone(Memory.lastStorageCapture, null),
         lastStorageBinding: clone(Memory.lastStorageBinding, null),
         capturePersistence: {
@@ -22653,6 +23678,18 @@ const MODE_PROFILES = Object.freeze({
         buildPacketRecoveryDebt,
         detectPacketRecovery,
         injectPrompt,
+        injectPromptDetailed,
+        findHayakuStableSystemPrefixBoundary,
+        promptCacheModeOf,
+        packetCacheStaticContract,
+        canonicalPromptCacheStringify,
+        promptCacheTransportInfo,
+        detectPromptCacheProvider,
+        attestPromptCacheStaticContract,
+        transformPromptCacheBody,
+        applyOpenAIPromptCache,
+        applyAnthropicPromptCache,
+        promptCachePrefixFingerprint,
         stripHayakuDisplayArtifacts,
         detectOutputContract,
         packetPlacementOf,
@@ -22660,6 +23697,9 @@ const MODE_PROFILES = Object.freeze({
         packetMemoryLanguageInstruction,
         packetSchemaV2WriteInstruction,
         packetExampleForSettings,
+        minimalPacketSkeletonObject,
+        buildPacketRuntimeSkeletonInstruction,
+        buildPacketHealthRepairHint,
         buildPacketCoreMemoryContext,
         buildPacketCoreMemoryContextDetailed,
         packetCoreRecallRows,
@@ -22728,6 +23768,9 @@ const MODE_PROFILES = Object.freeze({
         explicitQueryTopicSegments,
         applyExplicitMultiTopicCoverage,
         buildPacketCoverageSourceEvidence,
+        packetEvidenceOutcomeText,
+        packetEvidenceIntentText,
+        packetEvidenceSupportText,
         packetRecordVisibleEvidenceText,
         canonicalizePacketSchemaV2,
         lightweightPacketRaw,
@@ -22794,6 +23837,15 @@ const MODE_PROFILES = Object.freeze({
       if (!registered) {
         console.warn(`[HAYAKU] beforeRequest participation disabled: ${Memory.replacer.registerError || 'registration_failed'}`);
       }
+      const configuredPromptCacheMode = promptCacheModeOf(Memory.settings);
+      Memory.promptCache.permission = 'not_requested';
+      Memory.promptCache.registered = false;
+      Memory.promptCache.registerAttempted = false;
+      Memory.promptCache.registerError = configuredPromptCacheMode === 'off'
+        ? 'disabled_by_setting'
+        : configuredPromptCacheMode === 'native'
+          ? 'native_reserved_structural_alias'
+          : 'structural_mode';
       const afterRequestRegistered = await RisuCompat.addAfterRequest((content, requestType) =>
         captureHayakuOutput(content, 'afterRequest', requestType)
       );
