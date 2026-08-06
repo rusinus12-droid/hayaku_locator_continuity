@@ -1,8 +1,8 @@
 //@name hayaku_locator_continuity
-//@display-name HAYAKU · Locator Continuity v2.3.29
+//@display-name HAYAKU · Locator Continuity v2.3.32
 //@author rusinus12@gmail.com
 //@api 3.0
-//@version 2.3.29
+//@version 2.3.32
 //@allowed-ipc flashback_hayaku_bridge
 //@update-url https://raw.githubusercontent.com/rusinus12-droid/hayaku_locator_continuity/main/hayaku_locator_continuity.js
 //@arg hayaku_enabled string true|false
@@ -91,7 +91,14 @@
   }
 
   const PLUGIN_NAME = 'HAYAKU';
-  const PLUGIN_VERSION = '2.3.29';
+  const PLUGIN_VERSION = '2.3.32';
+  const HAYAKU_PACKET_AUTHORING_PROFILE_SCHEMA = 'hayaku-packet-authoring-profile-v1';
+  const HAYAKU_PACKET_AUTHORING_ALIAS_LANGUAGES = Object.freeze(['ko', 'en', 'ja', 'zh']);
+  const HAYAKU_CANONICAL_ANCHOR_PREFIXES = Object.freeze([
+    'object', 'color', 'place', 'position', 'relation', 'state', 'info', 'time',
+    'intent', 'emotion', 'event', 'promise', 'person', 'entity', 'world',
+    'narrative', 'story', 'locator'
+  ]);
   const LEGACY_STORAGE_PREFIXES = Object.freeze(['hayaku.v1', 'hayaku.archive.v1']);
   const TURN_WORLDLINE_VERSION = 'hayaku_turn_worldline_v2';
   const STORAGE_LEDGER_VERSION = 'hayaku_storage_ledger_v2';
@@ -6018,6 +6025,7 @@ const MODE_PROFILES = Object.freeze({
           invalidCount: 0,
           validCurrentLikeCount: 0,
           validRecoveryCount: 0,
+          validBoundRecoveryCount: 0,
           invalidReason: ''
         });
       }
@@ -6037,7 +6045,13 @@ const MODE_PROFILES = Object.freeze({
       }
       state.validCount += 1;
       const packetType = recoveryPacketTypeOf(parsed);
-      if (isRecoveryPacketType(packetType)) state.validRecoveryCount += 1;
+      if (isRecoveryPacketType(packetType)) {
+        state.validRecoveryCount += 1;
+        // Only an internally projected, active ledger record can discharge an
+        // older missing-turn debt. A recovery_snapshot found merely in the same
+        // assistant output still requires that output's current_snapshot.
+        if (packet?.recoveryTargetBound === true) state.validBoundRecoveryCount += 1;
+      }
       else state.validCurrentLikeCount += 1;
     });
     let latestAnyPacketIndex = -1;
@@ -6099,8 +6113,9 @@ const MODE_PROFILES = Object.freeze({
       const state = packetState.byMessageIndex.get(messageIndex) || {};
       const currentCount = Math.max(0, Number(state.validCurrentLikeCount || 0) || 0);
       const recoveryCount = Math.max(0, Number(state.validRecoveryCount || 0) || 0);
+      const boundRecoveryCount = Math.max(0, Number(state.validBoundRecoveryCount || 0) || 0);
       const invalidCount = Math.max(0, Number(state.invalidCount || 0) || 0);
-      if (currentCount > 0) continue;
+      if (currentCount > 0 || boundRecoveryCount > 0) continue;
       const hasUnindexedMarkers = source.hasPacketMarkers
         && Math.max(0, Number(state.total || 0) || 0) === 0;
       const issue = recoveryCount > 0
@@ -16772,6 +16787,35 @@ const MODE_PROFILES = Object.freeze({
       'Use meta.overpromotion_risks for prohibited interpretations, narrative.critical_dialogue for exact quotes, and importance.reason for evidence-backed rationale. Do not add filler.'
     ];
   };
+  const buildHayakuPacketAuthoringProfile = (settings = Memory.settings || DEFAULT_SETTINGS) => {
+    const memoryLanguage = normalizeMemoryLanguage(settings?.memoryLanguage || DEFAULT_SETTINGS.memoryLanguage);
+    const base = {
+      schema: HAYAKU_PACKET_AUTHORING_PROFILE_SCHEMA,
+      version: 1,
+      packet: {
+        schema: HAYAKU_PACKET_SCHEMA_V2.schema,
+        revision: HAYAKU_PACKET_SCHEMA_V2.revision,
+        topLevelKeys: ['meta', 'entity', 'world', 'narrative', 'planner', 'importance']
+      },
+      memoryLanguage,
+      humanReadableInstruction: packetMemoryLanguageInstruction({ ...settings, memoryLanguage }),
+      schemaInstructions: packetSchemaV2WriteInstruction(settings),
+      recallAliases: {
+        field: 'meta.summary_memory.recallAliases',
+        languages: [...HAYAKU_PACKET_AUTHORING_ALIAS_LANGUAGES],
+        mode: 'compact_same_fact_paraphrases',
+        addNewDetail: false,
+        internalOnly: true
+      },
+      canonicalAnchors: {
+        field: 'meta.summary_memory.canonicalAnchors',
+        prefixes: [...HAYAKU_CANONICAL_ANCHOR_PREFIXES],
+        preserveStableNamesAndRefs: true
+      },
+      pluginLlmCalls: 0
+    };
+    return { ...base, contractHash: stableHash64(JSON.stringify(base)) };
+  };
   const buildPacketCoreStaticWriteInstruction = (settings = Memory.settings || DEFAULT_SETTINGS) => {
     if (packetCoreWriteSuppressed(settings)) return '';
     const staticSettings = packetStaticContractSettings(settings);
@@ -19687,9 +19731,50 @@ const MODE_PROFILES = Object.freeze({
         .map(value => Number(value)).filter(Number.isFinite), PACKET_RECOVERY_MAX_CHAIN_MESSAGES)
     };
   };
+  const retireObsoletePendingCaptures = (scope, lineage, options = {}) => {
+    if (!scope?.key || !objectish(lineage)) return { retired: 0, requestSequences: [] };
+    const requestNonce = compact(lineage.requestNonce || '', 96);
+    const targetPairIndex = Math.max(1, Number(lineage.targetPairIndex || 1) || 1);
+    const recoveryTargetPairIndex = options?.recoveryRequired === true
+      ? Math.max(0, Number(
+          options?.recoveryTarget?.pairIndex
+          || options?.recoveryRequest?.recoveryDebt?.debts?.[0]?.pairIndex
+          || 0
+        ) || 0)
+      : 0;
+    const obsolete = ensureArray(Memory.pendingCaptures).filter(entry => {
+      if (entry?.scope?.key !== scope.key) return false;
+      if (requestNonce && entry?.lineage?.requestNonce === requestNonce) return false;
+      const pendingPairIndex = Math.max(0, Number(entry?.lineage?.targetPairIndex || 0) || 0);
+      return pendingPairIndex === targetPairIndex
+        || (recoveryTargetPairIndex > 0 && pendingPairIndex === recoveryTargetPairIndex);
+    });
+    if (!obsolete.length) return { retired: 0, requestSequences: [] };
+    const retiredSequences = new Set(obsolete.map(entry => Number(entry?.requestSequence || 0)).filter(Boolean));
+    obsolete.forEach(entry => {
+      stopFinalizedCaptureMonitor(entry);
+      stopFinalizedBindingMonitor(entry);
+    });
+    Memory.pendingCaptures = ensureArray(Memory.pendingCaptures)
+      .filter(entry => !retiredSequences.has(Number(entry?.requestSequence || 0)));
+    const result = {
+      at: now(),
+      scopeKey: scope.key,
+      targetPairIndex,
+      recoveryTargetPairIndex,
+      retired: retiredSequences.size,
+      requestSequences: [...retiredSequences].sort((a, b) => a - b),
+      reason: recoveryTargetPairIndex > 0
+        ? 'recovery_request_replaced_missing_capture'
+        : 'new_request_superseded_same_turn_capture'
+    };
+    pushOperationLog('capture:pending_superseded', result, 'info');
+    return result;
+  };
   const registerPendingCapture = (scope, lineage, requestType = 'model', snapshot = null, options = {}) => {
     if (!scope?.confident || !scope?.key || !objectish(lineage) || !lineage.requestNonce) return null;
     prunePendingCaptures();
+    retireObsoletePendingCaptures(scope, lineage, options);
     const existing = Memory.pendingCaptures.find(entry => (
       entry?.scope?.key === scope.key
       && entry?.lineage?.requestNonce === lineage.requestNonce
@@ -20504,6 +20589,7 @@ const MODE_PROFILES = Object.freeze({
                 records: ensureArray(ledger.records),
                 slotHeads: ensureArray(ledger.slotHeads),
                 tombstones: ensureArray(ledger.tombstones),
+                packetAuthoring: buildHayakuPacketAuthoringProfile(Memory.settings),
                 bridgeSync
               };
             }
@@ -21001,6 +21087,7 @@ const MODE_PROFILES = Object.freeze({
       ].join('\u0001'))
     };
   };
+  const finalizedCaptureTimeoutIsActionable = state => state?.incompleteReported !== true;
   const scheduleFinalizedCaptureMonitor = pending => {
     if (Memory.unloaded || !pending?.scope?.key || !pending?.lineage?.requestNonce) return false;
     const key = finalizedCaptureMonitorKey(pending);
@@ -21034,16 +21121,21 @@ const MODE_PROFILES = Object.freeze({
     const poll = async () => {
       if (Memory.unloaded || Memory.finalizedCaptureMonitors.get(key) !== state) return;
       if (now() - state.startedAt > FINALIZED_CAPTURE_MAX_AGE_MS) {
-        Memory.lastStorageCapture = {
-          at: now(),
-          source: 'finalized_live_chat',
-          scopeKey: pending.scope.key,
-          requestSequence: pending.requestSequence,
-          durable: false,
-          saved: false,
-          reason: state.incompleteReported ? 'finalized_packet_incomplete_timeout' : 'finalized_response_not_observed'
-        };
-        pushOperationLog('capture:finalized_timeout', Memory.lastStorageCapture, 'warn');
+        // A stable packetless finalized response was already reported as the
+        // actionable missing-packet event. Closing that same monitor later is
+        // cleanup, not a second capture failure.
+        if (finalizedCaptureTimeoutIsActionable(state)) {
+          Memory.lastStorageCapture = {
+            at: now(),
+            source: 'finalized_live_chat',
+            scopeKey: pending.scope.key,
+            requestSequence: pending.requestSequence,
+            durable: false,
+            saved: false,
+            reason: 'finalized_response_not_observed'
+          };
+          pushOperationLog('capture:finalized_timeout', Memory.lastStorageCapture, 'warn');
+        }
         stopFinalizedCaptureMonitor(key);
         removePendingCapture(pending);
         return;
@@ -22412,6 +22504,16 @@ const MODE_PROFILES = Object.freeze({
     return orderedRecords.map((record, recordIndex) => {
         const pair = pairByIndex.get(Number(record.targetPairIndex));
         const inherited = record?.inheritedSessionHistory === true;
+        const packetType = text(record?.packetType || 'current_snapshot').trim().toLowerCase();
+        const captureSource = text(record?.captureSource || '').trim();
+        // A recovery packet may clear historical debt only after the capture
+        // pipeline has durably attached it to that exact active turn. Live-chat
+        // discovery alone is not sufficient because a malformed recovery output
+        // may contain recovery_snapshot while omitting its own current_snapshot.
+        const recoveryTargetBound = packetType === 'recovery_snapshot'
+          && record?.recordState === 'active'
+          && Boolean(record?.ownerTurnNodeId)
+          && /^(?:afterRequest|output|finalized_live_chat|bridge_incremental_recovery)$/i.test(captureSource);
         const messageIndex = inherited ? 0 : Math.max(0, Number(pair?.assistantMessageIndex || 0) || 0);
         const distanceFromLatest = Math.max(0, messageCount - 1 - messageIndex);
         const inheritedOrdinal = Math.max(1, Number(record.historicalOrdinal || recordIndex + 1) || recordIndex + 1);
@@ -22440,8 +22542,9 @@ const MODE_PROFILES = Object.freeze({
           sourceMessageIndex: messageIndex,
           sourcePacketIndex: 0,
           capturedAt: record.capturedAt,
-          captureSource: record.captureSource || '',
-          cheapText: isBridgeAnalysisCaptureSource(record.captureSource)
+          captureSource,
+          recoveryTargetBound,
+          cheapText: isBridgeAnalysisCaptureSource(captureSource)
             ? record.raw
             : compact(record.raw, PACKET_CHEAP_TEXT_MAX)
         };
@@ -22472,7 +22575,8 @@ const MODE_PROFILES = Object.freeze({
     migrate: normalizeHayakuPacket,
     serialize: serializeHayakuPacket,
     replace: replaceHayakuPacketText,
-    strip: value => stripHayakuBlocks(value, { looseMarkers: true, preserveWhitespace: true })
+    strip: value => stripHayakuBlocks(value, { looseMarkers: true, preserveWhitespace: true }),
+    authoringProfile: () => clone(buildHayakuPacketAuthoringProfile(Memory.settings), {})
   });
 
   const HayakuMemoryNoteRuntimeApi = Object.freeze({
@@ -22857,6 +22961,7 @@ const MODE_PROFILES = Object.freeze({
     'capture:hook_budget_exceeded': '캡처 훅 시간 초과',
     'capture:finalized_timeout': '최종 응답 캡처 시간 초과',
     'capture:packet_missing': '최종 응답에서 패킷을 찾지 못함',
+    'capture:pending_superseded': '이전 캡처 감시 정리',
     'capture:finalized_saved': '최종 응답 패킷 저장 완료',
     'capture:finalized_save_failed': '최종 응답 패킷 저장 실패',
     'capture:monitor_failed': '캡처 모니터 실패',
@@ -23416,8 +23521,10 @@ const MODE_PROFILES = Object.freeze({
     },
     packet: {
       schema: HayakuPacketRuntimeApi.schema,
-      revision: HayakuPacketRuntimeApi.revision
+      revision: HayakuPacketRuntimeApi.revision,
+      authoringProfileSchema: HAYAKU_PACKET_AUTHORING_PROFILE_SCHEMA
     },
+    packetAuthoring: buildHayakuPacketAuthoringProfile(Memory.settings),
     memoryNote: {
       schema: HayakuMemoryNoteRuntimeApi.schema,
       languages: HayakuMemoryNoteRuntimeApi.languages,
@@ -23539,6 +23646,7 @@ const MODE_PROFILES = Object.freeze({
             records: ensureArray(ledger.records),
             slotHeads: ensureArray(ledger.slotHeads),
             tombstones: ensureArray(ledger.tombstones),
+            packetAuthoring: buildHayakuPacketAuthoringProfile(Memory.settings),
             bridgeSync
           }, {});
         },
@@ -23635,7 +23743,10 @@ const MODE_PROFILES = Object.freeze({
         adoptBridgeColdStartCapsule,
         completeValidHayakuPacketsFromText,
         recoveryTargetForCapture,
+        retireObsoletePendingCaptures,
+        finalizedCaptureTimeoutIsActionable,
         registerPendingCapture,
+        removePendingCapture,
         selectPendingCapture,
         expectedCapturePacketTypes,
         validateCapturedPacketGroup,
@@ -23696,6 +23807,7 @@ const MODE_PROFILES = Object.freeze({
         packetPlacementRuleLines,
         packetMemoryLanguageInstruction,
         packetSchemaV2WriteInstruction,
+        buildHayakuPacketAuthoringProfile,
         packetExampleForSettings,
         minimalPacketSkeletonObject,
         buildPacketRuntimeSkeletonInstruction,
