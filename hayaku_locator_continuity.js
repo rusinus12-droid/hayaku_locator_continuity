@@ -1,8 +1,8 @@
 //@name hayaku_locator_continuity
-//@display-name HAYAKU · Locator Continuity v2.3.33
+//@display-name HAYAKU · Locator Continuity v2.3.39
 //@author rusinus12@gmail.com
 //@api 3.0
-//@version 2.3.33
+//@version 2.3.39
 //@allowed-ipc flashback_hayaku_bridge
 //@update-url https://raw.githubusercontent.com/rusinus12-droid/hayaku_locator_continuity/main/hayaku_locator_continuity.js
 //@arg hayaku_enabled string true|false
@@ -91,7 +91,7 @@
   }
 
   const PLUGIN_NAME = 'HAYAKU';
-  const PLUGIN_VERSION = '2.3.33';
+  const PLUGIN_VERSION = '2.3.39';
   const HAYAKU_PACKET_AUTHORING_PROFILE_SCHEMA = 'hayaku-packet-authoring-profile-v1';
   const HAYAKU_PACKET_AUTHORING_ALIAS_LANGUAGES = Object.freeze(['ko', 'en', 'ja', 'zh']);
   const HAYAKU_CANONICAL_ANCHOR_PREFIXES = Object.freeze([
@@ -8221,28 +8221,60 @@ const MODE_PROFILES = Object.freeze({
     const body = text(value || '');
     const records = [];
     const seen = new Set();
-    const push = ({ rawStart, rawEnd }) => {
+    const push = ({ rawStart, rawEnd, type = '' }) => {
       const raw = body.slice(rawStart, rawEnd).trim();
       if (!raw) return;
       const hash = stableHash64(raw);
       if (seen.has(hash)) return;
       seen.add(hash);
       const parsed = safeJsonParse(raw, null);
-      const validation = objectish(parsed)
+      const originalValidation = objectish(parsed)
         ? validateHayakuPacket(parsed)
         : { ok: false, errors: ['json_parse_failed'], warnings: [] };
-      const meta = objectish(parsed?.meta) ? parsed.meta : {};
+      const normalized = objectish(parsed) ? normalizeHayakuPacket(parsed) : null;
+      const normalizedValidation = normalized
+        ? validateHayakuPacket(normalized)
+        : { ok: false, errors: ['json_parse_failed'], warnings: [] };
+      const structurallyRepairable = originalValidation.ok !== true && normalizedValidation.ok === true;
+      const effective = originalValidation.ok === true ? parsed : (structurallyRepairable ? normalized : parsed);
+      const meta = objectish(effective?.meta) ? effective.meta : {};
+      const packetType = compact(meta.packet_type || meta.packetType || 'current_snapshot', 48);
+      const semantic = (originalValidation.ok === true || structurallyRepairable)
+        ? assessPacketCaptureSemantics(effective, packetType, body)
+        : { ok: false, reason: 'structural_validation_failed', stats: {}, skeletonEcho: false, coverage: {} };
+      const normalizationRepairable = structurallyRepairable && semantic.ok === true;
+      const normalizedRaw = normalizationRepairable ? JSON.stringify(normalized) : '';
       const lineage = objectish(meta.lineage) ? meta.lineage : (objectish(meta.worldline) ? meta.worldline : {});
       records.push({
-        raw,
+        raw: originalValidation.ok === true ? raw : (normalizedRaw || raw),
+        sourceRaw: raw,
         hash,
-        valid: validation.ok === true,
-        packetType: compact(meta.packet_type || meta.packetType || 'current_snapshot', 48),
+        canonicalRawHash: normalizedRaw ? stableHash64(normalizedRaw) : hash,
+        parsed: effective,
+        valid: originalValidation.ok === true && semantic.ok === true,
+        normalizedValid: normalizedValidation.ok === true,
+        normalizationRepairable,
+        captureNormalized: normalizationRepairable,
+        markerType: type,
+        packetType,
+        semanticValid: semantic.ok === true,
+        semanticReason: semantic.reason || '',
+        skeletonEcho: semantic.skeletonEcho === true,
+        semanticSourceSignalCount: Math.max(0, Number(semantic.coverage?.sourceSignalCount || 0) || 0),
+        semanticSourceCanonicalCount: Math.max(0, Number(semantic.coverage?.sourceCanonicalCount || 0) || 0),
+        semanticCoverageScore: Number(semantic.coverage?.coverageScore ?? 1),
+        semanticVisibleChars: Math.max(0, Number(semantic.coverage?.visibleChars || 0) || 0),
+        semanticMissingCanonicalSignals: ensureArray(semantic.coverage?.missingCanonicalSignals),
+        semanticMissingKnownEntities: ensureArray(semantic.coverage?.missingKnownEntities),
+        semanticMissingSurfaceSignals: ensureArray(semantic.coverage?.missingSurfaceSignals),
+        semanticStats: semantic.stats || {},
         parentTurnNodeId: compact(lineage.parent_turn_node_id || lineage.parentTurnNodeId || '', 96),
         logicalTurnId: compact(lineage.logical_turn_id || lineage.logicalTurnId || '', 96),
         requestNonce: compact(lineage.request_nonce || lineage.requestNonce || '', 96),
-        errors: ensureArray(validation.errors),
-        warnings: ensureArray(validation.warnings)
+        errors: ensureArray(originalValidation.errors),
+        warnings: ensureArray(originalValidation.warnings),
+        normalizedErrors: ensureArray(normalizedValidation.errors),
+        normalizedWarnings: ensureArray(normalizedValidation.warnings)
       });
     };
     scanPacketMarkersInBody(body, PACKET_START, PACKET_END, 'history_html_diagnostic', push);
@@ -8294,9 +8326,18 @@ const MODE_PROFILES = Object.freeze({
       if (!/^(?:assistant|model)$/i.test(role)) return;
       const visible = canonicalHistoryText(body, role);
       const sourceMessageId = messageSourceId(message, index);
-      const packetHashes = historyPacketHashesFromBody(body);
       const packetDiagnostics = historyPacketDiagnosticsFromBody(body);
-      const lineage = historyPacketLineageFromBody(body);
+      const usablePacketDiagnostics = packetDiagnostics.filter(record => record.valid || record.normalizationRepairable);
+      const packetHashes = uniq(usablePacketDiagnostics.map(record => record.hash).filter(Boolean), 8);
+      const lineageRecord = usablePacketDiagnostics.findLast?.(record => record.packetType === 'current_snapshot')
+        || [...usablePacketDiagnostics].reverse().find(record => record.packetType === 'current_snapshot')
+        || usablePacketDiagnostics[usablePacketDiagnostics.length - 1]
+        || null;
+      const lineage = lineageRecord ? {
+        declaredParentTurnNodeId: lineageRecord.parentTurnNodeId || '',
+        declaredLogicalTurnId: lineageRecord.logicalTurnId || '',
+        requestNonce: lineageRecord.requestNonce || ''
+      } : null;
       if (!visible && !packetHashes.length) return;
       // Only a completed U+A exchange consumes a worldline ordinal. Persisted
       // assistant-only/prefill rows remain available through packet descriptors
@@ -8318,7 +8359,29 @@ const MODE_PROFILES = Object.freeze({
         validPacketHashes: packetDiagnostics.filter(record => record.valid).map(record => record.hash),
         validPacketTypes: uniq(packetDiagnostics.filter(record => record.valid).map(record => record.packetType), 8),
         validPackets: packetDiagnostics.filter(record => record.valid),
-        invalidPacketCount: packetDiagnostics.filter(record => !record.valid).length,
+        repairablePacketHashes: packetDiagnostics.filter(record => record.normalizationRepairable).map(record => record.hash),
+        repairablePackets: packetDiagnostics.filter(record => record.normalizationRepairable),
+        invalidPacketCount: packetDiagnostics.filter(record => !record.valid && !record.normalizationRepairable).length,
+        packetDiagnostics: packetDiagnostics.map(record => ({
+          hash: record.hash,
+          valid: record.valid === true,
+          normalizationRepairable: record.normalizationRepairable === true,
+          packetType: record.packetType,
+          semanticValid: record.semanticValid === true,
+          semanticReason: record.semanticReason || '',
+          skeletonEcho: record.skeletonEcho === true,
+          semanticSourceSignalCount: Math.max(0, Number(record.semanticSourceSignalCount || 0) || 0),
+          semanticSourceCanonicalCount: Math.max(0, Number(record.semanticSourceCanonicalCount || 0) || 0),
+          semanticCoverageScore: Number(record.semanticCoverageScore ?? 1),
+          semanticVisibleChars: Math.max(0, Number(record.semanticVisibleChars || 0) || 0),
+          semanticMissingCanonicalSignals: ensureArray(record.semanticMissingCanonicalSignals),
+          semanticMissingKnownEntities: ensureArray(record.semanticMissingKnownEntities),
+          semanticMissingSurfaceSignals: ensureArray(record.semanticMissingSurfaceSignals),
+          errors: ensureArray(record.errors),
+          warnings: ensureArray(record.warnings),
+          normalizedErrors: ensureArray(record.normalizedErrors),
+          normalizedWarnings: ensureArray(record.normalizedWarnings)
+        })),
         assistantMessageIdHash: stableHash64(sourceMessageId),
         assistantMessageIndex: index,
         assistantMessageTime: Math.max(0, Number(message?.time || 0) || 0),
@@ -18461,6 +18524,168 @@ const MODE_PROFILES = Object.freeze({
     return { ok: errors.length === 0 && !warnings.some(isCriticalPacketShapeWarning), errors, warnings };
   };
 
+
+  // v2.3.38 capture-semantic defense. The v2.3.33 authoring contract is
+  // unchanged. This layer only prevents structurally valid but semantically
+  // empty runtime-skeleton echoes from becoming durable memory when the
+  // finalized visible assistant artifact itself contains detectable outcome
+  // signals. It never fabricates or fills semantic content.
+  const packetAxisHasSemanticContent = (value, key = '', depth = 0) => {
+    if (depth > 8 || value == null) return false;
+    const normalizedKey = text(key).trim().toLowerCase();
+    if (/^(?:confidence|score|importance|salience|priority|pressure)$/i.test(normalizedKey)) return false;
+    if (typeof value === 'string') return text(value).trim() !== '';
+    if (typeof value === 'number') return Number.isFinite(value) && value !== 0;
+    if (typeof value === 'boolean') return value === true;
+    if (Array.isArray(value)) return value.some(item => packetAxisHasSemanticContent(item, key, depth + 1));
+    if (!objectish(value)) return false;
+    return Object.entries(value).some(([childKey, childValue]) => packetAxisHasSemanticContent(childValue, childKey, depth + 1));
+  };
+  const packetSemanticPayloadStats = (packet = {}) => {
+    const meta = objectish(packet?.meta) ? packet.meta : {};
+    const summary = objectish(meta.summary_memory) ? meta.summary_memory : {};
+    const turnAnchor = text(meta.turn_anchor || meta.turnAnchor || '').trim();
+    const summaryText = text(summary.summary || '').trim();
+    const anchors = mergeValues([summary.recallAnchors, summary.recall_anchors, summary.canonicalAnchors, summary.canonical_anchors], 64);
+    const aliases = objectish(summary.recallAliases) ? Object.values(summary.recallAliases).flatMap(value => ensureArray(value)) : [];
+    const mentioned = mergeValues([summary.mentionedEntityNames, summary.mentioned_entity_names], 48);
+    const axisContent = {
+      entity: packetAxisHasSemanticContent(packet?.entity),
+      world: packetAxisHasSemanticContent(packet?.world),
+      narrative: packetAxisHasSemanticContent(packet?.narrative),
+      planner: packetAxisHasSemanticContent(packet?.planner)
+    };
+    const semanticAxes = Object.values(axisContent).filter(Boolean).length;
+    const importanceReason = ensureArray(packet?.importance?.reason).map(value => text(value).trim()).filter(Boolean);
+    const semanticSignals = [turnAnchor, summaryText, ...anchors, ...aliases, ...mentioned, ...importanceReason]
+      .filter(value => text(value).trim()).length + semanticAxes;
+    const payloadSignals = [summaryText, ...anchors, ...aliases, ...mentioned, ...importanceReason]
+      .filter(value => text(value).trim()).length + semanticAxes;
+    return {
+      turnAnchor,
+      summaryText,
+      anchors: anchors.length,
+      aliases: aliases.length,
+      mentioned: mentioned.length,
+      semanticAxes,
+      axisContent,
+      importanceReasons: importanceReason.length,
+      semanticSignals,
+      payloadSignals,
+      metaConfidence: Number(meta.confidence || 0) || 0,
+      summaryConfidence: Number(summary.confidence || 0) || 0,
+      importanceOverall: Number(packet?.importance?.overall || 0) || 0
+    };
+  };
+  const packetIsMinimalSkeletonEcho = (packet = {}) => {
+    const stats = packetSemanticPayloadStats(packet);
+    return !stats.turnAnchor
+      && stats.payloadSignals === 0
+      && stats.metaConfidence <= 0.2
+      && stats.summaryConfidence <= 0.2
+      && stats.importanceOverall <= 0.1;
+  };
+  const captureSemanticSourceEvidenceFromText = (value = '') => {
+    const visible = canonicalHistoryText(value, 'assistant');
+    if (!visible) return { visible: '', visibleChars: 0, evidence: null };
+    const rows = visible.split(/\n+/).map(row => compact(row, 520)).filter(Boolean).slice(-12);
+    const lines = rows.length ? rows.slice(0, 3) : [compact(visible, 520)].filter(Boolean);
+    const evidence = normalizeSourceEvidence({
+      mode: 'finalized_visible_artifact_capture_gate',
+      lines,
+      allLines: rows,
+      allText: visible,
+      roles: lines.map(() => 'assistant'),
+      outcomeLines: rows,
+      supportLines: rows,
+      intentLines: [],
+      outcomeText: visible,
+      supportText: visible,
+      intentText: '',
+      outcomeSegments: rows.map((row, index) => ({ order: index, role: 'assistant', kind: 'asserted', text: row })),
+      roleSeparated: true,
+      confidence: 0.9
+    });
+    return { visible, visibleChars: visible.length, evidence };
+  };
+  const packetCaptureCoverageDiagnostics = (packet = {}, packetRaw = '', sourceText = '') => {
+    const source = captureSemanticSourceEvidenceFromText(sourceText);
+    if (!source.evidence) {
+      return {
+        active: false,
+        reason: 'visible_artifact_missing',
+        visibleChars: source.visibleChars,
+        sourceSignalCount: 0,
+        sourceCanonicalCount: 0,
+        coverageScore: 1,
+        detectableOutcome: false,
+        missingCanonicalSignals: [],
+        missingKnownEntities: [],
+        missingSurfaceSignals: []
+      };
+    }
+    const audit = buildPacketCoverageAudit(
+      {},
+      packetRaw || JSON.stringify(packet || {}),
+      packet,
+      {
+        settings: Memory.settings || DEFAULT_SETTINGS,
+        sourceEvidence: source.evidence,
+        packetHash: ''
+      },
+      {}
+    );
+    const sourceCanonicalCount = ensureArray(audit?.sourceCanonical).length;
+    const sourceSignalCount = Math.max(0, Number(audit?.sourceSignalCount || 0) || 0);
+    const detectableOutcome = source.visibleChars >= 80 && (
+      sourceCanonicalCount >= 1
+      || sourceSignalCount >= 2
+      || (sourceSignalCount >= 1 && source.visibleChars >= 320)
+    );
+    return {
+      active: audit?.active === true,
+      reason: audit?.reason || '',
+      visibleChars: source.visibleChars,
+      sourceSignalCount,
+      sourceCanonicalCount,
+      coverageScore: Number(audit?.coverageScore ?? 1),
+      detectableOutcome,
+      missingCanonicalSignals: ensureArray(audit?.missingCanonicalSignals),
+      missingKnownEntities: ensureArray(audit?.missingKnownEntities),
+      missingSurfaceSignals: ensureArray(audit?.missingSurfaceSignals).map(row => objectish(row) ? row.label || '' : text(row)).filter(Boolean),
+      restrictedRisk: audit?.restrictedRisk === true
+    };
+  };
+  const assessPacketCaptureSemantics = (packet = {}, packetType = 'current_snapshot', sourceText = '') => {
+    const stats = packetSemanticPayloadStats(packet);
+    const skeletonEcho = packetIsMinimalSkeletonEcho(packet);
+    // Recovery snapshots describe a historical target, while sourceText is the
+    // current finalized response. Without a separate target artifact, do not
+    // infer semantic incompleteness from the current response.
+    if (isRecoveryPacketType(packetType)) {
+      return {
+        ok: true,
+        reason: 'recovery_semantics_not_inferred_from_current_artifact',
+        stats,
+        skeletonEcho,
+        coverage: packetCaptureCoverageDiagnostics(packet, JSON.stringify(packet || {}), '')
+      };
+    }
+    const coverage = packetCaptureCoverageDiagnostics(packet, JSON.stringify(packet || {}), sourceText);
+    if (!coverage.detectableOutcome) {
+      return { ok: true, reason: 'no_detectable_finalized_outcome_signal', stats, skeletonEcho, coverage };
+    }
+    if (skeletonEcho) {
+      return { ok: false, reason: 'detectable_outcome_blank_skeleton', stats, skeletonEcho, coverage };
+    }
+    // A model can inflate confidence or copy a turn anchor while still leaving
+    // every semantic payload field empty. Treat that as the same failure class.
+    if (stats.payloadSignals === 0) {
+      return { ok: false, reason: 'detectable_outcome_semantic_payload_empty', stats, skeletonEcho, coverage };
+    }
+    return { ok: true, reason: 'semantic_payload_present', stats, skeletonEcho, coverage };
+  };
+
   const inspectHayakuPacketText = (value = '') => {
     const source = text(value);
     const complete = [];
@@ -19682,22 +19907,22 @@ const MODE_PROFILES = Object.freeze({
         : (adopted.changed === true ? adopted.reason : '')
     };
   };
-  const completeValidHayakuPacketsFromText = value => {
+  const packetCaptureInspectionFromText = value => {
     const source = text(value);
-    const out = [];
+    const packets = [];
+    const repairablePackets = [];
+    const semanticIncompletePackets = [];
+    const diagnostics = [];
     const seen = new Set();
-    const push = ({ rawStart, rawEnd, type }) => {
-      const raw = source.slice(rawStart, rawEnd).trim();
-      if (!raw || raw.length > STORAGE_LEDGER_MAX_PACKET_CHARS) return;
-      const hash = stableHash64(raw);
-      if (seen.has(hash)) return;
-      const parsed = safeJsonParse(raw, null);
-      const validation = objectish(parsed) ? validateHayakuPacket(parsed) : { ok: false };
-      if (!validation.ok) return;
-      seen.add(hash);
-      const meta = objectish(parsed.meta) ? parsed.meta : {};
+    const markerStartCount = (source.match(new RegExp(PACKET_START, 'gi')) || []).length;
+    const markerEndCount = (source.match(new RegExp(PACKET_END, 'gi')) || []).length;
+    let completeCount = 0;
+    let parsedCount = 0;
+    let oversizedCount = 0;
+    const packetFrom = ({ raw, hash, parsed, type, captureNormalized = false, canonicalRawHash = '' }) => {
+      const meta = objectish(parsed?.meta) ? parsed.meta : {};
       const lineage = objectish(meta.lineage) ? meta.lineage : (objectish(meta.worldline) ? meta.worldline : {});
-      out.push({
+      return {
         raw,
         hash,
         parsed,
@@ -19705,12 +19930,188 @@ const MODE_PROFILES = Object.freeze({
         packetType: compact(meta.packet_type || meta.packetType || 'current_snapshot', 48),
         parentTurnNodeId: compact(lineage.parent_turn_node_id || lineage.parentTurnNodeId || '', 96),
         logicalTurnId: compact(lineage.logical_turn_id || lineage.logicalTurnId || '', 96),
-        requestNonce: compact(lineage.request_nonce || lineage.requestNonce || '', 96)
+        requestNonce: compact(lineage.request_nonce || lineage.requestNonce || '', 96),
+        captureNormalized,
+        canonicalRawHash: compact(canonicalRawHash || hash, 96)
+      };
+    };
+    const semanticDiagnosticFields = semantic => ({
+      semanticReason: semantic.reason || '',
+      skeletonEcho: semantic.skeletonEcho === true,
+      semanticSourceSignalCount: Math.max(0, Number(semantic.coverage?.sourceSignalCount || 0) || 0),
+      semanticSourceCanonicalCount: Math.max(0, Number(semantic.coverage?.sourceCanonicalCount || 0) || 0),
+      semanticCoverageScore: Number(semantic.coverage?.coverageScore ?? 1),
+      semanticVisibleChars: Math.max(0, Number(semantic.coverage?.visibleChars || 0) || 0),
+      semanticMissingCanonicalSignals: ensureArray(semantic.coverage?.missingCanonicalSignals),
+      semanticMissingKnownEntities: ensureArray(semantic.coverage?.missingKnownEntities),
+      semanticMissingSurfaceSignals: ensureArray(semantic.coverage?.missingSurfaceSignals),
+      semanticStats: semantic.stats || {}
+    });
+    const push = ({ rawStart, rawEnd, type }) => {
+      const sourceRaw = source.slice(rawStart, rawEnd).trim();
+      if (!sourceRaw) return;
+      completeCount += 1;
+      const sourceHash = stableHash64(sourceRaw);
+      if (seen.has(sourceHash)) return;
+      seen.add(sourceHash);
+      if (sourceRaw.length > STORAGE_LEDGER_MAX_PACKET_CHARS) {
+        oversizedCount += 1;
+        diagnostics.push({ hash: sourceHash, markerType: type, stage: 'oversized', rawChars: sourceRaw.length, errors: ['packet_too_large'], warnings: [] });
+        return;
+      }
+      const parsed = safeJsonParse(sourceRaw, null);
+      if (!objectish(parsed)) {
+        diagnostics.push({ hash: sourceHash, markerType: type, stage: 'json_parse_failed', rawChars: sourceRaw.length, errors: ['json_parse_failed'], warnings: [] });
+        return;
+      }
+      parsedCount += 1;
+      const originalValidation = validateHayakuPacket(parsed);
+      if (originalValidation.ok === true) {
+        const packetType = compact(parsed?.meta?.packet_type || parsed?.meta?.packetType || 'current_snapshot', 48);
+        const semantic = assessPacketCaptureSemantics(parsed, packetType, source);
+        if (semantic.ok === true) {
+          packets.push(packetFrom({ raw: sourceRaw, hash: sourceHash, parsed, type }));
+          diagnostics.push({
+            hash: sourceHash,
+            markerType: type,
+            stage: 'valid',
+            rawChars: sourceRaw.length,
+            ...semanticDiagnosticFields(semantic),
+            errors: ensureArray(originalValidation.errors),
+            warnings: ensureArray(originalValidation.warnings)
+          });
+        } else {
+          semanticIncompletePackets.push(packetFrom({ raw: sourceRaw, hash: sourceHash, parsed, type }));
+          diagnostics.push({
+            hash: sourceHash,
+            markerType: type,
+            stage: 'semantic_incomplete',
+            rawChars: sourceRaw.length,
+            ...semanticDiagnosticFields(semantic),
+            errors: [],
+            warnings: []
+          });
+        }
+        return;
+      }
+      const normalized = normalizeHayakuPacket(parsed);
+      const normalizedValidation = validateHayakuPacket(normalized);
+      if (normalizedValidation.ok === true) {
+        const normalizedRaw = JSON.stringify(normalized);
+        const packetType = compact(normalized?.meta?.packet_type || normalized?.meta?.packetType || 'current_snapshot', 48);
+        const semantic = assessPacketCaptureSemantics(normalized, packetType, source);
+        const normalizedPacket = packetFrom({
+          raw: normalizedRaw,
+          hash: sourceHash,
+          parsed: normalized,
+          type,
+          captureNormalized: true,
+          canonicalRawHash: stableHash64(normalizedRaw)
+        });
+        if (semantic.ok === true) {
+          repairablePackets.push(normalizedPacket);
+          diagnostics.push({
+            hash: sourceHash,
+            markerType: type,
+            stage: 'normalization_repairable',
+            rawChars: sourceRaw.length,
+            canonicalChars: normalizedRaw.length,
+            ...semanticDiagnosticFields(semantic),
+            errors: ensureArray(originalValidation.errors),
+            warnings: ensureArray(originalValidation.warnings),
+            normalizedErrors: ensureArray(normalizedValidation.errors),
+            normalizedWarnings: ensureArray(normalizedValidation.warnings)
+          });
+        } else {
+          semanticIncompletePackets.push(normalizedPacket);
+          diagnostics.push({
+            hash: sourceHash,
+            markerType: type,
+            stage: 'semantic_incomplete',
+            rawChars: sourceRaw.length,
+            canonicalChars: normalizedRaw.length,
+            ...semanticDiagnosticFields(semantic),
+            errors: ensureArray(originalValidation.errors),
+            warnings: ensureArray(originalValidation.warnings),
+            normalizedErrors: ensureArray(normalizedValidation.errors),
+            normalizedWarnings: ensureArray(normalizedValidation.warnings)
+          });
+        }
+        return;
+      }
+      diagnostics.push({
+        hash: sourceHash,
+        markerType: type,
+        stage: 'validation_failed',
+        rawChars: sourceRaw.length,
+        errors: ensureArray(originalValidation.errors),
+        warnings: ensureArray(originalValidation.warnings),
+        normalizedErrors: ensureArray(normalizedValidation.errors),
+        normalizedWarnings: ensureArray(normalizedValidation.warnings)
       });
     };
     scanPacketMarkersInBody(source, PACKET_START, PACKET_END, 'html_comment', push);
     scanPacketMarkersInBody(source, `<<< ${PACKET_START} >>>`, `<<< ${PACKET_END} >>>`, 'visible_marker', push);
-    return out;
+    return {
+      markerStartCount,
+      markerEndCount,
+      completeCount,
+      parsedCount,
+      validCount: packets.length,
+      repairableCount: repairablePackets.length,
+      semanticIncompleteCount: semanticIncompletePackets.length,
+      invalidCount: diagnostics.filter(item => ['json_parse_failed', 'validation_failed', 'oversized', 'semantic_incomplete'].includes(item.stage)).length,
+      oversizedCount,
+      packets,
+      repairablePackets,
+      semanticIncompletePackets,
+      diagnostics
+    };
+  };
+  const completeValidHayakuPacketsFromText = value => packetCaptureInspectionFromText(value).packets;
+  const repairCapturePacketText = value => {
+    const source = text(value);
+    const repairs = [];
+    const repairRaw = (raw, markerType = '') => {
+      const sourceRaw = text(raw).trim();
+      if (!sourceRaw || sourceRaw.length > STORAGE_LEDGER_MAX_PACKET_CHARS) return null;
+      const parsed = safeJsonParse(sourceRaw, null);
+      if (!objectish(parsed)) return null;
+      const originalValidation = validateHayakuPacket(parsed);
+      if (originalValidation.ok === true) return null;
+      const normalized = normalizeHayakuPacket(parsed);
+      const normalizedValidation = validateHayakuPacket(normalized);
+      if (normalizedValidation.ok !== true) return null;
+      const normalizedRaw = JSON.stringify(normalized);
+      repairs.push({
+        sourceHash: stableHash64(sourceRaw),
+        canonicalHash: stableHash64(normalizedRaw),
+        markerType,
+        errors: ensureArray(originalValidation.errors),
+        warnings: ensureArray(originalValidation.warnings)
+      });
+      return normalizedRaw;
+    };
+    let repaired = source.replace(
+      new RegExp(`(<!--\\s*${PACKET_START}\\s*)([\\s\\S]*?)(\\s*${PACKET_END}\\s*-->)`, 'gi'),
+      (match, prefix, raw, suffix) => {
+        const normalizedRaw = repairRaw(raw, 'html_comment');
+        return normalizedRaw ? `${prefix}${normalizedRaw}${suffix}` : match;
+      }
+    );
+    repaired = repaired.replace(
+      new RegExp(`(<<<\\s*${PACKET_START}\\s*>>>\\s*)([\\s\\S]*?)(\\s*<<<\\s*${PACKET_END}\\s*>>>)`, 'gi'),
+      (match, prefix, raw, suffix) => {
+        const normalizedRaw = repairRaw(raw, 'visible_marker');
+        return normalizedRaw ? `${prefix}${normalizedRaw}${suffix}` : match;
+      }
+    );
+    return {
+      text: repaired,
+      changed: repairs.length > 0 && repaired !== source,
+      repairedCount: repairs.length,
+      repairs
+    };
   };
   const prunePendingCaptures = () => {
     const cutoff = now() - CAPTURE_ORIGIN_TTL_MS;
@@ -19854,17 +20255,22 @@ const MODE_PROFILES = Object.freeze({
     .map(normalizeStorageTombstone)
     .filter(Boolean)
     .find(tombstone => tombstone.active === true && tombstone.slotId === slotId) || null;
-  const storageRecordSuppressedByTombstone = (record, tombstone) => Boolean(
-    !isPermanentHistoricalStorageRecord(record)
-    &&
-    tombstone?.active === true
-    && tombstone.slotId === storageRecordSlotId(record)
-    && (
-      tombstone.recordId
-        ? tombstone.recordId === record?.recordId
-        : (!tombstone.variantHash || tombstone.variantHash === record?.hash)
-    )
-  );
+  const storageRecordSuppressedByTombstone = (record, tombstone) => {
+    if (isPermanentHistoricalStorageRecord(record)) return false;
+    if (tombstone?.active !== true) return false;
+    if (tombstone.slotId !== storageRecordSlotId(record)) return false;
+    const tombstoneRecordId = compact(tombstone?.recordId || '', 196);
+    const tombstoneVariantHash = compact(tombstone?.variantHash || '', 96);
+    const recordId = compact(record?.recordId || '', 196);
+    const recordHash = compact(record?.hash || '', 96);
+    // A live-chat packet can be re-mirrored with a new recordId while retaining
+    // the same packet hash. Suppress either the exact record alias or the exact
+    // variant hash so an explicitly forgotten packet cannot resurrect itself.
+    if (!tombstoneRecordId && !tombstoneVariantHash) return true;
+    if (tombstoneRecordId && tombstoneRecordId === recordId) return true;
+    if (tombstoneVariantHash && tombstoneVariantHash === recordHash) return true;
+    return false;
+  };
   const storageRecordPreference = (a, b) => (
     Number(b?.sourcePriority || 0) - Number(a?.sourcePriority || 0)
     || Number(b?.requestSequence || 0) - Number(a?.requestSequence || 0)
@@ -20215,22 +20621,41 @@ const MODE_PROFILES = Object.freeze({
     const slotId = resolveStorageSlotId(ledger, target);
     if (!slotId) return { ok: false, forgotten: false, reason: 'slot_not_found' };
     const targetRecordId = compact(target?.recordId || '', 196);
-    const variantHash = compact(target?.variantHash || '', 96);
+    const requestedVariantHash = compact(target?.variantHash || target?.hash || '', 96);
     const slotRecords = ensureArray(ledger.records).filter(record => (
       storageRecordSlotId(record) === slotId
     ));
-    let targetRecords = slotRecords.filter(record => (
-      storageRecordSlotId(record) === slotId
-      && (
-        targetRecordId
-          ? record.recordId === targetRecordId
-          : (!variantHash || record.hash === variantHash)
-      )
-    ));
+    const recordById = targetRecordId
+      ? slotRecords.find(record => compact(record?.recordId || '', 196) === targetRecordId) || null
+      : null;
+    const recordByIdHash = compact(recordById?.hash || '', 96);
+    if (recordById && requestedVariantHash && recordByIdHash && requestedVariantHash !== recordByIdHash) {
+      return {
+        ok: false,
+        forgotten: false,
+        reason: 'record_variant_mismatch',
+        scopeKey: scope.key,
+        slotId,
+        targetRecordId,
+        requestedVariantHash,
+        recordVariantHash: recordByIdHash,
+        recoverable: false
+      };
+    }
+    const effectiveVariantHash = recordByIdHash || requestedVariantHash;
+    let targetRecords = slotRecords.filter(record => {
+      const recordId = compact(record?.recordId || '', 196);
+      const recordHash = compact(record?.hash || '', 96);
+      if (!targetRecordId && !effectiveVariantHash) return true;
+      return Boolean(
+        (targetRecordId && recordId === targetRecordId)
+        || (effectiveVariantHash && recordHash === effectiveVariantHash)
+      );
+    });
     let canonicalAlias = false;
-    if (!targetRecords.length && targetRecordId && variantHash) {
-      const sameVariant = slotRecords.filter(record => record.hash === variantHash);
-      if (sameVariant.length === 1) {
+    if (!targetRecords.length && requestedVariantHash) {
+      const sameVariant = slotRecords.filter(record => compact(record?.hash || '', 96) === requestedVariantHash);
+      if (sameVariant.length) {
         targetRecords = sameVariant;
         canonicalAlias = true;
       }
@@ -20243,7 +20668,7 @@ const MODE_PROFILES = Object.freeze({
         scopeKey: scope.key,
         slotId,
         targetRecordId,
-        variantHash,
+        variantHash: effectiveVariantHash || requestedVariantHash,
         slotRecordIds: slotRecords.map(record => compact(record?.recordId || '', 196)),
         recoverable: false
       };
@@ -20256,16 +20681,35 @@ const MODE_PROFILES = Object.freeze({
         reason: 'permanent_session_history_protected',
         scopeKey: scope.key,
         slotId,
-        variantHash,
+        variantHash: effectiveVariantHash || requestedVariantHash,
         protectedRecords: targetRecords.filter(isPermanentHistoricalStorageRecord).length,
         recoverable: false
       };
     }
     const primaryRecord = targetRecords.find(record => (
-      targetRecordId && record?.recordId === targetRecordId
+      targetRecordId && compact(record?.recordId || '', 196) === targetRecordId
     )) || targetRecords.find(record => (
-      variantHash && record?.hash === variantHash
+      effectiveVariantHash && compact(record?.hash || '', 96) === effectiveVariantHash
     )) || targetRecords[0] || null;
+    const tombstoneVariantHash = effectiveVariantHash
+      || compact(primaryRecord?.hash || requestedVariantHash || '', 96);
+    // Once the exact variant is known, include every storage alias of that
+    // variant in this slot. This covers finalized_live_chat/live_chat_ledger
+    // re-mirrors that have different recordIds but identical packet content.
+    if (tombstoneVariantHash) {
+      const aliases = slotRecords.filter(record => (
+        compact(record?.hash || '', 96) === tombstoneVariantHash
+      ));
+      const known = new Set(targetRecords.map(record => `${record?.recordId || ''}\u0001${record?.hash || ''}`));
+      for (const alias of aliases) {
+        const key = `${alias?.recordId || ''}\u0001${alias?.hash || ''}`;
+        if (!known.has(key)) {
+          targetRecords.push(alias);
+          known.add(key);
+          canonicalAlias = true;
+        }
+      }
+    }
     const ranges = targetRecords.map(storageRecordTurnRange);
     const turnStarts = ranges.map(range => range.turnStart).filter(Boolean);
     const turnEnds = ranges.map(range => range.turnEnd).filter(Boolean);
@@ -20276,7 +20720,7 @@ const MODE_PROFILES = Object.freeze({
     const turnEnd = turnEnds.length ? Math.max(...turnEnds) : targetPairIndex;
     const tombstone = normalizeStorageTombstone({
       slotId,
-      variantHash,
+      variantHash: tombstoneVariantHash,
       recordId: compact(primaryRecord?.recordId || targetRecordId || '', 196),
       reason: target?.reason || 'explicit_forget',
       intent: target?.intent,
@@ -20289,18 +20733,21 @@ const MODE_PROFILES = Object.freeze({
     const tombstonesBySlot = new Map(ensureArray(ledger.tombstones)
       .map(normalizeStorageTombstone).filter(Boolean).map(value => [value.slotId, value]));
     tombstonesBySlot.set(slotId, tombstone);
-    const targetRecordIds = new Set(targetRecords.map(record => record.recordId).filter(Boolean));
+    const targetRecordIds = new Set(targetRecords.map(record => compact(record?.recordId || '', 196)).filter(Boolean));
     const records = ensureArray(ledger.records).map(record => {
       if (storageRecordSlotId(record) !== slotId) return record;
-      if (targetRecordId && !targetRecordIds.has(record.recordId)) return record;
-      if (!targetRecordId && variantHash && record.hash !== variantHash) return record;
+      const recordId = compact(record?.recordId || '', 196);
+      const recordHash = compact(record?.hash || '', 96);
+      const sameAlias = targetRecordIds.has(recordId);
+      const sameVariant = Boolean(tombstoneVariantHash && recordHash === tombstoneVariantHash);
+      if (!sameAlias && !sameVariant) return record;
       return { ...record, recordState: 'tombstoned' };
     });
     const slotHeads = ensureArray(ledger.slotHeads).map(head => (
       head?.slotId === slotId
         && (
-          (targetRecordId && targetRecordIds.has(head?.selectedRecordId))
-          || (!targetRecordId && (!variantHash || head?.selectedVariantHash === variantHash))
+          targetRecordIds.has(compact(head?.selectedRecordId || '', 196))
+          || Boolean(tombstoneVariantHash && compact(head?.selectedVariantHash || '', 96) === tombstoneVariantHash)
         )
         ? { ...head, state: 'tombstoned', selectedAt: now() }
         : head
@@ -20321,7 +20768,8 @@ const MODE_PROFILES = Object.freeze({
       recordId: compact(primaryRecord?.recordId || '', 196),
       requestedRecordId: targetRecordId,
       canonicalAlias,
-      variantHash,
+      variantHash: tombstoneVariantHash,
+      suppressedRecords: targetRecords.length,
       recoverable: true
     };
   });
@@ -20959,15 +21407,41 @@ const MODE_PROFILES = Object.freeze({
     }
   };
   const captureHayakuOutput = async (content = '', captureSource = 'afterRequest', requestType = '') => {
-    const packets = completeValidHayakuPacketsFromText(content);
+    const repair = repairCapturePacketText(content);
+    const captureContent = repair.text;
+    if (repair.changed) {
+      pushOperationLog('capture:hidden_packet_normalized', {
+        at: now(),
+        source: captureSource,
+        repairedCount: repair.repairedCount,
+        repairs: repair.repairs
+      }, 'info');
+    }
+    const inspection = packetCaptureInspectionFromText(captureContent);
+    const packets = inspection.packets;
     if (!packets.length) {
+      if (inspection.markerStartCount || inspection.markerEndCount || inspection.completeCount) {
+        pushOperationLog('capture:packet_unusable', {
+          at: now(),
+          source: captureSource,
+          markerStartCount: inspection.markerStartCount,
+          markerEndCount: inspection.markerEndCount,
+          completeCount: inspection.completeCount,
+          parsedCount: inspection.parsedCount,
+          validCount: inspection.validCount,
+          repairableCount: inspection.repairableCount,
+          semanticIncompleteCount: inspection.semanticIncompleteCount,
+          invalidCount: inspection.invalidCount,
+          diagnostics: inspection.diagnostics
+        }, 'warn');
+      }
       if (captureSource === 'afterRequest') {
         const pending = [...prunePendingCaptures()].reverse()[0] || null;
         if (pending) scheduleFinalizedCaptureMonitor(pending);
       }
-      return content;
+      return captureContent;
     }
-    const capturedVisible = canonicalHistoryText(content, 'assistant');
+    const capturedVisible = canonicalHistoryText(captureContent, 'assistant');
     const persistence = beginCapturedPacketPersistence(
       packets,
       captureSource,
@@ -20984,17 +21458,17 @@ const MODE_PROFILES = Object.freeze({
     // Never block the sequential post-processing chain beyond the small hook
     // budget. The shared persistence promise keeps running in the background,
     // while the packet-bearing transport copy remains available for recovery.
-    if (waited.timedOut) return content;
+    if (waited.timedOut) return captureContent;
     const pending = waited.outcome?.pending || null;
     const result = waited.outcome?.result || {
       durable: false,
       saved: false,
       reason: 'capture_outcome_unavailable'
     };
-    if (!pending || result.durable !== true) return content;
+    if (!pending || result.durable !== true) return captureContent;
     const returnedContent = PACKET_REMOVAL_ENABLED
-      ? stripHayakuBlocks(content, { looseMarkers: true, preserveWhitespace: true })
-      : content;
+      ? stripHayakuBlocks(captureContent, { looseMarkers: true, preserveWhitespace: true })
+      : captureContent;
     Memory.lastStorageCapture = {
       ...Memory.lastStorageCapture,
       source: captureSource,
@@ -21004,7 +21478,9 @@ const MODE_PROFILES = Object.freeze({
       protectedSidecar: true,
       chatPacketPreserved: CHAT_PACKET_PRESERVATION_ENABLED,
       transportPacketRemoved: PACKET_REMOVAL_ENABLED,
-      removedChars: Math.max(0, text(content).length - text(returnedContent).length)
+      removedChars: Math.max(0, text(captureContent).length - text(returnedContent).length),
+      capturePacketNormalized: repair.changed === true,
+      capturePacketNormalizedCount: repair.repairedCount
     };
     pushOperationLog('capture:mirror_complete', Memory.lastStorageCapture, 'success');
     // Keep lower-priority output-hook captures pending until afterRequest has had
@@ -21083,12 +21559,36 @@ const MODE_PROFILES = Object.freeze({
     const content = unescapeRisuStoredPayload(storedContent);
     const bodies = packetEvidencePayloadCandidates({ role, content }).map(value => text(value)).filter(Boolean);
     const packetsByHash = new Map();
+    const captureDiagnostics = [];
+    let normalizedFallbackPackets = 0;
+    let markerStartCount = 0;
+    let markerEndCount = 0;
+    let completePacketCandidates = 0;
+    let semanticIncompletePackets = 0;
     for (const body of bodies) {
-      for (const packet of completeValidHayakuPacketsFromText(body)) packetsByHash.set(packet.hash, packet);
+      const inspection = packetCaptureInspectionFromText(body);
+      markerStartCount += inspection.markerStartCount;
+      markerEndCount += inspection.markerEndCount;
+      completePacketCandidates += inspection.completeCount;
+      semanticIncompletePackets += Math.max(0, Number(inspection.semanticIncompleteCount || 0) || 0);
+      for (const packet of inspection.packets) packetsByHash.set(packet.hash, packet);
+      for (const packet of inspection.repairablePackets) {
+        if (!packetsByHash.has(packet.hash)) {
+          packetsByHash.set(packet.hash, packet);
+          normalizedFallbackPackets += 1;
+        }
+      }
+      captureDiagnostics.push(...inspection.diagnostics);
     }
     return {
       pair,
       packets: [...packetsByHash.values()],
+      normalizedFallbackPackets,
+      markerStartCount,
+      markerEndCount,
+      completePacketCandidates,
+      semanticIncompletePackets,
+      captureDiagnostics,
       identityMatch,
       signature: stableHash64([
         pair.assistantVisibleHash || '',
@@ -21170,17 +21670,32 @@ const MODE_PROFILES = Object.freeze({
             if (!candidate.packets.length) {
               if (!state.incompleteReported) {
                 state.incompleteReported = true;
+                const packetMarkersPresent = Number(candidate.markerStartCount || 0) > 0
+                  || Number(candidate.markerEndCount || 0) > 0
+                  || Number(candidate.completePacketCandidates || 0) > 0;
                 Memory.lastStorageCapture = {
                   at: now(),
                   source: 'finalized_live_chat',
                   scopeKey: pending.scope.key,
                   requestSequence: pending.requestSequence,
                   packetCount: 0,
+                  markerStartCount: Math.max(0, Number(candidate.markerStartCount || 0) || 0),
+                  markerEndCount: Math.max(0, Number(candidate.markerEndCount || 0) || 0),
+                  completePacketCandidates: Math.max(0, Number(candidate.completePacketCandidates || 0) || 0),
+                  normalizedFallbackPackets: Math.max(0, Number(candidate.normalizedFallbackPackets || 0) || 0),
+                  semanticIncompletePackets: Math.max(0, Number(candidate.semanticIncompletePackets || 0) || 0),
+                  captureDiagnostics: ensureArray(candidate.captureDiagnostics).slice(-8),
                   durable: false,
                   saved: false,
-                  reason: 'finalized_packet_missing_or_incomplete'
+                  reason: packetMarkersPresent
+                    ? 'finalized_packet_invalid_or_unrepairable'
+                    : 'finalized_packet_missing'
                 };
-                pushOperationLog('capture:packet_missing', Memory.lastStorageCapture, 'warn');
+                pushOperationLog(
+                  packetMarkersPresent ? 'capture:packet_invalid' : 'capture:packet_missing',
+                  Memory.lastStorageCapture,
+                  'warn'
+                );
               }
             } else if (!Memory.finalizedCaptureInFlight.has(key)) {
               Memory.finalizedCaptureInFlight.add(key);
@@ -21197,6 +21712,9 @@ const MODE_PROFILES = Object.freeze({
                   scopeKey: pending.scope.key,
                   requestSequence: pending.requestSequence,
                   packetCount: candidate.packets.length,
+                  normalizedFallbackPackets: Math.max(0, Number(candidate.normalizedFallbackPackets || 0) || 0),
+                  semanticIncompletePackets: Math.max(0, Number(candidate.semanticIncompletePackets || 0) || 0),
+                  captureDiagnostics: ensureArray(candidate.captureDiagnostics).slice(-8),
                   ...result
                 };
                 pushOperationLog(
@@ -21507,7 +22025,7 @@ const MODE_PROFILES = Object.freeze({
       ...base,
       capturedAt: Math.max(0, Number(base.capturedAt || now()) || now()),
       boundAt: now(),
-      captureSource: 'live_chat_ledger',
+      captureSource: packet?.captureNormalized === true ? 'live_chat_normalized_mirror' : 'live_chat_ledger',
       sourcePriority: LIVE_CHAT_LEDGER_SOURCE_PRIORITY
     });
   };
@@ -21541,7 +22059,9 @@ const MODE_PROFILES = Object.freeze({
       .flatMap(pair => {
         const owner = activeWorldlineNodeForPair(worldline, pair, activeNodesByPairIndex);
         const acceptedPacketHashes = new Set(ensureArray(owner?.packetHashes).filter(Boolean));
-      return ensureArray(pair?.validPackets)
+      const usablePackets = [...ensureArray(pair?.validPackets), ...ensureArray(pair?.repairablePackets)]
+        .filter((packet, index, rows) => packet?.hash && rows.findIndex(candidate => candidate?.hash === packet.hash) === index);
+      return usablePackets
         .filter(packet => owner && acceptedPacketHashes.has(packet?.hash))
         .map(packet => {
           const record = liveChatLedgerRecordFromPacket(packet, pair, scope);
@@ -21639,8 +22159,12 @@ const MODE_PROFILES = Object.freeze({
     const byId = new Map(ensureArray(ledger?.records).map(record => [record.recordId, record]));
     let imported = 0;
     let updated = 0;
+    let normalizedImported = 0;
+    let normalizedUpdated = 0;
     for (const pair of candidates) {
-      for (const packet of ensureArray(pair?.validPackets)) {
+      const usablePackets = [...ensureArray(pair?.validPackets), ...ensureArray(pair?.repairablePackets)]
+        .filter((packet, index, rows) => packet?.hash && rows.findIndex(candidate => candidate?.hash === packet.hash) === index);
+      for (const packet of usablePackets) {
         const record = liveChatLedgerRecordFromPacket(packet, pair, scope);
         if (!record) continue;
         const previous = byId.get(record.recordId);
@@ -21662,6 +22186,7 @@ const MODE_PROFILES = Object.freeze({
             capturedAt: Math.max(0, Number(previous?.capturedAt || record.capturedAt || 0) || 0)
           });
           updated += 1;
+          if (packet?.captureNormalized === true) normalizedUpdated += 1;
           continue;
         }
         if (previous?.hash && previous.hash !== record.hash) {
@@ -21693,8 +22218,13 @@ const MODE_PROFILES = Object.freeze({
           if (archivedPrevious) byId.set(archivedPrevious.recordId, archivedPrevious);
         }
         byId.set(record.recordId, record);
-        if (previous) updated += 1;
-        else imported += 1;
+        if (previous) {
+          updated += 1;
+          if (packet?.captureNormalized === true) normalizedUpdated += 1;
+        } else {
+          imported += 1;
+          if (packet?.captureNormalized === true) normalizedImported += 1;
+        }
       }
     }
     const migration = fullMigration
@@ -21710,6 +22240,8 @@ const MODE_PROFILES = Object.freeze({
       changed: imported > 0 || updated > 0 || fullMigration,
       imported,
       updated,
+      normalizedImported,
+      normalizedUpdated,
       fullMigration
     };
   };
@@ -22345,6 +22877,8 @@ const MODE_PROFILES = Object.freeze({
         topologyHash,
         importedRecords: Math.max(0, Number(migration.imported || 0) || 0),
         updatedRecords: Math.max(0, Number(migration.updated || 0) || 0),
+        normalizedMirrorImports: Math.max(0, Number(migration.normalizedImported || 0) || 0),
+        normalizedMirrorUpdates: Math.max(0, Number(migration.normalizedUpdated || 0) || 0),
         identityRepairs: Math.max(0, Number(binding.identityRepairs || 0) || 0),
         mergedDuplicates: Math.max(0, Number(binding.mergedDuplicates || 0) || 0),
         worldlineRevision: Number(worldline.revision || 0) || 0,
@@ -23753,7 +24287,14 @@ const MODE_PROFILES = Object.freeze({
         adoptBridgeSessionHandoff,
         importBridgeColdStartIntoStorageLedger,
         adoptBridgeColdStartCapsule,
+        packetCaptureInspectionFromText,
+        packetSemanticPayloadStats,
+        packetIsMinimalSkeletonEcho,
+        packetCaptureCoverageDiagnostics,
+        assessPacketCaptureSemantics,
+        repairCapturePacketText,
         completeValidHayakuPacketsFromText,
+        historyPacketDiagnosticsFromBody,
         recoveryTargetForCapture,
         retireObsoletePendingCaptures,
         finalizedCaptureTimeoutIsActionable,
