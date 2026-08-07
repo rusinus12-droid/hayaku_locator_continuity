@@ -1,8 +1,8 @@
 //@name hayaku_locator_continuity
-//@display-name HAYAKU · Locator Continuity v2.3.32
+//@display-name HAYAKU · Locator Continuity v2.3.33
 //@author rusinus12@gmail.com
 //@api 3.0
-//@version 2.3.32
+//@version 2.3.33
 //@allowed-ipc flashback_hayaku_bridge
 //@update-url https://raw.githubusercontent.com/rusinus12-droid/hayaku_locator_continuity/main/hayaku_locator_continuity.js
 //@arg hayaku_enabled string true|false
@@ -91,7 +91,7 @@
   }
 
   const PLUGIN_NAME = 'HAYAKU';
-  const PLUGIN_VERSION = '2.3.32';
+  const PLUGIN_VERSION = '2.3.33';
   const HAYAKU_PACKET_AUTHORING_PROFILE_SCHEMA = 'hayaku-packet-authoring-profile-v1';
   const HAYAKU_PACKET_AUTHORING_ALIAS_LANGUAGES = Object.freeze(['ko', 'en', 'ja', 'zh']);
   const HAYAKU_CANONICAL_ANCHOR_PREFIXES = Object.freeze([
@@ -113,11 +113,20 @@
   const MEMORY_SESSION_BRIDGE_HAYAKU_IPC_SCHEMA = 'hayaku-memory-bridge-ipc-v1';
   const MEMORY_SESSION_BRIDGE_HAYAKU_REQUEST_CHANNEL = 'hayaku_memory_bridge_request_v1';
   const MEMORY_SESSION_BRIDGE_HAYAKU_RESPONSE_CHANNEL = 'hayaku_memory_bridge_response_v1';
-  const STORAGE_LEDGER_MAX_RECORDS = 192;
-  const STORAGE_LEDGER_MAX_SLOT_HEADS = 768;
-  const STORAGE_LEDGER_MAX_TOMBSTONES = 256;
-  const STORAGE_LEDGER_MAX_PACKET_CHARS = 24000;
-  const STORAGE_LEDGER_MAX_TOTAL_CHARS = 384000;
+  // v2.3.33 capacity-only expansion. Ledger schema, keys, lifecycle, recall,
+  // rollback/reroll handling, and packet semantics remain unchanged.
+  const STORAGE_LEDGER_MAX_RECORDS = 1024;
+  const STORAGE_LEDGER_MAX_SLOT_HEADS = 4096;
+  const STORAGE_LEDGER_MAX_TOMBSTONES = 1024;
+  const STORAGE_LEDGER_MAX_PACKET_CHARS = 96000;
+  const STORAGE_LEDGER_MAX_TOTAL_CHARS = 16000000;
+  const storageLimitsSnapshot = () => ({
+    maxRecords: STORAGE_LEDGER_MAX_RECORDS,
+    maxSlotHeads: STORAGE_LEDGER_MAX_SLOT_HEADS,
+    maxTombstones: STORAGE_LEDGER_MAX_TOMBSTONES,
+    maxPacketChars: STORAGE_LEDGER_MAX_PACKET_CHARS,
+    maxTotalPacketChars: STORAGE_LEDGER_MAX_TOTAL_CHARS
+  });
   const CAPTURE_ORIGIN_TTL_MS = 10 * 60 * 1000;
   const FINALIZED_CAPTURE_POLL_MS = 900;
   const FINALIZED_CAPTURE_IDLE_POLL_MS = 2200;
@@ -20590,6 +20599,7 @@ const MODE_PROFILES = Object.freeze({
                 slotHeads: ensureArray(ledger.slotHeads),
                 tombstones: ensureArray(ledger.tombstones),
                 packetAuthoring: buildHayakuPacketAuthoringProfile(Memory.settings),
+                storageLimits: storageLimitsSnapshot(),
                 bridgeSync
               };
             }
@@ -23525,6 +23535,7 @@ const MODE_PROFILES = Object.freeze({
       authoringProfileSchema: HAYAKU_PACKET_AUTHORING_PROFILE_SCHEMA
     },
     packetAuthoring: buildHayakuPacketAuthoringProfile(Memory.settings),
+    storageLimits: storageLimitsSnapshot(),
     memoryNote: {
       schema: HayakuMemoryNoteRuntimeApi.schema,
       languages: HayakuMemoryNoteRuntimeApi.languages,
@@ -23647,6 +23658,7 @@ const MODE_PROFILES = Object.freeze({
             slotHeads: ensureArray(ledger.slotHeads),
             tombstones: ensureArray(ledger.tombstones),
             packetAuthoring: buildHayakuPacketAuthoringProfile(Memory.settings),
+            storageLimits: storageLimitsSnapshot(),
             bridgeSync
           }, {});
         },
