@@ -1,8 +1,8 @@
 //@name hayaku_locator_continuity
-//@display-name HAYAKU · Locator Continuity v2.3.39
+//@display-name HAYAKU · Locator Continuity v2.3.40
 //@author rusinus12@gmail.com
 //@api 3.0
-//@version 2.3.39
+//@version 2.3.40
 //@allowed-ipc flashback_hayaku_bridge
 //@update-url https://raw.githubusercontent.com/rusinus12-droid/hayaku_locator_continuity/main/hayaku_locator_continuity.js
 //@arg hayaku_enabled string true|false
@@ -91,7 +91,7 @@
   }
 
   const PLUGIN_NAME = 'HAYAKU';
-  const PLUGIN_VERSION = '2.3.39';
+  const PLUGIN_VERSION = '2.3.40';
   const HAYAKU_PACKET_AUTHORING_PROFILE_SCHEMA = 'hayaku-packet-authoring-profile-v1';
   const HAYAKU_PACKET_AUTHORING_ALIAS_LANGUAGES = Object.freeze(['ko', 'en', 'ja', 'zh']);
   const HAYAKU_CANONICAL_ANCHOR_PREFIXES = Object.freeze([
@@ -16361,7 +16361,8 @@ const MODE_PROFILES = Object.freeze({
         ? 'Emit exactly two packets in this order: recovery_snapshot, then current_snapshot. Do not merge or omit either.'
         : 'Emit exactly one current_snapshot packet; never omit it, including on unchanged or low-information turns.',
       ...packetPlacementRuleLines(settings, recoveryActive, { terse: true }),
-      'Use the exact non-empty runtime constants in the safe skeleton below. Fill blank semantic values only from allowed evidence; otherwise keep them empty and low-confidence.'
+      'Use the exact non-empty runtime constants in the safe skeleton below. Fill blank semantic values only from allowed evidence; otherwise keep them empty and low-confidence.',
+      'Do not copy the blank skeleton when the completed visible artifact establishes continuity-relevant content; write those supported outcomes into the semantic fields.',
     ];
     if (settings?.outputContract?.structuredData?.embeddedRequired === true) {
       lines.push('Finish the preset-required machine-readable block first; keep the hidden HAYAKU packet in the resolved slot outside that block.');
