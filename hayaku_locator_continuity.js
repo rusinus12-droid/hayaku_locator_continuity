@@ -1,8 +1,8 @@
 //@name hayaku_locator_continuity
-//@display-name HAYAKU · Locator Continuity v2.3.40
+//@display-name HAYAKU · Locator Continuity v2.3.52
 //@author rusinus12@gmail.com
 //@api 3.0
-//@version 2.3.40
+//@version 2.3.52
 //@allowed-ipc flashback_hayaku_bridge
 //@update-url https://raw.githubusercontent.com/rusinus12-droid/hayaku_locator_continuity/main/hayaku_locator_continuity.js
 //@arg hayaku_enabled string true|false
@@ -89,9 +89,26 @@
     console.warn('[HAYAKU] risuai API is unavailable.');
     return;
   }
+  const RUNTIME_OWNER_KEY = '__HAYAKU_RUNTIME_OWNER_V1__';
+  const MEMORY_BRIDGE_IPC_RUNTIME_KEY = '__HAYAKU_MEMORY_BRIDGE_IPC_LISTENER_V1__';
+  const LEDGER_VIEWER_UI_RUNTIME_KEY = '__HAYAKU_LEDGER_VIEWER_UI_V1__';
+  const COPIED_CHAT_SOURCE_LEDGER_RUNTIME_KEY = '__HAYAKU_COPY_SOURCE_LEDGER_REVISION_V1__';
+  const RUNTIME_INSTANCE_TOKEN = Object.freeze({});
+  const claimRuntimeOwnership = () => {
+    try {
+      globalThis[RUNTIME_OWNER_KEY] = RUNTIME_INSTANCE_TOKEN;
+      return globalThis[RUNTIME_OWNER_KEY] === RUNTIME_INSTANCE_TOKEN;
+    } catch (_) {
+      return false;
+    }
+  };
+  const ownsRuntime = () => {
+    try { return globalThis[RUNTIME_OWNER_KEY] === RUNTIME_INSTANCE_TOKEN; }
+    catch (_) { return false; }
+  };
 
   const PLUGIN_NAME = 'HAYAKU';
-  const PLUGIN_VERSION = '2.3.40';
+  const PLUGIN_VERSION = '2.3.52';
   const HAYAKU_PACKET_AUTHORING_PROFILE_SCHEMA = 'hayaku-packet-authoring-profile-v1';
   const HAYAKU_PACKET_AUTHORING_ALIAS_LANGUAGES = Object.freeze(['ko', 'en', 'ja', 'zh']);
   const HAYAKU_CANONICAL_ANCHOR_PREFIXES = Object.freeze([
@@ -109,6 +126,7 @@
   const MEMORY_SESSION_BRIDGE_COLD_START_PREFIX = 'memory_session_bridge:hayaku_cold_start:';
   const MEMORY_SESSION_BRIDGE_INCREMENTAL_RECOVERY_SCHEMA = 'memory-session-bridge-hayaku-incremental-recovery-v1';
   const MEMORY_SESSION_BRIDGE_INCREMENTAL_RECOVERY_PREFIX = 'memory_session_bridge:hayaku_incremental_recovery:';
+  const HAYAKU_PLUGIN_ID = 'hayaku_locator_continuity';
   const MEMORY_SESSION_BRIDGE_PLUGIN_ID = 'flashback_hayaku_bridge';
   const MEMORY_SESSION_BRIDGE_HAYAKU_IPC_SCHEMA = 'hayaku-memory-bridge-ipc-v1';
   const MEMORY_SESSION_BRIDGE_HAYAKU_REQUEST_CHANNEL = 'hayaku_memory_bridge_request_v1';
@@ -120,12 +138,18 @@
   const STORAGE_LEDGER_MAX_TOMBSTONES = 1024;
   const STORAGE_LEDGER_MAX_PACKET_CHARS = 96000;
   const STORAGE_LEDGER_MAX_TOTAL_CHARS = 16000000;
+  const MEMORY_BRIDGE_MAX_CAPSULE_PACKETS = 1024;
+  const MEMORY_BRIDGE_MAX_RECOVERY_TURNS = 4096;
+  const MEMORY_BRIDGE_MAX_RECOVERY_TURN_INDEX = 1000000;
   const storageLimitsSnapshot = () => ({
     maxRecords: STORAGE_LEDGER_MAX_RECORDS,
     maxSlotHeads: STORAGE_LEDGER_MAX_SLOT_HEADS,
     maxTombstones: STORAGE_LEDGER_MAX_TOMBSTONES,
     maxPacketChars: STORAGE_LEDGER_MAX_PACKET_CHARS,
-    maxTotalPacketChars: STORAGE_LEDGER_MAX_TOTAL_CHARS
+    maxTotalPacketChars: STORAGE_LEDGER_MAX_TOTAL_CHARS,
+    maxRecordsIsHardLimit: false,
+    maxTotalPacketCharsIsHardLimit: false,
+    protectedRecordsExemptFromRetentionTargets: true
   });
   const CAPTURE_ORIGIN_TTL_MS = 10 * 60 * 1000;
   const FINALIZED_CAPTURE_POLL_MS = 900;
@@ -137,6 +161,9 @@
   const FINALIZED_BINDING_IDLE_POLL_MS = 2200;
   const FINALIZED_BINDING_STABLE_MS = 4000;
   const FINALIZED_BINDING_MAX_AGE_MS = 4 * 60 * 1000;
+  // Hard binding failures (storage/scope/exception) still stop after three attempts.
+  // A finalized_packet_group_not_bound result means the live-chat U+A identity
+  // has not stabilized yet, so it waits under MAX_AGE instead of consuming one.
   const FINALIZED_BINDING_MAX_ATTEMPTS = 3;
   const WORLDLINE_OBSERVER_POLL_MS = 1600;
   const WORLDLINE_OBSERVER_STABLE_MS = 1200;
@@ -385,6 +412,9 @@
   // hold the main model request open indefinitely.
   const HOST_API_CALL_TIMEOUT_MS = 1500;
   const HOST_REQUEST_DEADLINE_MS = 15000;
+  const COPIED_CHAT_SOURCE_CACHE_POSITIVE_TTL_MS = 60000;
+  const COPIED_CHAT_SOURCE_CACHE_NEGATIVE_TTL_MS = 5000;
+  const COPIED_CHAT_SOURCE_CACHE_MAX_ENTRIES = 32;
   // Response hooks are part of RisuAI's sequential post-processing chain. Give
   // fast storage enough time to preserve the clean-body contract, but never
   // make downstream modules wait for the full storage timeout/queue backlog.
@@ -1576,16 +1606,23 @@ const MODE_PROFILES = Object.freeze({
     lastStorageBinding: null,
     operationLogSeq: 0,
     operationLog: [],
+    exposedApi: null,
     compatInfo: null,
     compatCallStats: {
       calls: 0,
       timeouts: 0,
       failures: 0,
       deadlineSkips: 0,
+      lateStorageWriteRepairs: 0,
+      lateStorageWriteRepairFailures: 0,
       lastTimeout: '',
       lastFailure: ''
     },
-    compatRequestDeadlineAt: 0,
+    compatRequestDeadlines: new Map(),
+    compatRequestSequence: 0,
+    copiedChatSourceCache: new Map(),
+    copiedChatSourceCacheStats: { hits: 0, misses: 0, writes: 0, evictions: 0, invalidations: 0 },
+    copiedChatSourceLedgerGeneration: 0,
     replacer: {
       permission: 'not_requested',
       registered: false,
@@ -1658,6 +1695,7 @@ const MODE_PROFILES = Object.freeze({
       stateFilter: 'all',
       typeFilter: 'all',
       search: '',
+      showAuditCopies: false,
       debugExportText: ''
     }
   };
@@ -1705,29 +1743,104 @@ const MODE_PROFILES = Object.freeze({
     }
     return fallback;
   };
+  const finiteNonNegativeInteger = (value, fallback = 0, max = Number.MAX_SAFE_INTEGER) => {
+    const numeric = Number(value);
+    return Number.isSafeInteger(numeric) && numeric >= 0 && numeric <= max ? numeric : fallback;
+  };
+  const finitePositiveTimestamp = (value, fallback = now()) => {
+    const numeric = Math.floor(Number(value));
+    return Number.isSafeInteger(numeric) && numeric > 0 ? numeric : fallback;
+  };
   const RisuCompat = (() => {
     const candidates = apiCandidates;
     const api = () => candidates()[0] || API || null;
     const host = name => candidates().find(candidate => typeof candidate?.[name] === 'function') || api();
     const storageHost = () => candidates().find(candidate => candidate?.pluginStorage) || api();
+    const storageWriteFence = (() => {
+      const fenceKey = '__HAYAKU_STORAGE_WRITE_FENCE_V1__';
+      try {
+        const existing = globalThis?.[fenceKey];
+        if (existing instanceof Map) return existing;
+        const created = new Map();
+        Object.defineProperty(globalThis, fenceKey, {
+          value: created,
+          configurable: true,
+          enumerable: false,
+          writable: false
+        });
+        return created;
+      } catch (_) {
+        return new Map();
+      }
+    })();
+    const copiedChatSourceLedgerRuntime = (() => {
+      try {
+        const existing = globalThis?.[COPIED_CHAT_SOURCE_LEDGER_RUNTIME_KEY];
+        if (existing && typeof existing === 'object') return existing;
+        const created = { revision: 0 };
+        Object.defineProperty(globalThis, COPIED_CHAT_SOURCE_LEDGER_RUNTIME_KEY, {
+          value: created,
+          configurable: true,
+          enumerable: false,
+          writable: false
+        });
+        return created;
+      } catch (_) {
+        return { revision: 0 };
+      }
+    })();
+    const copiedChatSourceLedgerRevision = () => {
+      const revision = Number(copiedChatSourceLedgerRuntime.revision);
+      return Number.isSafeInteger(revision) && revision >= 0 ? revision : 0;
+    };
+    const invalidateCopiedChatSourceLedger = key => {
+      if (!text(key).startsWith(STORAGE_LEDGER_KEY_PREFIX)) return false;
+      const currentRevision = copiedChatSourceLedgerRevision();
+      copiedChatSourceLedgerRuntime.revision = currentRevision >= Number.MAX_SAFE_INTEGER
+        ? 1
+        : currentRevision + 1;
+      Memory.copiedChatSourceLedgerGeneration = copiedChatSourceLedgerRuntime.revision;
+      if (Memory.copiedChatSourceCache.size > 0) {
+        Memory.copiedChatSourceCache.clear();
+        Memory.copiedChatSourceCacheStats.invalidations += 1;
+      }
+      return true;
+    };
+    const beginFencedStorageWrite = (storage, key, serialized, state, revision, repair = false) => {
+      state.pending = Math.max(0, Number(state.pending || 0)) + 1;
+      const operation = Promise.resolve().then(() => storage.setItem(key, serialized));
+      operation.then(() => {
+        invalidateCopiedChatSourceLedger(key);
+        state.pending = Math.max(0, Number(state.pending || 0) - 1);
+        const latest = storageWriteFence.get(key);
+        if (latest !== state) return;
+        if (revision < state.revision) {
+          Memory.compatCallStats.lateStorageWriteRepairs += 1;
+          beginFencedStorageWrite(storage, key, state.serialized, state, state.revision, true);
+          return;
+        }
+        if (state.pending === 0) storageWriteFence.delete(key);
+      }, error => {
+        state.pending = Math.max(0, Number(state.pending || 0) - 1);
+        if (repair) {
+          Memory.compatCallStats.lateStorageWriteRepairFailures += 1;
+          Memory.compatCallStats.lastFailure = `pluginStorage.lateWriteRepair:${compact(error?.message || error, 120)}`;
+        }
+        if (storageWriteFence.get(key) === state && state.pending === 0) storageWriteFence.delete(key);
+      });
+      return operation;
+    };
     const hasPluginStorage = () => typeof storageHost()?.pluginStorage?.getItem === 'function'
       && typeof storageHost()?.pluginStorage?.setItem === 'function';
     const has = name => typeof host(name)?.[name] === 'function';
     const boundedHostCall = async (label, operation, fallback = null, timeoutMs = HOST_API_CALL_TIMEOUT_MS) => {
       Memory.compatCallStats.calls += 1;
       const requestedTimeout = Math.max(100, Number(timeoutMs) || HOST_API_CALL_TIMEOUT_MS);
-      const requestDeadlineAt = Math.max(0, Number(Memory.compatRequestDeadlineAt || 0) || 0);
-      const remainingRequestMs = requestDeadlineAt > 0 ? requestDeadlineAt - now() : Number.POSITIVE_INFINITY;
-      if (remainingRequestMs <= 0) {
-        Memory.compatCallStats.timeouts += 1;
-        Memory.compatCallStats.deadlineSkips += 1;
-        Memory.compatCallStats.lastTimeout = `${text(label)}:request_deadline`;
-        Memory.lastWarnings = [...ensureArray(Memory.lastWarnings), `host_deadline_skip:${text(label)}`].slice(-20);
-        return fallback;
-      }
-      const effectiveTimeout = Number.isFinite(remainingRequestMs)
-        ? Math.max(25, Math.min(requestedTimeout, remainingRequestMs))
-        : requestedTimeout;
+      // Promise execution context is not request-local in the plugin sandbox.
+      // Aggregating active request deadlines here allowed one expired request to
+      // poison unrelated UI, IPC, and ledger calls. Keep every host operation
+      // independently bounded; the request map below is diagnostics-only.
+      const effectiveTimeout = requestedTimeout;
       const timeoutMarker = {};
       let timer = null;
       try {
@@ -1811,8 +1924,20 @@ const MODE_PROFILES = Object.freeze({
     const setStorageItem = async (key, value) => {
       const storage = storageHost()?.pluginStorage;
       if (typeof storage?.setItem !== 'function') return false;
+      const serialized = typeof value === 'string' ? value : JSON.stringify(value);
+      invalidateCopiedChatSourceLedger(key);
+      const state = storageWriteFence.get(key) || {
+        revision: 0,
+        serialized: '',
+        pending: 0
+      };
+      state.revision = Math.max(0, Number(state.revision || 0)) + 1;
+      state.serialized = serialized;
+      storageWriteFence.set(key, state);
+      const revision = state.revision;
+      const operation = beginFencedStorageWrite(storage, key, serialized, state, revision, false);
       return !!(await boundedHostCall(`pluginStorage.setItem:${key}`, async () => {
-        await storage.setItem(key, typeof value === 'string' ? value : JSON.stringify(value));
+        await operation;
         return true;
       }, false));
     };
@@ -1841,9 +1966,9 @@ const MODE_PROFILES = Object.freeze({
       const localStorage = typeof current?.getLocalPluginStorage === 'function'
         ? await boundedHostCall('legacyStorage.getLocalPluginStorage', () => current.getLocalPluginStorage(), null)
         : null;
-      const purgeStore = async (storage, label) => {
-        if (!storage || typeof storage.removeItem !== 'function') {
-          return { available: false, removed: 0, keys: [], reason: 'remove_api_unavailable' };
+      const inspectStore = async (storage, label) => {
+        if (!storage) {
+          return { available: false, removed: 0, preserved: 0, keys: [], reason: 'storage_unavailable' };
         }
         let keys = [];
         if (typeof storage.keys === 'function') {
@@ -1869,37 +1994,36 @@ const MODE_PROFILES = Object.freeze({
           keys = ['hayaku.archive.v1.registry'];
           const registryRaw = await boundedHostCall(`${label}.legacyRegistry`, () => storage.getItem('hayaku.archive.v1.registry'), null);
           const registry = typeof registryRaw === 'string' ? safeJsonParse(registryRaw, null) : registryRaw;
-          for (const entry of ensureArray(registry?.entries)) {
+          for (const entry of ensureArray(registry?.entries).slice(0, 4096)) {
             const manifestKey = text(entry?.manifestKey || '');
             if (!manifestKey) continue;
             keys.push(manifestKey);
-            const manifestRaw = await boundedHostCall(`${label}.legacyManifest:${manifestKey}`, () => storage.getItem(manifestKey), null);
-            const manifest = typeof manifestRaw === 'string' ? safeJsonParse(manifestRaw, null) : manifestRaw;
-            keys.push(...ensureArray(manifest?.pages).map(page => text(page?.key || '')).filter(Boolean));
           }
         }
-        const targets = uniq(keys.filter(key => LEGACY_STORAGE_PREFIXES.some(prefix => key === prefix || key.startsWith(`${prefix}.`))), 100000);
-        const removedKeys = [];
-        for (const key of targets) {
-          const removed = await boundedHostCall(`${label}.removeItem:${key}`, async () => {
-            await storage.removeItem(key);
-            return true;
-          }, false);
-          if (removed) removedKeys.push(key);
-        }
-        return { available: true, removed: removedKeys.length, keys: removedKeys, reason: 'legacy_hayaku_keys_removed' };
+        const targets = uniq(
+          keys.filter(key => LEGACY_STORAGE_PREFIXES.some(prefix => key === prefix || key.startsWith(`${prefix}.`))),
+          4096
+        );
+        return {
+          available: true,
+          removed: 0,
+          preserved: targets.length,
+          keys: targets,
+          reason: 'legacy_hayaku_keys_preserved'
+        };
       };
       const [plugin, local] = await Promise.all([
-        purgeStore(pluginStorage, 'pluginStorage'),
-        purgeStore(localStorage, 'localPluginStorage')
+        inspectStore(pluginStorage, 'pluginStorage'),
+        inspectStore(localStorage, 'localPluginStorage')
       ]);
       const result = {
         at: now(),
         plugin,
         local,
-        removed: Number(plugin.removed || 0) + Number(local.removed || 0),
+        removed: 0,
+        preserved: Number(plugin.preserved || 0) + Number(local.preserved || 0),
         writes: 0,
-        policy: 'plugin_storage_only'
+        policy: 'preserve_legacy_read_only'
       };
       return result;
     };
@@ -1980,6 +2104,55 @@ const MODE_PROFILES = Object.freeze({
       }
       const baseTitle = text(copyTitleMatch[1] || '').trim();
       const targetSignatures = messages.map(chatCopyMessageSignature);
+      const cacheKey = stableHash64(JSON.stringify([
+        text(character?.chaId || '').trim(),
+        text(chat?.id || '').trim(),
+        title,
+        targetSignatures,
+        character.chats.length
+      ]));
+      const lookupLedgerGeneration = copiedChatSourceLedgerRevision();
+      const cached = Memory.copiedChatSourceCache.get(cacheKey);
+      if (cached
+        && Number(cached.expiresAt || 0) > now()
+        && Number(cached.ledgerGeneration || 0) === lookupLedgerGeneration) {
+        const cachedSourceId = text(cached.result?.sourceChatId || '').trim();
+        const cachedSource = cachedSourceId
+          ? character.chats.find(candidate => text(candidate?.id || '').trim() === cachedSourceId)
+          : null;
+        const cachedSourceSignatures = Array.isArray(cachedSource?.message)
+          ? cachedSource.message.map(chatCopyMessageSignature)
+          : [];
+        const cachedSourceStillMatches = !cachedSourceId || (
+          cachedSourceSignatures.length > 0
+          && cachedSourceSignatures.length <= targetSignatures.length
+          && cachedSourceSignatures.every((signature, index) => signature === targetSignatures[index])
+        );
+        if (cachedSourceStillMatches) {
+          Memory.copiedChatSourceCacheStats.hits += 1;
+          return { ...cached.result, cached: true };
+        }
+      }
+      if (cached) Memory.copiedChatSourceCache.delete(cacheKey);
+      Memory.copiedChatSourceCacheStats.misses += 1;
+      const remember = result => {
+        const positive = !!result?.sourceChatId;
+        Memory.copiedChatSourceCache.set(cacheKey, {
+          expiresAt: now() + (positive
+            ? COPIED_CHAT_SOURCE_CACHE_POSITIVE_TTL_MS
+            : COPIED_CHAT_SOURCE_CACHE_NEGATIVE_TTL_MS),
+          result: { ...result },
+          ledgerGeneration: copiedChatSourceLedgerRevision()
+        });
+        Memory.copiedChatSourceCacheStats.writes += 1;
+        while (Memory.copiedChatSourceCache.size > COPIED_CHAT_SOURCE_CACHE_MAX_ENTRIES) {
+          const oldestKey = Memory.copiedChatSourceCache.keys().next().value;
+          if (oldestKey == null) break;
+          Memory.copiedChatSourceCache.delete(oldestKey);
+          Memory.copiedChatSourceCacheStats.evictions += 1;
+        }
+        return result;
+      };
       const matchingChats = [];
       for (const candidate of character.chats) {
         const candidateChatId = text(candidate?.id || '').trim();
@@ -2011,13 +2184,17 @@ const MODE_PROFILES = Object.freeze({
           updatedAt: Math.max(0, Number(parsed?.updatedAt || 0) || 0)
         };
       }))).filter(Boolean);
+      if (lookupLedgerGeneration !== copiedChatSourceLedgerRevision()
+        && options?.ledgerGenerationRetry !== true) {
+        return inferCopiedChatSource(character, chat, { ...options, ledgerGenerationRetry: true });
+      }
       candidates.sort((a, b) => b.messageCount - a.messageCount
         || b.updatedAt - a.updatedAt
         || b.titleAffinity - a.titleAffinity
         || a.sourceChatId.localeCompare(b.sourceChatId));
-      return candidates.length
+      return remember(candidates.length
         ? { sourceChatId: candidates[0].sourceChatId, reason: 'risu_native_chat_copy' }
-        : { sourceChatId: '', reason: 'copy_source_ledger_not_found' };
+        : { sourceChatId: '', reason: 'copy_source_ledger_not_found' });
     };
     const currentChatScope = async () => {
       const current = api();
@@ -2058,6 +2235,30 @@ const MODE_PROFILES = Object.freeze({
           ignoreExplicit: bridgeMarkerState.present && !bridgeMarkerState.valid
         });
         const copiedFromChatId = inferredCopySource.sourceChatId;
+        const [verifiedCharacterIndexRaw, verifiedChatIndexRaw, verifiedCharacter, verifiedChat] = await Promise.all([
+          boundedHostCall('verifyCurrentCharacterIndex', () => current.getCurrentCharacterIndex(), -1),
+          boundedHostCall('verifyCurrentChatIndex', () => current.getCurrentChatIndex(), -1),
+          boundedHostCall('verifyCharacterFromIndex', () => current.getCharacterFromIndex(characterIndex), null),
+          boundedHostCall('verifyChatFromIndex', () => current.getChatFromIndex(characterIndex, chatIndex), null)
+        ]);
+        const verifiedCharacterIndex = Number(verifiedCharacterIndexRaw);
+        const verifiedChatIndex = Number(verifiedChatIndexRaw);
+        const verifiedCharacterId = text(verifiedCharacter?.chaId || '').trim();
+        const verifiedChatId = text(verifiedChat?.id || '').trim();
+        if (verifiedCharacterIndex !== characterIndex
+          || verifiedChatIndex !== chatIndex
+          || verifiedCharacterId !== characterId
+          || verifiedChatId !== chatId) {
+          return {
+            key: '',
+            confident: false,
+            reason: 'current_chat_scope_changed',
+            characterIdHash: stableHash64(characterId),
+            chatIdHash: stableHash64(chatId),
+            observedCharacterIdHash: verifiedCharacterId ? stableHash64(verifiedCharacterId) : '',
+            observedChatIdHash: verifiedChatId ? stableHash64(verifiedChatId) : ''
+          };
+        }
         return {
           key: `chat_${digest}`,
           confident: true,
@@ -2101,10 +2302,11 @@ const MODE_PROFILES = Object.freeze({
         return false;
       }
       const wrapped = async (messages = [], requestType = 'model') => {
+        if (Memory.unloaded || !ownsRuntime()) return messages;
         Memory.replacer.runCount += 1;
         Memory.replacer.lastRunAt = now();
-        const priorDeadline = Memory.compatRequestDeadlineAt;
-        Memory.compatRequestDeadlineAt = now() + HOST_REQUEST_DEADLINE_MS;
+        const requestToken = ++Memory.compatRequestSequence;
+        Memory.compatRequestDeadlines.set(requestToken, now() + HOST_REQUEST_DEADLINE_MS);
         try {
           return await handler(messages, requestType);
         } catch (error) {
@@ -2116,7 +2318,7 @@ const MODE_PROFILES = Object.freeze({
           } catch (_) {}
           return messages;
         } finally {
-          Memory.compatRequestDeadlineAt = priorDeadline;
+          Memory.compatRequestDeadlines.delete(requestToken);
         }
       };
       try {
@@ -2158,6 +2360,7 @@ const MODE_PROFILES = Object.freeze({
         return false;
       }
       const wrapped = async (body, requestType = '') => {
+        if (Memory.unloaded || !ownsRuntime()) return body;
         Memory.promptCache.runCount += 1;
         Memory.promptCache.lastRunAt = now();
         try {
@@ -2253,6 +2456,7 @@ const MODE_PROFILES = Object.freeze({
         return false;
       }
       const wrapped = async (content = '', requestType = 'model') => {
+        if (Memory.unloaded || !ownsRuntime()) return content;
         Memory.afterRequest.runCount += 1;
         Memory.afterRequest.lastRunAt = now();
         try {
@@ -2298,6 +2502,7 @@ const MODE_PROFILES = Object.freeze({
         return false;
       }
       const wrapped = async content => {
+        if (Memory.unloaded || !ownsRuntime()) return content;
         Memory.displayHandler.runCount += 1;
         Memory.displayHandler.lastRunAt = now();
         try {
@@ -2344,6 +2549,7 @@ const MODE_PROFILES = Object.freeze({
         return false;
       }
       const wrapped = async content => {
+        if (Memory.unloaded || !ownsRuntime()) return content;
         Memory.outputHandler.runCount += 1;
         Memory.outputHandler.lastRunAt = now();
         try {
@@ -2413,6 +2619,12 @@ const MODE_PROFILES = Object.freeze({
       outputHandlerRunCount: Memory.outputHandler.runCount || 0,
       outputHandlerRegisterError: Memory.outputHandler.registerError || '',
       lastOutputHandlerError: Memory.outputHandler.lastError || '',
+      runtimeOwner: ownsRuntime(),
+      activeRequestDeadlines: Memory.compatRequestDeadlines.size,
+      copiedChatSourceCache: {
+        entries: Memory.copiedChatSourceCache.size,
+        stats: clone(Memory.copiedChatSourceCacheStats, {})
+      },
       promptCache: clone(Memory.promptCache, {}),
       boundedHostCalls: clone(Memory.compatCallStats, {})
     });
@@ -7553,9 +7765,9 @@ const MODE_PROFILES = Object.freeze({
       logicalTurnId: compact(node.logicalTurnId || '', 96),
       variantId: compact(node.variantId || '', 96),
       parentTurnNodeId: compact(node.parentTurnNodeId || '', 96),
-      pairIndex: Math.max(1, Number(node.pairIndex || node.originalOrdinal || 1) || 1),
-      originalOrdinal: Math.max(1, Number(node.originalOrdinal || node.pairIndex || 1) || 1),
-      activeOrdinal: Math.max(0, Number(node.activeOrdinal || 0) || 0),
+      pairIndex: Math.max(1, finiteNonNegativeInteger(node.pairIndex || node.originalOrdinal, 1)),
+      originalOrdinal: Math.max(1, finiteNonNegativeInteger(node.originalOrdinal || node.pairIndex, 1)),
+      activeOrdinal: finiteNonNegativeInteger(node.activeOrdinal, 0),
       userHash: compact(node.userHash || '', 96),
       assistantVisibleHash: compact(node.assistantVisibleHash || '', 96),
       assistantMessageIdHash: compact(node.assistantMessageIdHash || '', 96),
@@ -7572,16 +7784,16 @@ const MODE_PROFILES = Object.freeze({
       status: ['active', 'quarantined', 'superseded', 'inactive_variant', 'detached_branch', 'retired', 'orphaned'].includes(node.status) ? node.status : 'orphaned',
       supersededBy: compact(node.supersededBy || '', 96),
       retirementReason: compact(node.retirementReason || '', 48),
-      missingObservations: Math.max(0, Number(node.missingObservations || 0) || 0),
+      missingObservations: finiteNonNegativeInteger(node.missingObservations, 0),
       lastMissingSnapshotHash: compact(node.lastMissingSnapshotHash || '', 96),
       lastSeenSnapshotHash: compact(node.lastSeenSnapshotHash || '', 96),
-      createdAt: Math.max(0, Number(node.createdAt || 0) || 0),
-      updatedAt: Math.max(0, Number(node.updatedAt || 0) || 0)
+      createdAt: finiteNonNegativeInteger(node.createdAt, 0),
+      updatedAt: finiteNonNegativeInteger(node.updatedAt, 0)
     })).sort((a, b) => a.originalOrdinal - b.originalOrdinal || a.createdAt - b.createdAt);
     const ids = new Set(nodes.map(node => node.turnNodeId));
     return {
       version: TURN_WORLDLINE_VERSION,
-      revision: Math.max(0, Number(parsed.revision || 0) || 0),
+      revision: finiteNonNegativeInteger(parsed.revision, 0),
       headTurnNodeId: ids.has(parsed.headTurnNodeId) ? compact(parsed.headTurnNodeId, 96) : '',
       nodes
     };
@@ -7660,40 +7872,57 @@ const MODE_PROFILES = Object.freeze({
       // chat message id and canonical body. In that case the packet's provisional
       // logical id differs even though its parent, request nonce, finalized U+A,
       // and validated current_snapshot all agree. The visible U+A transcript is
-      // authoritative, so rebase only that logical-id-only drift. A parent mismatch
-      // remains a hard branch-integrity failure and is never repaired here.
-      const safeProvisionalLogicalRebase = declaredLogicalMismatch
-        && !declaredParentMismatch
-        && Boolean(pair?.requestNonce)
+      // authoritative, so rebase only that logical-id-only drift.
+      const validatedCurrentSnapshot = ensureArray(pair?.validPacketTypes).some(packetType => (
+        text(packetType).trim().toLowerCase() === 'current_snapshot'
+      ));
+      const finalizedPairIdentity = Boolean(pair?.requestNonce)
         && Boolean(pair?.userHash)
         && Boolean(pair?.assistantVisibleHash || pair?.assistantMessageIdHash)
-        && ensureArray(pair?.validPacketTypes).some(packetType => (
-          text(packetType).trim().toLowerCase() === 'current_snapshot'
-        ));
-      const declaredMismatch = declaredParentMismatch
+        && validatedCurrentSnapshot;
+      const safeProvisionalLogicalRebase = declaredLogicalMismatch
+        && !declaredParentMismatch
+        && finalizedPairIdentity;
+      // A model may accidentally copy logical_turn_id into parent_turn_node_id,
+      // including on the root turn where the authoritative parent is "". If the
+      // declared logical id still equals the id computed from the visible U+A
+      // chain and its expected parent, the parent assertion is internally
+      // inconsistent. Repair only that narrow, cryptographically bound drift;
+      // arbitrary foreign-parent declarations remain hard quarantine failures.
+      const safeDeclaredParentRebase = declaredParentMismatch
+        && Boolean(declaredLogicalTurnId)
+        && declaredLogicalTurnId === expectedLogicalTurnId
+        && finalizedPairIdentity;
+      const lineageRebased = safeProvisionalLogicalRebase || safeDeclaredParentRebase;
+      const lineageRepairReason = safeDeclaredParentRebase
+        ? 'verified_parent_field_drift'
+        : (safeProvisionalLogicalRebase ? 'verified_final_pair_identity_drift' : '');
+      const declaredMismatch = (declaredParentMismatch && !safeDeclaredParentRebase)
         || (declaredLogicalMismatch && !safeProvisionalLogicalRebase);
       const storedParentMismatch = node && node.parentTurnNodeId !== parentTurnNodeId;
       const activates = chainOpen && !storedParentMismatch;
       const observedPacketHashes = uniq(ensureArray(pair.packetHashes)
         .map(hash => compact(hash, 96)).filter(Boolean), 8);
       const acceptedPacketHashes = declaredMismatch ? [] : observedPacketHashes;
+      const acceptedPacketHashSet = new Set(acceptedPacketHashes);
       const quarantinedPacketHashes = declaredMismatch
         ? uniq([
             ...ensureArray(node?.quarantinedPacketHashes),
             ...observedPacketHashes
           ].map(hash => compact(hash, 96)).filter(Boolean), 16)
         : uniq(ensureArray(node?.quarantinedPacketHashes)
-          .map(hash => compact(hash, 96)).filter(Boolean), 16);
+          .map(hash => compact(hash, 96))
+          .filter(hash => hash && !acceptedPacketHashSet.has(hash)), 16);
       const packetLineageStatus = declaredMismatch
         ? 'quarantined'
-        : safeProvisionalLogicalRebase
+        : lineageRebased
           ? 'rebased'
           : acceptedPacketHashes.length ? 'valid' : 'absent';
-      const packetLineageReason = declaredParentMismatch
+      const packetLineageReason = declaredParentMismatch && !safeDeclaredParentRebase
         ? 'declared_parent_mismatch'
         : (declaredLogicalMismatch && !safeProvisionalLogicalRebase)
           ? 'declared_logical_turn_mismatch'
-          : safeProvisionalLogicalRebase ? 'verified_final_pair_identity_drift' : '';
+          : lineageRepairReason;
       if (!node) {
         const turnNodeId = stableHash64(['node', scope?.key || '', logicalTurnId, variantId].join('\u0001'));
         node = {
@@ -7711,9 +7940,9 @@ const MODE_PROFILES = Object.freeze({
           quarantinedPacketHashes,
           packetLineageStatus,
           packetLineageReason,
-          lineageRebased: safeProvisionalLogicalRebase,
-          declaredLogicalTurnId: safeProvisionalLogicalRebase ? declaredLogicalTurnId : '',
-          lineageRepairReason: safeProvisionalLogicalRebase ? 'verified_final_pair_identity_drift' : '',
+          lineageRebased,
+          declaredLogicalTurnId: lineageRebased ? declaredLogicalTurnId : '',
+          lineageRepairReason,
           status: activates ? 'active' : 'quarantined',
           supersededBy: '',
           retirementReason: activates ? '' : 'detached_branch',
@@ -7739,9 +7968,9 @@ const MODE_PROFILES = Object.freeze({
           quarantinedPacketHashes,
           packetLineageStatus,
           packetLineageReason,
-          lineageRebased: safeProvisionalLogicalRebase,
-          declaredLogicalTurnId: safeProvisionalLogicalRebase ? declaredLogicalTurnId : '',
-          lineageRepairReason: safeProvisionalLogicalRebase ? 'verified_final_pair_identity_drift' : '',
+          lineageRebased,
+          declaredLogicalTurnId: lineageRebased ? declaredLogicalTurnId : '',
+          lineageRepairReason,
           status: activates ? 'active' : 'quarantined',
           retirementReason: activates ? '' : 'detached_branch',
           missingObservations: activates ? 0 : Math.max(
@@ -8333,11 +8562,15 @@ const MODE_PROFILES = Object.freeze({
         || [...usablePacketDiagnostics].reverse().find(record => record.packetType === 'current_snapshot')
         || usablePacketDiagnostics[usablePacketDiagnostics.length - 1]
         || null;
-      const lineage = lineageRecord ? {
-        declaredParentTurnNodeId: lineageRecord.parentTurnNodeId || '',
-        declaredLogicalTurnId: lineageRecord.logicalTurnId || '',
-        requestNonce: lineageRecord.requestNonce || ''
-      } : null;
+      const lineage = lineageRecord && (
+        lineageRecord.parentTurnNodeId
+        || lineageRecord.logicalTurnId
+        || lineageRecord.requestNonce
+      ) ? {
+          declaredParentTurnNodeId: lineageRecord.parentTurnNodeId || '',
+          declaredLogicalTurnId: lineageRecord.logicalTurnId || '',
+          requestNonce: lineageRecord.requestNonce || ''
+        } : null;
       if (!visible && !packetHashes.length) return;
       // Only a completed U+A exchange consumes a worldline ordinal. Persisted
       // assistant-only/prefill rows remain available through packet descriptors
@@ -16267,8 +16500,9 @@ const MODE_PROFILES = Object.freeze({
     if (!lineage) return '';
     return [
       '[HAYAKU REQUEST LINEAGE: REQUIRED]',
-      `Copy this exact object into meta.lineage of every packet written for this response: ${JSON.stringify(lineage)}`,
-      'Do not rename, omit, recompute, or alter any lineage value.'
+      `Copy this exact object into meta.lineage of every packet written for this response, including every empty-string value: ${JSON.stringify(lineage)}`,
+      'meta.lineage is immutable structural runtime metadata, never semantic content. Do not rename, omit, infer, fill, recompute, swap, or alter any lineage key or value.',
+      'An empty parent_turn_node_id means this is a root turn and MUST remain the empty string; never copy logical_turn_id into it.'
     ].join('\n');
   };
   const packetMemoryLanguageInstruction = (settings = Memory.settings || DEFAULT_SETTINGS) => {
@@ -16361,9 +16595,16 @@ const MODE_PROFILES = Object.freeze({
         ? 'Emit exactly two packets in this order: recovery_snapshot, then current_snapshot. Do not merge or omit either.'
         : 'Emit exactly one current_snapshot packet; never omit it, including on unchanged or low-information turns.',
       ...packetPlacementRuleLines(settings, recoveryActive, { terse: true }),
-      'Use the exact non-empty runtime constants in the safe skeleton below. Fill blank semantic values only from allowed evidence; otherwise keep them empty and low-confidence.',
-      'Do not copy the blank skeleton when the completed visible artifact establishes continuity-relevant content; write those supported outcomes into the semantic fields.',
+      'Treat meta.lineage as immutable structural runtime metadata. Copy every lineage key and value exactly from the safe skeleton, INCLUDING empty strings; an empty parent_turn_node_id means root and MUST remain empty. Never infer, fill, recompute, swap, or copy values between lineage fields.',
+      'Use the exact non-empty runtime constants elsewhere in the safe skeleton. Fill only blank semantic values outside meta.lineage from allowed evidence; otherwise keep them empty and low-confidence.',
+      'A blank semantic field is allowed only when no supported continuity fact exists for that field or axis. Minimal means concise, never blank.',
+      'If the completed visible artifact contains substantive scene, action, dialogue, state, or outcome content, meta.summary_memory.summary MUST be non-empty and at least one evidence-supported semantic axis among entity, world, narrative, or planner MUST contain content.',
+      'Do not copy the blank skeleton when the completed visible artifact establishes continuity-relevant content; write those supported outcomes into the semantic fields.'
     ];
+    if (text(settings?.requestLineage?.mode || '').trim().toLowerCase() === 'reroll') {
+      const rerollTarget = Math.max(1, Number(settings?.requestLineage?.targetPairIndex || 0) || 1);
+      lines.push(`[HAYAKU REROLL PACKET] This request rerolls pair T${rerollTarget}. Author a fresh current_snapshot from THIS newly completed visible response. Do not reuse or echo the superseded variant's semantic packet as the current result; retain a prior fact only when it is independently supported by accepted memory, objective canon, or re-established in this response.`);
+    }
     if (settings?.outputContract?.structuredData?.embeddedRequired === true) {
       lines.push('Finish the preset-required machine-readable block first; keep the hidden HAYAKU packet in the resolved slot outside that block.');
     }
@@ -16903,7 +17144,7 @@ const MODE_PROFILES = Object.freeze({
       'Treat the latest user message as intent, attempt, or request rather than an accomplished outcome unless the active preset marks it as concluded canon or the final artifact confirms it. Objective canon is not character knowledge without an established acquisition path.',
       '</evidence>',
       '<selection>',
-      'Record only continuity-relevant established facts and changes. Empty axes and low confidence are valid; never invent an event, transition, emotion, relationship change, knowledge transfer, dialogue, or future merely to fill fields.',
+      'Record only continuity-relevant established facts and changes. An individual semantic axis may be empty only when the completed visible artifact and accepted evidence provide no continuity-relevant fact for that axis. Low confidence is valid; never invent an event, transition, emotion, relationship change, knowledge transfer, dialogue, or future merely to fill fields.',
       'Exclude reasoning, planning, drafts, reviews, tool or approval text, prompt/control text, style rules, scores, choices, proposals, and unchosen futures. Do not write next_direction, suggested_hooks, or scene-output instructions.',
       '</selection>',
       '<format>',
@@ -16914,7 +17155,7 @@ const MODE_PROFILES = Object.freeze({
       'Reuse the supplied active scene_id while place, time, and action chain continue. Create a new scene_id only when the completed visible artifact establishes an actual transition.',
       '</format>',
       '<completion>',
-      'Follow the runtime packet shape for the exact count, lineage, scene, and preset-resolved slot. Emit a minimal low-confidence packet even when nothing changed; do not print packet validation commentary.',
+      'Follow the runtime packet shape for the exact count, lineage, scene, and preset-resolved slot. A minimal packet means concise, never blank. Even when nothing changed, emit the packet. When the completed visible artifact contains substantive scene, action, dialogue, state, or outcome content, meta.summary_memory.summary MUST be non-empty and at least one evidence-supported semantic axis among entity, world, narrative, or planner MUST contain content. Do not print packet validation commentary.',
       '</completion>',
       '</hayaku_packet_contract>',
       PACKET_CORE_WRITE_END
@@ -16935,10 +17176,11 @@ const MODE_PROFILES = Object.freeze({
     lines.push(
       'Do not change the active preset\'s visible format. The completed visible artifact is the current outcome; the latest user message is only intent or attempt unless that artifact or the preset confirms it.',
       'Use only accepted packet memory, objective canon, and the completed visible artifact. Objective canon is not automatically character knowledge. Exclude reasoning, control/style text, proposals, and unrealized futures.',
-      'Use strict JSON with object-valued meta, entity, world, narrative, planner, and importance. Empty axes and low confidence are safer than invented change.',
+      'Use strict JSON with object-valued meta, entity, world, narrative, planner, and importance. An axis may be empty only when no supported continuity fact exists for it; low confidence is safer than invented change.',
       packetMemoryLanguageInstruction(staticSettings),
       ...packetSchemaV2WriteInstruction({ ...staticSettings, requestPressure: 'extreme' }),
-      'Reuse the supplied scene_id unless the completed artifact establishes a transition.'
+      'Reuse the supplied scene_id unless the completed artifact establishes a transition.',
+      'Minimal means concise, never blank: when the completed visible artifact has substantive continuity content, meta.summary_memory.summary MUST be non-empty and at least one supported entity, world, narrative, or planner axis MUST contain content.'
     );
     if (!critical) lines.push('Keep only later-useful continuity; do not copy filler, validation commentary, or request-local instructions.');
     lines.push('</hayaku_packet_contract>', PACKET_CORE_WRITE_END);
@@ -16991,11 +17233,20 @@ const MODE_PROFILES = Object.freeze({
     const packetRequirement = recoveryActive
       ? 'exactly two packets (recovery_snapshot first, current_snapshot second)'
       : 'exactly one current_snapshot packet';
+    const completionLine = options?.critical === true
+      ? `Keep required visible output and emit ${packetRequirement}; both are required.`
+      : options?.compact === true
+        ? `Complete required visible output and emit ${packetRequirement} in the resolved slot; both are required.`
+        : `Complete every active-preset visible obligation and emit ${packetRequirement} in the resolved slot; neither replaces the other and the response is incomplete without both.`;
     const lines = [
       SIDE_WRITE_TAIL_MARKER,
-      `Complete every active-preset visible obligation and emit ${packetRequirement} in the resolved slot; neither replaces the other and the response is incomplete without both.`,
-      packetTerminalFinalSealLine(settings, recoveryActive)
+      completionLine,
+      'Packet omission or blank-skeleton fallback is never valid. If the completed visible artifact has substantive continuity content, meta.summary_memory.summary MUST be non-empty and at least one supported entity, world, narrative, or planner axis MUST contain content.'
     ];
+    if (text(settings?.requestLineage?.mode || '').trim().toLowerCase() === 'reroll') {
+      lines.push('REROLL: write current_snapshot from THIS completed response, not from the superseded variant.');
+    }
+    lines.push(packetTerminalFinalSealLine(settings, recoveryActive));
     return lines.join('\n').trim();
   };
 
@@ -17335,28 +17586,60 @@ const MODE_PROFILES = Object.freeze({
         const body = messageContent(msg);
         return body.trim() || hasOpaqueProviderPayload(msg);
       });
-    const ownedContext = [text(block).trim(), text(tail).trim()].filter(Boolean).join('\n\n');
+    const blockText = text(block).trim();
+    const tailText = text(tail).trim();
     const configuredMode = promptCacheModeOf(settings);
     const structural = configuredMode !== 'off' && text(staticText).includes(CACHE_STATIC_END);
-    if (!ownedContext && !structural) {
-      return { messages: clean, diagnostics: { configuredMode, effectiveMode: 'off', staticIndex: -1, dynamicIndex: -1, prefixBreakReasons: ['empty_injection'] } };
+    if (!blockText && !tailText && !structural) {
+      return {
+        messages: clean,
+        diagnostics: {
+          configuredMode,
+          effectiveMode: 'off',
+          staticIndex: -1,
+          dynamicIndex: -1,
+          terminalTailIndex: -1,
+          terminalTailRole: '',
+          prefixBreakReasons: ['empty_injection']
+        }
+      };
     }
-    if (!structural) {
-      const dynamicIndex = promptInjectionIndex(clean);
+    const placeTerminalTail = baseMessages => {
+      if (!tailText) return { messages: baseMessages, index: -1, role: '' };
+      const terminalPrefillIndex = findHayakuTerminalAssistantPrefillIndex(baseMessages);
+      const tailIndex = terminalPrefillIndex >= 0 ? terminalPrefillIndex : baseMessages.length;
       return {
         messages: [
-          ...clean.slice(0, dynamicIndex),
-          { role: 'user', content: ownedContext, memo: RUNTIME_CONTEXT_MEMO },
-          ...clean.slice(dynamicIndex)
+          ...baseMessages.slice(0, tailIndex),
+          { role: 'system', content: tailText, memo: RUNTIME_CONTEXT_MEMO },
+          ...baseMessages.slice(tailIndex)
         ],
+        index: tailIndex,
+        role: 'system'
+      };
+    };
+    if (!structural) {
+      const dynamicIndex = blockText ? promptInjectionIndex(clean) : -1;
+      const withDynamic = blockText
+        ? [
+            ...clean.slice(0, dynamicIndex),
+            { role: 'user', content: blockText, memo: RUNTIME_CONTEXT_MEMO },
+            ...clean.slice(dynamicIndex)
+          ]
+        : clean;
+      const terminalTail = placeTerminalTail(withDynamic);
+      return {
+        messages: terminalTail.messages,
         diagnostics: {
           configuredMode,
           effectiveMode: 'off',
           staticIndex: -1,
           dynamicIndex,
           staticRole: '',
-          dynamicRole: 'user',
-          prefixBreakReasons: ['legacy_single_message']
+          dynamicRole: blockText ? 'user' : '',
+          terminalTailIndex: terminalTail.index,
+          terminalTailRole: terminalTail.role,
+          prefixBreakReasons: ['legacy_split_terminal_tail']
         }
       };
     }
@@ -17367,12 +17650,16 @@ const MODE_PROFILES = Object.freeze({
       { role: 'system', content: text(staticText).trim(), memo: CACHE_STATIC_CONTEXT_MEMO },
       ...clean.slice(staticIndex)
     ];
-    const dynamicIndex = promptInjectionIndex(withStatic);
-    const output = [
-      ...withStatic.slice(0, dynamicIndex),
-      { role: 'user', content: ownedContext, memo: RUNTIME_CONTEXT_MEMO },
-      ...withStatic.slice(dynamicIndex)
-    ];
+    const dynamicIndex = blockText ? promptInjectionIndex(withStatic) : -1;
+    const withDynamic = blockText
+      ? [
+          ...withStatic.slice(0, dynamicIndex),
+          { role: 'user', content: blockText, memo: RUNTIME_CONTEXT_MEMO },
+          ...withStatic.slice(dynamicIndex)
+        ]
+      : withStatic;
+    const terminalTail = placeTerminalTail(withDynamic);
+    const output = terminalTail.messages;
     const staticPrefix = output.slice(0, staticIndex + 1).map(message => ({ role: roleOf(message), content: messageContent(message) }));
     const canonicalPrefix = canonicalPromptCacheStringify(staticPrefix);
     return {
@@ -17383,7 +17670,9 @@ const MODE_PROFILES = Object.freeze({
         staticIndex,
         dynamicIndex,
         staticRole: 'system',
-        dynamicRole: 'user',
+        dynamicRole: blockText ? 'user' : '',
+        terminalTailIndex: terminalTail.index,
+        terminalTailRole: terminalTail.role,
         staticPrefixHash: stableHash64(canonicalPrefix),
         staticPrefixChars: canonicalPrefix.length,
         staticPrefixEstimatedTokens: Math.ceil(canonicalPrefix.length / 4),
@@ -18275,12 +18564,14 @@ const MODE_PROFILES = Object.freeze({
         captureOriginRegistered: Boolean(captureOrigin),
         injectedRuntimePrompt: {
           memo: RUNTIME_CONTEXT_MEMO,
-          placement: 'before_resolved_current_input_or_terminal_prefill',
+          placement: 'dynamic_block_before_current_input_terminal_tail_after_input',
           block,
           tail,
           combined: [text(block).trim(), text(tail).trim()].filter(Boolean).join('\n\n'),
           blockChars: text(block).length,
           tailChars: text(tail).length,
+          terminalTailIndex: Number(injectionResult.diagnostics?.terminalTailIndex ?? -1),
+          terminalTailRole: text(injectionResult.diagnostics?.terminalTailRole || ''),
           totalChars: totalInjectedChars
         },
         packetCoreOnly: true,
@@ -18298,6 +18589,7 @@ const MODE_PROFILES = Object.freeze({
         packetRecovery: clone(packetRecovery || null, null),
         packetRecoveryEvidence: clone(packetRecoveryEvidence, {}),
         requestLineage: clone(requestLineage || null, null),
+        requestLineageMode: text(requestLineage?.mode || ''),
         historyMutation: clone(historyMutation || null, null),
         historyMutationSync: clone(historyMutationSync, {}),
         previousTurnRecallBridge: clone(previousTurnRecallBridge || null, null),
@@ -18331,7 +18623,9 @@ const MODE_PROFILES = Object.freeze({
           pluginLlmCalls: 0,
           packetAuthor: 'response_model',
           packetIngestion: 'live_chat_primary_plugin_storage_mirror',
-          hostRequestDeadlineMs: HOST_REQUEST_DEADLINE_MS
+          hostRequestDeadlineMs: HOST_REQUEST_DEADLINE_MS,
+          hostRequestDeadlineScope: 'diagnostic_only_not_cross_request_host_call_gate',
+          hostCallTimeoutMs: HOST_API_CALL_TIMEOUT_MS
         },
         temporalOrder: temporalOrder.map(row => ({
           sourceTime: row.sourceTime,
@@ -18419,7 +18713,10 @@ const MODE_PROFILES = Object.freeze({
         effectiveModeReason: settings.effectiveModeReason,
         promptMode,
         packetRecovery: packetRecovery?.active === true ? packetRecovery.reason : '',
+        requestLineageMode: text(requestLineage?.mode || ''),
         previousTurnRecallBridge: previousTurnRecallBridge?.active === true ? previousTurnRecallBridge.reason : '',
+        terminalTailIndex: Number(injectionResult.diagnostics?.terminalTailIndex ?? -1),
+        terminalTailRole: text(injectionResult.diagnostics?.terminalTailRole || ''),
         selected: Object.fromEntries(Object.entries(selectedForModel).map(([axis, rows]) => [axis, rows.length]))
       });
       return injectionResult.messages;
@@ -18487,7 +18784,9 @@ const MODE_PROFILES = Object.freeze({
           pluginLlmCalls: 0,
           packetAuthor: 'response_model',
           packetIngestion: 'validated_pluginStorage_commit',
-          hostRequestDeadlineMs: HOST_REQUEST_DEADLINE_MS
+          hostRequestDeadlineMs: HOST_REQUEST_DEADLINE_MS,
+          hostRequestDeadlineScope: 'diagnostic_only_not_cross_request_host_call_gate',
+          hostCallTimeoutMs: HOST_API_CALL_TIMEOUT_MS
         },
         compat: RisuCompat.snapshot(),
         budgetMs: requestBudgetMs,
@@ -18799,7 +19098,7 @@ const MODE_PROFILES = Object.freeze({
     if (requestNonce) return ['pending', requestNonce, packetType].join('\u0001');
     return [
       'pair',
-      Math.max(1, Number(record?.targetPairIndex || 1) || 1),
+      Math.max(1, finiteNonNegativeInteger(record?.targetPairIndex, 1)),
       compact(record?.userHash || record?.userMessageIdHash || '', 96),
       packetType
     ].join('\u0001');
@@ -18810,15 +19109,15 @@ const MODE_PROFILES = Object.freeze({
     const sourceRange = objectish(meta.source_turn_range)
       ? meta.source_turn_range
       : (objectish(meta.sourceTurnRange) ? meta.sourceTurnRange : {});
-    const targetPairIndex = Math.max(0, Number(
+    const targetPairIndex = finiteNonNegativeInteger(
       record?.targetPairIndex || meta.turn_anchor || meta.turnAnchor || 0
-    ) || 0);
-    let turnStart = Math.max(0, Number(
+    );
+    let turnStart = finiteNonNegativeInteger(
       record?.recoveryTurnStart || sourceRange.start || sourceRange.start_turn || targetPairIndex
-    ) || 0);
-    let turnEnd = Math.max(0, Number(
+    );
+    let turnEnd = finiteNonNegativeInteger(
       record?.recoveryTurnEnd || sourceRange.end || sourceRange.end_turn || targetPairIndex
-    ) || 0);
+    );
     if (!turnStart && turnEnd) turnStart = turnEnd;
     if (!turnEnd && turnStart) turnEnd = turnStart;
     if (turnEnd < turnStart) [turnStart, turnEnd] = [turnEnd, turnStart];
@@ -18832,7 +19131,7 @@ const MODE_PROFILES = Object.freeze({
   const bridgeAnalyzedPairIndices = (records = [], ledger = null) => {
     const ledgerRecords = ensureArray(ledger?.records);
     const activeColdStartEpochId = compact(ledger?.coldStart?.activeEpochId || '', 128);
-    const expectedColdRecords = Math.max(0, Number(ledger?.coldStart?.recordCount || 0) || 0);
+    const expectedColdRecords = finiteNonNegativeInteger(ledger?.coldStart?.recordCount, 0);
     const coldGroupRecords = ledgerRecords.filter(record => (
       record?.captureSource === 'bridge_cold_start'
       && record?.recordState === 'historical'
@@ -18843,7 +19142,7 @@ const MODE_PROFILES = Object.freeze({
       && coldGroupRecords.length === expectedColdRecords;
     const activeRecoveryId = compact(ledger?.incrementalRecovery?.lastRecoveryId || '', 128);
     const activeRecoverySourceHash = compact(ledger?.incrementalRecovery?.sourceHash || '', 96);
-    const expectedRecoveryRecords = Math.max(0, Number(ledger?.incrementalRecovery?.recordCount || 0) || 0);
+    const expectedRecoveryRecords = finiteNonNegativeInteger(ledger?.incrementalRecovery?.recordCount, 0);
     const latestRecoveryStoredRecords = ledgerRecords.filter(record => (
       record?.captureSource === 'bridge_incremental_recovery'
       && (!activeRecoveryId
@@ -18875,10 +19174,10 @@ const MODE_PROFILES = Object.freeze({
       const coveredEnd = coldStartRecord && range.packetType === 'cold_start_pending_boundary'
         ? Math.max(0, range.turnEnd - 1)
         : range.turnEnd;
-      for (let pairIndex = range.turnStart; pairIndex <= coveredEnd; pairIndex += 1) {
-        covered.add(pairIndex);
-        if (covered.size >= 8192) break;
-      }
+      if (!Number.isSafeInteger(range.turnStart) || !Number.isSafeInteger(coveredEnd)
+        || range.turnStart < 1 || coveredEnd < range.turnStart) return;
+      const iterationBudget = Math.min(coveredEnd - range.turnStart + 1, Math.max(0, 8192 - covered.size));
+      for (let offset = 0; offset < iterationBudget; offset += 1) covered.add(range.turnStart + offset);
     });
     return [...covered].sort((a, b) => a - b);
   };
@@ -18899,9 +19198,9 @@ const MODE_PROFILES = Object.freeze({
       ownerTurnNodeId: compact(value?.ownerTurnNodeId || '', 96),
       packetType: compact(value?.packetType || 'current_snapshot', 48),
       state: normalizeStorageSlotState(value?.state),
-      selectedAt: Math.max(0, Number(value?.selectedAt || 0) || 0),
-      lastChatObservedAt: Math.max(0, Number(value?.lastChatObservedAt || 0) || 0),
-      sourcePriority: Math.max(0, Number(value?.sourcePriority || 0) || 0)
+      selectedAt: finiteNonNegativeInteger(value?.selectedAt, 0),
+      lastChatObservedAt: finiteNonNegativeInteger(value?.lastChatObservedAt, 0),
+      sourcePriority: finiteNonNegativeInteger(value?.sourcePriority, 0)
     };
   };
   const storageTombstoneIntent = (reason = '', explicit = '') => {
@@ -18916,9 +19215,9 @@ const MODE_PROFILES = Object.freeze({
     const slotId = compact(value?.slotId || '', 240);
     if (!slotId) return null;
     const reason = compact(value?.reason || 'explicit_forget', 120);
-    const targetPairIndex = Math.max(0, Number(value?.targetPairIndex || 0) || 0);
-    let turnStart = Math.max(0, Number(value?.turnStart || value?.sourceTurnStart || targetPairIndex) || 0);
-    let turnEnd = Math.max(0, Number(value?.turnEnd || value?.sourceTurnEnd || targetPairIndex) || 0);
+    const targetPairIndex = finiteNonNegativeInteger(value?.targetPairIndex, 0);
+    let turnStart = finiteNonNegativeInteger(value?.turnStart || value?.sourceTurnStart, targetPairIndex);
+    let turnEnd = finiteNonNegativeInteger(value?.turnEnd || value?.sourceTurnEnd, targetPairIndex);
     if (!turnStart && turnEnd) turnStart = turnEnd;
     if (!turnEnd && turnStart) turnEnd = turnStart;
     if (turnEnd < turnStart) [turnStart, turnEnd] = [turnEnd, turnStart];
@@ -18931,9 +19230,9 @@ const MODE_PROFILES = Object.freeze({
       targetPairIndex,
       turnStart,
       turnEnd,
-      createdAt: Math.max(0, Number(value?.createdAt || 0) || 0),
-      restoredAt: Math.max(0, Number(value?.restoredAt || 0) || 0),
-      active: value?.active !== false && !(Number(value?.restoredAt || 0) > 0)
+      createdAt: finiteNonNegativeInteger(value?.createdAt, 0),
+      restoredAt: finiteNonNegativeInteger(value?.restoredAt, 0),
+      active: value?.active !== false && finiteNonNegativeInteger(value?.restoredAt, 0) === 0
     };
   };
   const emptyStorageLedger = scope => ({
@@ -18964,17 +19263,72 @@ const MODE_PROFILES = Object.freeze({
   const isBridgeAnalysisCaptureSource = value => (
     value === 'bridge_cold_start' || value === 'bridge_incremental_recovery'
   );
+  const bridgeAnalysisAllowedPacketTypes = context => (
+    context === MEMORY_SESSION_BRIDGE_COLD_START_SCHEMA || context === 'bridge_cold_start'
+      ? new Set(['cold_start_snapshot', 'cold_start_pending_boundary'])
+      : context === MEMORY_SESSION_BRIDGE_INCREMENTAL_RECOVERY_SCHEMA || context === 'bridge_incremental_recovery'
+        ? new Set(['recovery_snapshot'])
+        : null
+  );
+  const validateBridgeAnalysisPacket = (packet, context) => {
+    const allowedPacketTypes = bridgeAnalysisAllowedPacketTypes(context);
+    if (!allowedPacketTypes) return { ok: false, reason: 'bridge_packet_context_invalid' };
+    const structural = validateHayakuPacket(packet);
+    if (structural.ok !== true) {
+      return {
+        ok: false,
+        reason: 'capsule_packet_schema_invalid',
+        errors: ensureArray(structural.errors),
+        warnings: ensureArray(structural.warnings)
+      };
+    }
+    const packetType = text(packet?.meta?.packet_type || packet?.meta?.packetType).trim().toLowerCase();
+    if (!allowedPacketTypes.has(packetType)) {
+      return { ok: false, reason: 'capsule_packet_type_invalid', packetType };
+    }
+    const semanticStats = packetSemanticPayloadStats(packet);
+    const recognizedPayloadCounts = countPacketItems(packet);
+    const recognizedPayloadSignals = Object.values(recognizedPayloadCounts)
+      .reduce((sum, value) => sum + finiteNonNegativeInteger(value, 0), 0);
+    const continuityPayloadSignals = Number(Boolean(semanticStats.summaryText))
+      + semanticStats.anchors
+      + semanticStats.aliases
+      + semanticStats.mentioned
+      + semanticStats.semanticAxes;
+    if (continuityPayloadSignals < 1 || recognizedPayloadSignals < 1) {
+      return { ok: false, reason: 'capsule_packet_semantic_payload_empty', packetType, semanticStats };
+    }
+    return {
+      ok: true,
+      reason: 'bridge_packet_valid',
+      packetType,
+      semanticStats: {
+        ...semanticStats,
+        continuityPayloadSignals,
+        recognizedPayloadCounts,
+        recognizedPayloadSignals
+      }
+    };
+  };
   const normalizeStorageRecord = record => {
     const raw = text(record?.raw || '').trim();
     if (!raw || raw.length > STORAGE_LEDGER_MAX_PACKET_CHARS) return null;
     const captureSource = compact(record.captureSource || '', 48);
     const parsedRaw = safeJsonParse(raw, null);
     if (!objectish(parsedRaw)) return null;
-    // Bridge analysis packets have already passed capsule hash/count readback.
-    // Item-shape quality warnings must not delete the whole analyzed turn.
-    if (!isBridgeAnalysisCaptureSource(captureSource)
-      && validateHayakuPacket(parsedRaw).ok !== true) return null;
-    const packetType = compact(record.packetType || 'current_snapshot', 48);
+    // Durable storage is not trusted merely because captureSource claims bridge
+    // provenance. Re-validate bridge records on every load so direct storage
+    // corruption cannot bypass the capsule boundary.
+    if (isBridgeAnalysisCaptureSource(captureSource)) {
+      if (validateBridgeAnalysisPacket(parsedRaw, captureSource).ok !== true) return null;
+    } else if (validateHayakuPacket(parsedRaw).ok !== true) return null;
+    const packetType = compact(
+      parsedRaw?.meta?.packet_type
+        || parsedRaw?.meta?.packetType
+        || record.packetType
+        || 'current_snapshot',
+      48
+    ).toLowerCase();
     const requestNonce = compact(record.requestNonce || '', 96);
     const hash = compact(record.hash || stableHash64(raw), 96);
     const recordId = compact(record.recordId || `${requestNonce || hash}:${packetType}`, 196);
@@ -19009,8 +19363,8 @@ const MODE_PROFILES = Object.freeze({
       raw,
       packetType,
       targetPairIndex: memoryClass === 'historical'
-        ? Math.max(0, Number(record.targetPairIndex || 0) || 0)
-        : Math.max(1, Number(record.targetPairIndex || 1) || 1),
+        ? finiteNonNegativeInteger(record.targetPairIndex, 0)
+        : Math.max(1, finiteNonNegativeInteger(record.targetPairIndex, 1)),
       userHash: compact(record.userHash || '', 96),
       userMessageIdHash: compact(record.userMessageIdHash || '', 96),
       assistantVisibleHash: compact(record.assistantVisibleHash || '', 96),
@@ -19021,16 +19375,16 @@ const MODE_PROFILES = Object.freeze({
       recordState,
       memoryClass,
       requestNonce,
-      requestSequence: Math.max(0, Number(record.requestSequence || 0) || 0),
-      capturedAt: Math.max(0, Number(record.capturedAt || 0) || 0),
-      boundAt: Math.max(0, Number(record.boundAt || 0) || 0),
+      requestSequence: finiteNonNegativeInteger(record.requestSequence, 0),
+      capturedAt: finiteNonNegativeInteger(record.capturedAt, 0),
+      boundAt: finiteNonNegativeInteger(record.boundAt, 0),
       captureSource,
-      sourcePriority: Math.max(0, Number(record.sourcePriority || 0) || 0),
+      sourcePriority: finiteNonNegativeInteger(record.sourcePriority, 0),
       inheritedSessionHistory,
       inheritedFromScopeKey,
       inheritedViaScopeKey: compact(record.inheritedViaScopeKey || '', 160),
-      inheritedAt: Math.max(0, Number(record.inheritedAt || 0) || 0),
-      historicalOrdinal: Math.max(0, Number(record.historicalOrdinal || 0) || 0),
+      inheritedAt: finiteNonNegativeInteger(record.inheritedAt, 0),
+      historicalOrdinal: finiteNonNegativeInteger(record.historicalOrdinal, 0),
       permanentSessionHistory,
       historicalProtection: permanentSessionHistory
         ? PERMANENT_SESSION_HISTORY_PROTECTION
@@ -19045,12 +19399,12 @@ const MODE_PROFILES = Object.freeze({
       incrementalRecoveryId: compact(record.incrementalRecoveryId || '', 128),
       incrementalRecoverySourceHash: compact(record.incrementalRecoverySourceHash || '', 96),
       incrementalRecoveryRunId: compact(record.incrementalRecoveryRunId || '', 128),
-      recoveryTurnStart: Math.max(0, Number(record.recoveryTurnStart || 0) || 0),
-      recoveryTurnEnd: Math.max(0, Number(record.recoveryTurnEnd || 0) || 0),
+      recoveryTurnStart: finiteNonNegativeInteger(record.recoveryTurnStart, 0),
+      recoveryTurnEnd: finiteNonNegativeInteger(record.recoveryTurnEnd, 0),
       auditRetained: record.auditRetained === true,
       divergenceReason: compact(record.divergenceReason || '', 96),
       supersededByHash: compact(record.supersededByHash || '', 96),
-      supersededAt: Math.max(0, Number(record.supersededAt || 0) || 0)
+      supersededAt: finiteNonNegativeInteger(record.supersededAt, 0)
     };
     return {
       ...normalized,
@@ -19075,28 +19429,28 @@ const MODE_PROFILES = Object.freeze({
       .forEach(tombstone => tombstonesBySlot.set(tombstone.slotId, tombstone));
     return {
       ...empty,
-      updatedAt: Math.max(0, Number(parsed.updatedAt || 0) || 0),
+      updatedAt: finiteNonNegativeInteger(parsed.updatedAt, 0),
       chatTopologyHash: compact(parsed.chatTopologyHash || '', 96),
       migration: {
         complete: parsed?.migration?.complete === true,
-        importedAt: Math.max(0, Number(parsed?.migration?.importedAt || 0) || 0),
-        importedRecords: Math.max(0, Number(parsed?.migration?.importedRecords || 0) || 0),
+        importedAt: finiteNonNegativeInteger(parsed?.migration?.importedAt, 0),
+        importedRecords: finiteNonNegativeInteger(parsed?.migration?.importedRecords, 0),
         chatSnapshotHash: compact(parsed?.migration?.chatSnapshotHash || '', 96)
       },
       coldStart: {
         activeEpochId: compact(parsed?.coldStart?.activeEpochId || '', 128),
         transferId: compact(parsed?.coldStart?.transferId || '', 128),
         sourceHash: compact(parsed?.coldStart?.sourceHash || '', 96),
-        adoptedAt: Math.max(0, Number(parsed?.coldStart?.adoptedAt || 0) || 0),
-        recordCount: Math.max(0, Number(parsed?.coldStart?.recordCount || 0) || 0)
+        adoptedAt: finiteNonNegativeInteger(parsed?.coldStart?.adoptedAt, 0),
+        recordCount: finiteNonNegativeInteger(parsed?.coldStart?.recordCount, 0)
       },
       incrementalRecovery: {
         lastRecoveryId: compact(parsed?.incrementalRecovery?.lastRecoveryId || '', 128),
         sourceHash: compact(parsed?.incrementalRecovery?.sourceHash || '', 96),
-        adoptedAt: Math.max(0, Number(parsed?.incrementalRecovery?.adoptedAt || 0) || 0),
-        recordCount: Math.max(0, Number(parsed?.incrementalRecovery?.recordCount || 0) || 0),
+        adoptedAt: finiteNonNegativeInteger(parsed?.incrementalRecovery?.adoptedAt, 0),
+        recordCount: finiteNonNegativeInteger(parsed?.incrementalRecovery?.recordCount, 0),
         recoveredTurns: uniq(ensureArray(parsed?.incrementalRecovery?.recoveredTurns)
-          .map(value => Math.max(0, Number(value || 0) || 0)).filter(Boolean), 4096)
+          .map(value => finiteNonNegativeInteger(value, 0, MEMORY_BRIDGE_MAX_RECOVERY_TURN_INDEX)).filter(Boolean), 4096)
           .map(Number).filter(Number.isInteger)
       },
       worldline: normalizeTurnWorldline(parsed.worldline),
@@ -19373,6 +19727,12 @@ const MODE_PROFILES = Object.freeze({
   const validateBridgeAnalysisCapsulePacketSet = capsule => {
     const packets = ensureArray(capsule?.packets);
     if (!packets.length) return { ok: false, reason: 'capsule_empty', packets: [] };
+    if (packets.length > MEMORY_BRIDGE_MAX_CAPSULE_PACKETS) {
+      return { ok: false, reason: 'capsule_packet_limit_exceeded', packets: [] };
+    }
+    const capsuleSchema = text(capsule?.schema).trim();
+    const allowedPacketTypes = bridgeAnalysisAllowedPacketTypes(capsuleSchema);
+    if (!allowedPacketTypes) return { ok: false, reason: 'capsule_schema_invalid', packets: [] };
     if (capsule?.packetCount === undefined || capsule?.packetCount === null || capsule?.packetCount === '') {
       return { ok: false, reason: 'capsule_packet_count_missing', packets: [] };
     }
@@ -19385,6 +19745,7 @@ const MODE_PROFILES = Object.freeze({
     }
     const normalized = [];
     const ordinals = new Set();
+    let totalPacketChars = 0;
     for (let index = 0; index < packets.length; index += 1) {
       const entry = packets[index];
       const raw = text(typeof entry === 'string' ? entry : entry?.body).trim();
@@ -19393,6 +19754,10 @@ const MODE_PROFILES = Object.freeze({
       if (raw.length > STORAGE_LEDGER_MAX_PACKET_CHARS) {
         return { ok: false, reason: 'capsule_packet_too_large', invalidOrdinal: index + 1, packets: [] };
       }
+      totalPacketChars += raw.length;
+      if (totalPacketChars > STORAGE_LEDGER_MAX_TOTAL_CHARS) {
+        return { ok: false, reason: 'capsule_total_packet_size_exceeded', invalidOrdinal: index + 1, packets: [] };
+      }
       if (ordinal !== index + 1 || ordinals.has(ordinal)) {
         return { ok: false, reason: 'capsule_packet_ordinal_invalid', invalidOrdinal: index + 1, packets: [] };
       }
@@ -19400,14 +19765,45 @@ const MODE_PROFILES = Object.freeze({
       if (!objectish(packet)) {
         return { ok: false, reason: 'capsule_packet_json_invalid', invalidOrdinal: index + 1, packets: [] };
       }
+      const packetValidation = validateBridgeAnalysisPacket(packet, capsuleSchema);
+      if (packetValidation.ok !== true) {
+        return {
+          ok: false,
+          reason: packetValidation.reason,
+          invalidOrdinal: index + 1,
+          errors: ensureArray(packetValidation.errors),
+          warnings: ensureArray(packetValidation.warnings),
+          packets: []
+        };
+      }
+      const { packetType, semanticStats } = packetValidation;
       const declaredHash = compact(typeof entry === 'string' ? '' : entry?.packetHash || '', 96);
       if (declaredHash && declaredHash !== stableHash64(raw)) {
         return { ok: false, reason: 'capsule_packet_hash_mismatch', invalidOrdinal: index + 1, packets: [] };
       }
       ordinals.add(ordinal);
-      normalized.push({ entry, raw, packet, ordinal, index });
+      normalized.push({ entry, raw, packet, packetType, semanticStats, ordinal, index });
     }
-    return { ok: true, reason: 'capsule_packet_set_verified', packets: normalized };
+    return { ok: true, reason: 'capsule_packet_set_verified', packets: normalized, totalPacketChars };
+  };
+  const boundedBridgeRecoveryTurnRange = (startValue, endValue) => {
+    const start = Number(startValue);
+    const end = Number(endValue);
+    if (!Number.isInteger(start) || !Number.isInteger(end) || start < 1 || end < start) {
+      return { ok: false, reason: 'capsule_source_turn_range_invalid', start, end, turns: [] };
+    }
+    const span = end - start + 1;
+    if (end > MEMORY_BRIDGE_MAX_RECOVERY_TURN_INDEX || span > MEMORY_BRIDGE_MAX_RECOVERY_TURNS) {
+      return { ok: false, reason: 'capsule_source_turn_range_exceeds_limit', start, end, span, turns: [] };
+    }
+    return {
+      ok: true,
+      reason: 'capsule_source_turn_range_valid',
+      start,
+      end,
+      span,
+      turns: Array.from({ length: span }, (_, index) => start + index)
+    };
   };
   const importBridgeColdStartCapsuleIntoStorageLedger = (ledger, scope, capsule) => {
     if (!scope?.key) return { ledger, changed: false, reason: 'scope_unavailable' };
@@ -19425,7 +19821,7 @@ const MODE_PROFILES = Object.freeze({
         records: 0
       };
     }
-    const inheritedAt = Math.max(1, Number(capsule.createdAt || now()) || now());
+    const inheritedAt = finitePositiveTimestamp(capsule.createdAt, now());
     const epochId = compact(
       capsule.epochId
         || `coldstart:${stableHash64([scope.key, capsule.transferId || '', capsule.sourceHash || ''].join('\u0001'))}`,
@@ -19536,7 +19932,7 @@ const MODE_PROFILES = Object.freeze({
         sourceHash
       };
     }
-    const adoptedAt = Math.max(1, Number(capsule.createdAt || now()) || now());
+    const adoptedAt = finitePositiveTimestamp(capsule.createdAt, now());
     const replacementRecordIds = uniq(ensureArray(capsule.replacementRecordIds)
       .map(value => compact(value || '', 196)).filter(Boolean), 512);
     const replacementRecords = replacementRecordIds.map(recordId => (
@@ -19569,6 +19965,7 @@ const MODE_PROFILES = Object.freeze({
     const baseSequence = ensureArray(ledger?.records)
       .reduce((max, record) => Math.max(max, Number(record?.requestSequence || 0) || 0), 0);
     const importedRecords = [];
+    let importedRecoveryTurnSpan = 0;
     for (const { entry, raw, packet, index } of packetSet.packets) {
       const sourceRange = objectish(packet?.meta?.source_turn_range)
         ? packet.meta.source_turn_range
@@ -19601,6 +19998,19 @@ const MODE_PROFILES = Object.freeze({
           ledger,
           changed: false,
           reason: 'capsule_source_turn_range_invalid',
+          invalidOrdinal: index + 1,
+          records: 0,
+          recoveryId,
+          sourceHash
+        };
+      }
+      const boundedRange = boundedBridgeRecoveryTurnRange(rawTurnStart, rawTurnEnd);
+      importedRecoveryTurnSpan += Math.max(0, Number(boundedRange.span || 0) || 0);
+      if (!boundedRange.ok || importedRecoveryTurnSpan > MEMORY_BRIDGE_MAX_RECOVERY_TURNS) {
+        return {
+          ledger,
+          changed: false,
+          reason: 'capsule_source_turn_range_exceeds_limit',
           invalidOrdinal: index + 1,
           records: 0,
           recoveryId,
@@ -19663,11 +20073,9 @@ const MODE_PROFILES = Object.freeze({
     const additions = importedRecords.filter(record => (
       !existingKeys.has(`${record.incrementalRecoveryId}\u0001${record.hash}`)
     ));
-    const importedRecoveredTurns = importedRecords.flatMap(record => {
-      const out = [];
-      for (let turn = record.recoveryTurnStart; turn <= record.recoveryTurnEnd; turn += 1) out.push(turn);
-      return out;
-    });
+    const importedRecoveredTurns = importedRecords.flatMap(record => (
+      boundedBridgeRecoveryTurnRange(record.recoveryTurnStart, record.recoveryTurnEnd).turns
+    ));
     const recoveredTurns = uniq([
       ...ensureArray(ledger?.incrementalRecovery?.recoveredTurns),
       ...importedRecoveredTurns
@@ -19818,20 +20226,32 @@ const MODE_PROFILES = Object.freeze({
     const activeRecords = candidateRecords.filter(record => record?.recordState === 'active');
     const recoveredTurns = ensureArray(ledger?.incrementalRecovery?.recoveredTurns)
       .map(value => Math.max(0, Number(value || 0) || 0)).filter(Boolean);
+    let expectedTurnSpan = 0;
+    let expectedTurnRangesValid = true;
     const expectedTurns = uniq(ensureArray(capsule?.packets).flatMap(entry => {
       const start = Math.max(1, Number(entry?.startTurn || entry?.targetPairIndex || 1) || 1);
       const end = Math.max(start, Number(entry?.endTurn || entry?.targetPairIndex || start) || start);
-      const out = [];
-      for (let turn = start; turn <= end; turn += 1) out.push(turn);
-      return out;
+      const range = boundedBridgeRecoveryTurnRange(start, end);
+      expectedTurnSpan += Math.max(0, Number(range.span || 0) || 0);
+      if (!range.ok || expectedTurnSpan > MEMORY_BRIDGE_MAX_RECOVERY_TURNS) {
+        expectedTurnRangesValid = false;
+        return [];
+      }
+      return range.turns;
     }), 4096).map(Number).filter(Number.isInteger);
     const activeTurns = new Set();
+    let activeTurnRangesValid = true;
     activeRecords.forEach(record => {
       const range = storageRecordTurnRange(record);
       if (!range.turnStart || !range.turnEnd) return;
-      for (let turn = range.turnStart; turn <= range.turnEnd; turn += 1) activeTurns.add(turn);
+      const boundedRange = boundedBridgeRecoveryTurnRange(range.turnStart, range.turnEnd);
+      if (!boundedRange.ok) {
+        activeTurnRangesValid = false;
+        return;
+      }
+      boundedRange.turns.forEach(turn => activeTurns.add(turn));
     });
-    const activeCoverageMatches = expectedTurns.length > 0
+    const activeCoverageMatches = expectedTurnRangesValid && activeTurnRangesValid && expectedTurns.length > 0
       && expectedTurns.every(turn => activeTurns.has(turn));
     const metadataMatches = compact(ledger?.scopeKey || scope?.key || '', 160) === compact(scope?.key || '', 160)
       && compact(ledger?.incrementalRecovery?.lastRecoveryId || '', 128) === recoveryId
@@ -19863,6 +20283,8 @@ const MODE_PROFILES = Object.freeze({
         packetsMatch,
         replacementsMatch,
         activeCoverageMatches,
+        expectedTurnRangesValid,
+        activeTurnRangesValid,
         activeTurns: [...activeTurns].sort((a, b) => a - b),
         expectedTurns
       },
@@ -20419,6 +20841,9 @@ const MODE_PROFILES = Object.freeze({
     return await queued;
   };
   const writeStorageLedgerDirect = async (scope, ledger, reason = 'update') => {
+    if (Memory.unloaded || !ownsRuntime()) {
+      return { durable: false, saved: false, reason: 'runtime_not_owner' };
+    }
     const key = storageLedgerStorageKey(scope);
     if (!key) return { durable: false, saved: false, reason: 'scope_unavailable' };
     const activeRecords = ensureArray(ledger.records).filter(record => (
@@ -20450,6 +20875,24 @@ const MODE_PROFILES = Object.freeze({
         .map(normalizeStorageTombstone).filter(Boolean).slice(-STORAGE_LEDGER_MAX_TOMBSTONES)
     };
     const serialized = JSON.stringify(next);
+    const totalPacketChars = next.records.reduce((sum, record) => sum + record.raw.length, 0);
+    const protectedRetentionTargetExceeded = next.records.length > STORAGE_LEDGER_MAX_RECORDS
+      || totalPacketChars > STORAGE_LEDGER_MAX_TOTAL_CHARS;
+    if (protectedRetentionTargetExceeded) {
+      const warning = 'protected_storage_retention_target_exceeded';
+      if (!ensureArray(Memory.lastWarnings).includes(warning)) {
+        Memory.lastWarnings = [...ensureArray(Memory.lastWarnings), warning].slice(-20);
+        pushOperationLog('storage:retention_target_exceeded', {
+          at: now(),
+          scopeKey: scope.key,
+          records: next.records.length,
+          recordTarget: STORAGE_LEDGER_MAX_RECORDS,
+          packetChars: totalPacketChars,
+          packetCharTarget: STORAGE_LEDGER_MAX_TOTAL_CHARS,
+          protectedRecordsPreserved: true
+        }, 'warn');
+      }
+    }
     const saved = await RisuCompat.setStorageItem(key, serialized);
     // Chat is authoritative and this write is its secondary mirror. Routine
     // topology updates occur every turn; re-reading and hashing the complete
@@ -20471,7 +20914,8 @@ const MODE_PROFILES = Object.freeze({
         ? reason
         : (saved ? 'storage_readback_mismatch' : 'storage_write_failed'),
       records: next.records.length,
-      chars: next.records.reduce((sum, record) => sum + record.raw.length, 0),
+      chars: totalPacketChars,
+      protectedRetentionTargetExceeded,
       ledger: next
     };
   };
@@ -20492,7 +20936,22 @@ const MODE_PROFILES = Object.freeze({
     const expectedTargetChatId = compact(options?.targetChatId || '', 160);
     const expectedTransferId = compact(options?.transferId || '', 160);
     const expectedSourceScopeKey = compact(options?.sourceScopeKey || '', 196);
-    const expectedRecords = Math.max(0, Number(options?.expectedRecords || 0) || 0);
+    const hasExpectedRecords = Object.prototype.hasOwnProperty.call(options || {}, 'expectedRecords');
+    const expectedRecordsRaw = Number(options?.expectedRecords);
+    const expectedRecords = hasExpectedRecords && Number.isInteger(expectedRecordsRaw) && expectedRecordsRaw >= 0
+      ? expectedRecordsRaw
+      : 0;
+    if (hasExpectedRecords && (!Number.isInteger(expectedRecordsRaw) || expectedRecordsRaw < 0)) {
+      return {
+        ok: false,
+        adopted: false,
+        verified: false,
+        durable: false,
+        reason: 'expected_record_count_invalid',
+        records: 0,
+        expectedRecords: 0
+      };
+    }
     if (scope.bridgeHandoffValid !== true) {
       return {
         ok: false,
@@ -20544,10 +21003,26 @@ const MODE_PROFILES = Object.freeze({
       && isPermanentHistoricalStorageRecord(record)
     ));
     const sourceMatches = !expectedSourceScopeKey
-      || (inherited.length > 0 && inherited.every(record => (
-        compact(record?.inheritedViaScopeKey || '', 196) === expectedSourceScopeKey
-      )));
-    const emptyHandoff = expectedRecords <= 0 && inherited.length === 0;
+      || (inherited.length === 0
+        ? (!hasExpectedRecords || expectedRecords === 0)
+        : inherited.every(record => (
+          compact(record?.inheritedViaScopeKey || '', 196) === expectedSourceScopeKey
+        )));
+    const recordCountMatches = !hasExpectedRecords || inherited.length === expectedRecords;
+    const emptyHandoff = inherited.length === 0 && (!hasExpectedRecords || expectedRecords === 0);
+    if (!recordCountMatches) {
+      return {
+        ok: false,
+        adopted: false,
+        verified: false,
+        durable: false,
+        reason: 'expected_record_count_mismatch',
+        records: inherited.length,
+        expectedRecords,
+        scopeKey: scope.key,
+        transferId: scope.bridgeHandoffTransferId
+      };
+    }
     if (!inherited.length && !emptyHandoff) {
       return {
         ok: false,
@@ -20579,10 +21054,24 @@ const MODE_PROFILES = Object.freeze({
     const commit = newlyAdopted
       ? await writeStorageLedgerDirect(scope, ledger, 'bridge_session_handoff')
       : { durable: true, saved: false, reason: emptyHandoff ? 'session_handoff_empty' : 'session_handoff_already_adopted' };
-    const verified = commit.durable === true && (emptyHandoff || inherited.length > 0);
+    const durableInherited = ensureArray(commit?.ledger?.records || ledger.records).filter(record => (
+      record?.captureSource === 'session_handoff'
+      && isPermanentHistoricalStorageRecord(record)
+    ));
+    const durableCountMatches = !hasExpectedRecords || durableInherited.length === expectedRecords;
+    const durableSourceMatches = !expectedSourceScopeKey
+      || (durableInherited.length === 0
+        ? (!hasExpectedRecords || expectedRecords === 0)
+        : durableInherited.every(record => (
+          compact(record?.inheritedViaScopeKey || '', 196) === expectedSourceScopeKey
+        )));
+    const verified = commit.durable === true
+      && durableCountMatches
+      && durableSourceMatches
+      && (emptyHandoff || durableInherited.length > 0);
     return {
       ok: verified,
-      adopted: newlyAdopted && commit.saved === true,
+      adopted: newlyAdopted && verified,
       verified,
       durable: commit.durable === true,
       reason: verified
@@ -20591,11 +21080,15 @@ const MODE_PROFILES = Object.freeze({
           : newlyAdopted
             ? 'session_handoff_adopted'
             : 'session_handoff_already_adopted')
-        : commit.reason || 'session_handoff_write_failed',
-      records: inherited.length,
+        : (!durableCountMatches
+          ? 'durable_expected_record_count_mismatch'
+          : !durableSourceMatches
+            ? 'durable_source_scope_mismatch'
+            : commit.reason || 'session_handoff_write_failed'),
+      records: durableInherited.length,
       expectedRecords,
       scopeKey: scope.key,
-      sourceScopeKey: expectedSourceScopeKey || compact(inherited[0]?.inheritedViaScopeKey || '', 196),
+      sourceScopeKey: expectedSourceScopeKey || compact(durableInherited[0]?.inheritedViaScopeKey || '', 196),
       targetChatId: scope.chatId,
       transferId: scope.bridgeHandoffTransferId
     };
@@ -20994,7 +21487,57 @@ const MODE_PROFILES = Object.freeze({
     };
   };
   let memoryBridgeIpcRegistered = false;
-  const registerMemoryBridgeIpc = async () => {
+  let memoryBridgeIpcApi = null;
+  let memoryBridgeIpcHandler = null;
+  let memoryBridgeIpcRegistration = null;
+  const removeMemoryBridgeIpc = async () => {
+    let registry = null;
+    try { registry = globalThis[MEMORY_BRIDGE_IPC_RUNTIME_KEY] || null; } catch (_) {}
+    const api = registry?.api || memoryBridgeIpcApi;
+    const handler = registry?.dispatcher || memoryBridgeIpcHandler;
+    const registration = registry?.registration ?? memoryBridgeIpcRegistration;
+    memoryBridgeIpcRegistered = false;
+    memoryBridgeIpcApi = null;
+    memoryBridgeIpcHandler = null;
+    memoryBridgeIpcRegistration = null;
+    if (registry && registry.ownerToken !== RUNTIME_INSTANCE_TOKEN) return false;
+    const retireRegistry = removed => {
+      if (!registry) return removed;
+      if (removed) {
+        try {
+          if (globalThis[MEMORY_BRIDGE_IPC_RUNTIME_KEY] === registry) {
+            delete globalThis[MEMORY_BRIDGE_IPC_RUNTIME_KEY];
+          }
+        } catch (_) {}
+      } else {
+        registry.ownerToken = null;
+        registry.handler = null;
+      }
+      return removed;
+    };
+    try {
+      if (typeof registration === 'function') {
+        await registration();
+        return retireRegistry(true);
+      }
+      for (const method of ['dispose', 'unsubscribe', 'remove']) {
+        if (typeof registration?.[method] === 'function') {
+          await registration[method]();
+          return retireRegistry(true);
+        }
+      }
+      for (const method of ['removePluginChannelListener', 'unregisterPluginChannelListener']) {
+        if (handler && typeof api?.[method] === 'function') {
+          await api[method](MEMORY_SESSION_BRIDGE_HAYAKU_REQUEST_CHANNEL, handler);
+          return retireRegistry(true);
+        }
+      }
+    } catch (error) {
+      debugError('bridge:ipc_unregister_failed', error);
+    }
+    return retireRegistry(false);
+  };
+  const registerMemoryBridgeIpc = async (allowRetry = true) => {
     if (memoryBridgeIpcRegistered) return true;
     const api = apiCandidates().find(candidate => (
       typeof candidate?.addPluginChannelListener === 'function'
@@ -21002,9 +21545,8 @@ const MODE_PROFILES = Object.freeze({
     )) || RisuCompat.api();
     if (typeof api?.addPluginChannelListener !== 'function'
       || typeof api?.postPluginChannelMessage !== 'function') return false;
-    await api.addPluginChannelListener(
-      MEMORY_SESSION_BRIDGE_HAYAKU_REQUEST_CHANNEL,
-      async (message, metadata = {}) => {
+    const handler = async (message, metadata = {}) => {
+        if (Memory.unloaded || !ownsRuntime()) return;
         const request = message && typeof message === 'object' && !Array.isArray(message)
           ? message
           : {};
@@ -21015,16 +21557,102 @@ const MODE_PROFILES = Object.freeze({
           || !requestId
           || !action) return;
         const sender = text(metadata?.sender || '').trim();
-        if (sender && sender !== MEMORY_SESSION_BRIDGE_PLUGIN_ID) return;
+        if (sender !== MEMORY_SESSION_BRIDGE_PLUGIN_ID) return;
         let result = null;
         let errorText = '';
         try {
           if (action === 'adopt_cold_start') {
-            result = await adoptBridgeColdStartCapsule(request.payload?.capsule || null);
+            const adoption = await adoptBridgeColdStartCapsule(request.payload?.capsule || null);
+            result = {
+              ...adoption,
+              mutation: 'adopt_cold_start',
+              ownerPluginId: HAYAKU_PLUGIN_ID,
+              authorizedRequester: sender
+            };
           } else if (action === 'adopt_incremental_recovery') {
-            result = await adoptBridgeIncrementalRecoveryCapsule(request.payload?.capsule || null);
+            const adoption = await adoptBridgeIncrementalRecoveryCapsule(request.payload?.capsule || null);
+            result = {
+              ...adoption,
+              mutation: 'adopt_incremental_recovery',
+              ownerPluginId: HAYAKU_PLUGIN_ID,
+              authorizedRequester: sender
+            };
           } else if (action === 'sync_analysis_capsules') {
-            result = await syncBridgeAnalysisCapsules();
+            const sync = await syncBridgeAnalysisCapsules();
+            result = {
+              ...sync,
+              mutation: 'sync_analysis_capsules',
+              ownerPluginId: HAYAKU_PLUGIN_ID,
+              authorizedRequester: sender
+            };
+          } else if (action === 'adopt_session_handoff') {
+            // This is an owner-ledger mutation. Require the authenticated API v3
+            // sender again inside the action, in addition to the listener gate.
+            if (sender !== MEMORY_SESSION_BRIDGE_PLUGIN_ID) {
+              throw new Error('unauthorized_hayaku_session_handoff_sender');
+            }
+            const requested = request.payload?.options && typeof request.payload.options === 'object'
+              ? request.payload.options
+              : request.payload;
+            if (!requested || typeof requested !== 'object' || Array.isArray(requested)) {
+              throw new Error('invalid_hayaku_session_handoff_options');
+            }
+            const requestedExpectedRecords = Number(requested.expectedRecords);
+            if (!Object.prototype.hasOwnProperty.call(requested, 'expectedRecords')
+              || !Number.isInteger(requestedExpectedRecords)
+              || requestedExpectedRecords < 0) {
+              throw new Error('hayaku_session_handoff_expected_records_invalid');
+            }
+            const handoffOptions = {
+              targetChatId: compact(requested.targetChatId || '', 160),
+              transferId: compact(requested.transferId || '', 160),
+              sourceScopeKey: compact(requested.sourceScopeKey || '', 196),
+              expectedRecords: requestedExpectedRecords
+            };
+            if (!handoffOptions.targetChatId || !handoffOptions.transferId
+              || (handoffOptions.expectedRecords > 0 && !handoffOptions.sourceScopeKey)) {
+              throw new Error('hayaku_session_handoff_identity_incomplete');
+            }
+            const adoption = await adoptBridgeSessionHandoff(handoffOptions);
+            result = {
+              ...adoption,
+              mutation: 'adopt_session_handoff',
+              ownerPluginId: HAYAKU_PLUGIN_ID,
+              authorizedRequester: sender
+            };
+          } else if (action === 'forget') {
+            // Mutations are stricter than read-only inspection: API v3 supplies
+            // the authenticated sender and only RE:TRACE may invoke this path.
+            if (sender !== MEMORY_SESSION_BRIDGE_PLUGIN_ID) {
+              throw new Error('unauthorized_hayaku_forget_sender');
+            }
+            const requested = request.payload?.target;
+            if (!requested || typeof requested !== 'object' || Array.isArray(requested)) {
+              throw new Error('invalid_hayaku_forget_target');
+            }
+            const mutationTarget = {
+              recordId: compact(requested.recordId || '', 196),
+              variantHash: compact(requested.variantHash || requested.hash || '', 96),
+              slotId: compact(requested.slotId || '', 240),
+              targetPairIndex: Math.max(0, Number(requested.targetPairIndex || 0) || 0),
+              // The owner fixes deletion semantics; callers cannot inject a
+              // reason or intent that would evade user-suppression policy.
+              reason: 'bridge_packet_viewer_delete',
+              intent: 'user_suppressed'
+            };
+            if (!mutationTarget.recordId && !mutationTarget.variantHash && !mutationTarget.slotId) {
+              throw new Error('hayaku_forget_target_identity_missing');
+            }
+            const forgotten = await tombstoneStorageSlot(mutationTarget);
+            if (forgotten?.ok !== true || forgotten?.durable !== true) {
+              throw new Error(`hayaku_forget_not_durable:${compact(forgotten?.reason || 'unknown', 160)}`);
+            }
+            result = {
+              ...forgotten,
+              mutation: 'forget',
+              ownerPluginId: HAYAKU_PLUGIN_ID,
+              authorizedRequester: sender
+            };
           } else if (action === 'inspect') {
             const scope = await RisuCompat.currentChatScope();
             if (!scope?.confident || !scope?.key) {
@@ -21049,6 +21677,12 @@ const MODE_PROFILES = Object.freeze({
                 tombstones: ensureArray(ledger.tombstones),
                 packetAuthoring: buildHayakuPacketAuthoringProfile(Memory.settings),
                 storageLimits: storageLimitsSnapshot(),
+                ipcCapabilities: {
+                  inspect: true,
+                  adoptSessionHandoff: true,
+                  forget: true,
+                  mutationOwner: HAYAKU_PLUGIN_ID
+                },
                 bridgeSync
               };
             }
@@ -21058,6 +21692,7 @@ const MODE_PROFILES = Object.freeze({
         } catch (error) {
           errorText = compact(error?.message || error || 'hayaku_bridge_ipc_failed', 900);
         }
+        if (Memory.unloaded || !ownsRuntime()) return;
         try {
           await api.postPluginChannelMessage(
             MEMORY_SESSION_BRIDGE_PLUGIN_ID,
@@ -21075,8 +21710,74 @@ const MODE_PROFILES = Object.freeze({
         } catch (error) {
           debugError('bridge:ipc_response_failed', error, { action, requestId });
         }
+      };
+    let registry = null;
+    try { registry = globalThis[MEMORY_BRIDGE_IPC_RUNTIME_KEY] || null; } catch (_) {}
+    if (registry?.channel === MEMORY_SESSION_BRIDGE_HAYAKU_REQUEST_CHANNEL
+      && typeof registry?.dispatcher === 'function') {
+      registry.ownerToken = RUNTIME_INSTANCE_TOKEN;
+      registry.handler = handler;
+      const sharedRegistration = registry.registrationPromise
+        ? await registry.registrationPromise
+        : registry.registered === true;
+      if (!sharedRegistration) {
+        if (allowRetry && ownsRuntime()) return registerMemoryBridgeIpc(false);
+        return false;
       }
-    );
+      memoryBridgeIpcApi = registry.api || api;
+      memoryBridgeIpcHandler = handler;
+      memoryBridgeIpcRegistration = registry.registration;
+      memoryBridgeIpcRegistered = true;
+      return true;
+    }
+    registry = {
+      channel: MEMORY_SESSION_BRIDGE_HAYAKU_REQUEST_CHANNEL,
+      api,
+      ownerToken: RUNTIME_INSTANCE_TOKEN,
+      handler,
+      dispatcher: null,
+      registration: null,
+      registered: false,
+      registrationPromise: null,
+      registrationError: ''
+    };
+    registry.dispatcher = async (message, metadata = {}) => {
+      let liveRegistry = null;
+      try { liveRegistry = globalThis[MEMORY_BRIDGE_IPC_RUNTIME_KEY] || null; } catch (_) {}
+      if (liveRegistry !== registry || typeof liveRegistry?.handler !== 'function') return;
+      return await liveRegistry.handler(message, metadata);
+    };
+    try { globalThis[MEMORY_BRIDGE_IPC_RUNTIME_KEY] = registry; } catch (_) {}
+    registry.registrationPromise = (async () => {
+      try {
+        registry.registration = await api.addPluginChannelListener(
+          MEMORY_SESSION_BRIDGE_HAYAKU_REQUEST_CHANNEL,
+          registry.dispatcher
+        );
+        registry.registered = true;
+        registry.registrationError = '';
+        return true;
+      } catch (error) {
+        registry.registered = false;
+        registry.registrationError = compact(error?.message || error || 'ipc_registration_failed', 240);
+        try {
+          if (globalThis[MEMORY_BRIDGE_IPC_RUNTIME_KEY] === registry) {
+            delete globalThis[MEMORY_BRIDGE_IPC_RUNTIME_KEY];
+          }
+        } catch (_) {}
+        return false;
+      } finally {
+        registry.registrationPromise = null;
+      }
+    })();
+    const registered = await registry.registrationPromise;
+    if (!registered) {
+      if (allowRetry && ownsRuntime()) return registerMemoryBridgeIpc(false);
+      return false;
+    }
+    memoryBridgeIpcApi = api;
+    memoryBridgeIpcHandler = handler;
+    memoryBridgeIpcRegistration = registry.registration;
     memoryBridgeIpcRegistered = true;
     return true;
   };
@@ -21132,13 +21833,51 @@ const MODE_PROFILES = Object.freeze({
         presentTypes
       };
     }
+    // The plugin-computed pending lineage is the request-scoped authority. The
+    // model-authored meta.lineage is only a transport assertion and must never
+    // replace it in durable state. Detect drift here before persistence. A
+    // parent-only drift is repairable when logical_turn_id still exactly matches
+    // the authoritative logical id; because that id is derived from the expected
+    // parent + user identity + pair index, this proves the packet's parent field
+    // is internally inconsistent rather than evidence of another branch.
+    const currentPacketIndex = presentTypes.lastIndexOf('current_snapshot');
+    const currentPacket = currentPacketIndex >= 0 ? candidates[currentPacketIndex] : null;
+    const expectedParentTurnNodeId = compact(pending?.lineage?.parentTurnNodeId || '', 96);
+    const expectedLogicalTurnId = compact(pending?.lineage?.logicalTurnId || '', 96);
+    const declaredParentTurnNodeId = compact(currentPacket?.parentTurnNodeId || '', 96);
+    const declaredLogicalTurnId = compact(currentPacket?.logicalTurnId || '', 96);
+    const parentLineageMismatch = Boolean(currentPacket)
+      && declaredParentTurnNodeId !== expectedParentTurnNodeId;
+    const logicalLineageMismatch = Boolean(currentPacket)
+      && declaredLogicalTurnId !== expectedLogicalTurnId;
+    const safeParentFieldDrift = parentLineageMismatch
+      && !logicalLineageMismatch
+      && Boolean(expectedLogicalTurnId);
+    if (logicalLineageMismatch || (parentLineageMismatch && !safeParentFieldDrift)) {
+      return {
+        ok: false,
+        reason: logicalLineageMismatch ? 'logical_lineage_mismatch' : 'parent_lineage_mismatch',
+        expectedTypes,
+        presentTypes,
+        expectedParentTurnNodeId,
+        declaredParentTurnNodeId,
+        expectedLogicalTurnId,
+        declaredLogicalTurnId
+      };
+    }
     return {
       ok: true,
-      reason: 'packet_group_complete',
+      reason: safeParentFieldDrift ? 'packet_group_complete_parent_lineage_repaired' : 'packet_group_complete',
       expectedTypes,
       presentTypes,
       packets: candidates,
-      expectedNonce
+      expectedNonce,
+      lineageRepairApplied: safeParentFieldDrift,
+      lineageRepairReason: safeParentFieldDrift ? 'verified_parent_field_drift' : '',
+      expectedParentTurnNodeId,
+      declaredParentTurnNodeId,
+      expectedLogicalTurnId,
+      declaredLogicalTurnId
     };
   };
   const persistCapturedPackets = async (pending, packets = [], captureSource = 'afterRequest', options = {}) => {
@@ -21191,12 +21930,15 @@ const MODE_PROFILES = Object.freeze({
             recoveryPacket ? target?.assistantMessageIdHash : options?.pair?.assistantMessageIdHash,
             96
           ),
+          // For the current response, pending.lineage was computed by HAYAKU
+          // before generation and is authoritative. Never let model-authored
+          // meta.lineage override the branch identity in durable storage.
           parentTurnNodeId: recoveryPacket
             ? (target?.parentTurnNodeId || '')
-            : (packet.parentTurnNodeId || pending.lineage.parentTurnNodeId || ''),
+            : (pending.lineage.parentTurnNodeId || ''),
           logicalTurnId: recoveryPacket
             ? (target?.logicalTurnId || '')
-            : (packet.logicalTurnId || pending.lineage.logicalTurnId || ''),
+            : (pending.lineage.logicalTurnId || ''),
           requestNonce: expectedNonce,
           requestSequence: pending.requestSequence,
           capturedAt: now(),
@@ -21215,7 +21957,9 @@ const MODE_PROFILES = Object.freeze({
           records: byId.size,
           expectedPacketTypes: group.expectedTypes,
           persistedPacketTypes: group.presentTypes,
-          packetGroupComplete: true
+          packetGroupComplete: true,
+          lineageRepairApplied: group.lineageRepairApplied === true,
+          lineageRepairReason: group.lineageRepairReason || ''
         };
       }
       const commit = await writeStorageLedgerDirect(scope, { ...ledger, records: Array.from(byId.values()) }, 'captured');
@@ -21223,7 +21967,9 @@ const MODE_PROFILES = Object.freeze({
         ...commit,
         expectedPacketTypes: group.expectedTypes,
         persistedPacketTypes: group.presentTypes,
-        packetGroupComplete: commit.durable === true
+        packetGroupComplete: commit.durable === true,
+        lineageRepairApplied: group.lineageRepairApplied === true,
+        lineageRepairReason: group.lineageRepairReason || ''
       };
     });
   };
@@ -21600,7 +22346,7 @@ const MODE_PROFILES = Object.freeze({
   };
   const finalizedCaptureTimeoutIsActionable = state => state?.incompleteReported !== true;
   const scheduleFinalizedCaptureMonitor = pending => {
-    if (Memory.unloaded || !pending?.scope?.key || !pending?.lineage?.requestNonce) return false;
+    if (Memory.unloaded || !ownsRuntime() || !pending?.scope?.key || !pending?.lineage?.requestNonce) return false;
     const key = finalizedCaptureMonitorKey(pending);
     let state = Memory.finalizedCaptureMonitors.get(key);
     if (!state) {
@@ -21620,7 +22366,7 @@ const MODE_PROFILES = Object.freeze({
       state.pending = pending;
     }
     const schedulePoll = delay => {
-      if (Memory.unloaded || Memory.finalizedCaptureMonitors.get(key) !== state || state.timer != null) return;
+      if (Memory.unloaded || !ownsRuntime() || Memory.finalizedCaptureMonitors.get(key) !== state || state.timer != null) return;
       state.timer = setTimeout(() => {
         state.timer = null;
         poll().catch(error => {
@@ -21630,7 +22376,7 @@ const MODE_PROFILES = Object.freeze({
       try { state.timer?.unref?.(); } catch (_) {}
     };
     const poll = async () => {
-      if (Memory.unloaded || Memory.finalizedCaptureMonitors.get(key) !== state) return;
+      if (Memory.unloaded || !ownsRuntime() || Memory.finalizedCaptureMonitors.get(key) !== state) return;
       if (now() - state.startedAt > FINALIZED_CAPTURE_MAX_AGE_MS) {
         // A stable packetless finalized response was already reported as the
         // actionable missing-packet event. Closing that same monitor later is
@@ -21891,7 +22637,7 @@ const MODE_PROFILES = Object.freeze({
     return true;
   };
   const scheduleFinalizedBindingMonitor = pending => {
-    if (Memory.unloaded || !pending?.scope?.key || !pending?.lineage?.requestNonce) return false;
+    if (Memory.unloaded || !ownsRuntime() || !pending?.scope?.key || !pending?.lineage?.requestNonce) return false;
     const key = finalizedBindingMonitorKey(pending);
     let state = Memory.finalizedBindingMonitors.get(key);
     if (!state) {
@@ -21905,14 +22651,16 @@ const MODE_PROFILES = Object.freeze({
         timer: null,
         outputObservedAt: 0,
         outputVisibleHash: '',
-        pollDelayMs: FINALIZED_BINDING_POLL_MS
+        pollDelayMs: FINALIZED_BINDING_POLL_MS,
+        waitingFinalizedChatCount: 0,
+        lastWaitingLogAt: 0
       };
       Memory.finalizedBindingMonitors.set(key, state);
     } else {
       state.pending = clone(pending, pending);
     }
     const schedulePoll = delay => {
-      if (Memory.unloaded || Memory.finalizedBindingMonitors.get(key) !== state || state.timer != null) return;
+      if (Memory.unloaded || !ownsRuntime() || Memory.finalizedBindingMonitors.get(key) !== state || state.timer != null) return;
       state.timer = setTimeout(() => {
         state.timer = null;
         void poll();
@@ -21922,7 +22670,7 @@ const MODE_PROFILES = Object.freeze({
       } catch (_) {}
     };
     const poll = async () => {
-      if (Memory.unloaded || Memory.finalizedBindingMonitors.get(key) !== state) return;
+      if (Memory.unloaded || !ownsRuntime() || Memory.finalizedBindingMonitors.get(key) !== state) return;
       if (now() - state.startedAt > FINALIZED_BINDING_MAX_AGE_MS) {
         Memory.lastWarnings = [...ensureArray(Memory.lastWarnings), 'finalized_binding_timeout'].slice(-20);
         stopFinalizedBindingMonitor(key);
@@ -21950,29 +22698,50 @@ const MODE_PROFILES = Object.freeze({
             Memory.finalizedBindingInFlight.add(key);
             try {
               const result = await bindCapturedPacketGroupToFinalizedChat(state.pending, candidate);
+              const observedAt = now();
+              const waitingForFinalizedChat = result?.reason === 'finalized_packet_group_not_bound';
+              if (waitingForFinalizedChat) {
+                state.waitingFinalizedChatCount = Math.max(0, Number(state.waitingFinalizedChatCount || 0)) + 1;
+              }
               Memory.lastStorageBinding = {
-                at: now(),
+                at: observedAt,
                 scopeKey: state.pending.scope.key,
                 requestSequence: state.pending.requestSequence,
-                ...result
+                ...result,
+                waitingForFinalizedChat,
+                waitingFinalizedChatCount: Math.max(0, Number(state.waitingFinalizedChatCount || 0)),
+                hardFailureAttempts: Math.max(0, Number(state.attempts || 0)),
+                elapsedMs: Math.max(0, observedAt - Number(state.startedAt || observedAt)),
+                maxAgeMs: FINALIZED_BINDING_MAX_AGE_MS
               };
-              pushOperationLog(
-                result.durable === true && result.bound === true ? 'binding:completed' : 'binding:retry',
-                Memory.lastStorageBinding,
-                result.durable === true && result.bound === true ? 'success' : 'warn'
-              );
               if (result.durable === true && result.bound === true) {
+                pushOperationLog('binding:completed', Memory.lastStorageBinding, 'success');
                 stopFinalizedCaptureMonitor(state.pending);
                 removePendingCapture(state.pending);
                 stopFinalizedBindingMonitor(key);
                 return;
               }
-              state.attempts += 1;
-              state.stableSince = now();
-              if (state.attempts >= FINALIZED_BINDING_MAX_ATTEMPTS) {
-                Memory.lastWarnings = [...ensureArray(Memory.lastWarnings), `finalized_binding_failed:${result.reason || 'unknown'}`].slice(-20);
-                stopFinalizedBindingMonitor(key);
-                return;
+              if (waitingForFinalizedChat) {
+                // This is a synchronization wait, not a failed binding attempt.
+                // Keep every existing identity/lineage check intact and simply allow
+                // RisuAI's finalized live-chat pair to settle within MAX_AGE.
+                const shouldLogWaiting = !state.lastWaitingLogAt
+                  || observedAt - Number(state.lastWaitingLogAt || 0) >= 15000;
+                if (shouldLogWaiting) {
+                  state.lastWaitingLogAt = observedAt;
+                  pushOperationLog('binding:waiting_finalized_chat', Memory.lastStorageBinding, 'info');
+                }
+                state.stableSince = observedAt;
+                state.pollDelayMs = FINALIZED_BINDING_IDLE_POLL_MS;
+              } else {
+                pushOperationLog('binding:retry', Memory.lastStorageBinding, 'warn');
+                state.attempts += 1;
+                state.stableSince = observedAt;
+                if (state.attempts >= FINALIZED_BINDING_MAX_ATTEMPTS) {
+                  Memory.lastWarnings = [...ensureArray(Memory.lastWarnings), `finalized_binding_failed:${result.reason || 'unknown'}`].slice(-20);
+                  stopFinalizedBindingMonitor(key);
+                  return;
+                }
               }
             } finally {
               Memory.finalizedBindingInFlight.delete(key);
@@ -22581,7 +23350,18 @@ const MODE_PROFILES = Object.freeze({
         }
         continue;
       }
-      const packetLineageQuarantine = record?.hash
+      // A packet hash can remain in an older/superseded node's quarantine
+      // audit after the current visible U+A chain has safely rebased and accepted
+      // that exact packet. An active accepted owner is authoritative; stale audit
+      // quarantine from another node must not re-quarantine the durable record.
+      const activeAcceptedPacketOwner = record?.hash
+        ? nodes.find(node => (
+            node?.status === 'active'
+            && node?.packetLineageStatus !== 'quarantined'
+            && ensureArray(node?.packetHashes).includes(record.hash)
+          ))
+        : null;
+      const packetLineageQuarantine = !activeAcceptedPacketOwner && record?.hash
         ? nodes.find(node => ensureArray(node?.quarantinedPacketHashes).includes(record.hash))
         : null;
       if (packetLineageQuarantine) {
@@ -22905,9 +23685,9 @@ const MODE_PROFILES = Object.freeze({
   };
   const scheduleWorldlineTopologyObserver = () => {
     const state = Memory.worldlineObserver;
-    if (!state || Memory.unloaded) return false;
+    if (!state || Memory.unloaded || !ownsRuntime()) return false;
     const schedulePoll = delay => {
-      if (Memory.unloaded || state.timer != null) return;
+      if (Memory.unloaded || !ownsRuntime() || state.timer != null) return;
       state.timer = setTimeout(() => {
         state.timer = null;
         void poll();
@@ -22919,7 +23699,8 @@ const MODE_PROFILES = Object.freeze({
       state.candidateSince = 0;
     };
     const poll = async () => {
-      if (Memory.unloaded || state.inFlight) {
+      if (Memory.unloaded || !ownsRuntime()) return;
+      if (state.inFlight) {
         schedulePoll(WORLDLINE_OBSERVER_POLL_MS);
         return;
       }
@@ -23484,6 +24265,30 @@ const MODE_PROFILES = Object.freeze({
       || Number(b?.capturedAt || 0) - Number(a?.capturedAt || 0)
       || text(a?.recordId || '').localeCompare(text(b?.recordId || ''));
   };
+  const viewerAuditVariantKey = record => {
+    if (!record || record?.inheritedSessionHistory === true) return '';
+    const pairIndex = Math.max(0, Number(record?.targetPairIndex || 0) || 0);
+    const requestNonce = compact(record?.requestNonce || '', 128);
+    const packetType = compact(record?.packetType || 'current_snapshot', 48).toLowerCase();
+    if (!pairIndex || !requestNonce || !packetType) return '';
+    return [pairIndex, requestNonce, packetType].join('\u0001');
+  };
+  const viewerAuditCopyVisibility = records => {
+    const list = ensureArray(records);
+    const activeKeys = new Set(list
+      .filter(record => text(record?.recordState || '').toLowerCase() === 'active')
+      .map(viewerAuditVariantKey)
+      .filter(Boolean));
+    const hiddenIds = new Set();
+    for (const record of list) {
+      if (record?.auditRetained !== true) continue;
+      if (text(record?.recordState || '').toLowerCase() !== 'superseded') continue;
+      const key = viewerAuditVariantKey(record);
+      if (!key || !activeKeys.has(key)) continue;
+      hiddenIds.add(text(record?.recordId || record?.hash || key));
+    }
+    return { activeKeys, hiddenIds };
+  };
   const viewerStateClass = state => (
     ['active', 'historical'].includes(text(state).toLowerCase())
       ? 'is-live'
@@ -23511,6 +24316,7 @@ const MODE_PROFILES = Object.freeze({
     'capture:finalized_save_failed': '최종 응답 패킷 저장 실패',
     'capture:monitor_failed': '캡처 모니터 실패',
     'binding:completed': '라이브챗 결속 완료',
+    'binding:waiting_finalized_chat': '라이브챗 최종 확정 대기',
     'binding:retry': '라이브챗 결속 재시도',
     'install:settings': '설정 불러오기 완료',
     'install:ledger_viewer': '원장 뷰어 등록 완료',
@@ -23615,7 +24421,12 @@ const MODE_PROFILES = Object.freeze({
     const stateFilter = text(Memory.ledgerViewer.stateFilter || 'all');
     const typeFilter = text(Memory.ledgerViewer.typeFilter || 'all');
     const search = text(Memory.ledgerViewer.search || '').trim().toLowerCase();
-    const records = ensureArray(ledger.records).filter(record => {
+    const allRecords = ensureArray(ledger.records);
+    const auditVisibility = viewerAuditCopyVisibility(allRecords);
+    const showAuditCopies = Memory.ledgerViewer.showAuditCopies === true;
+    const records = allRecords.filter(record => {
+      const recordId = text(record?.recordId || record?.hash || viewerAuditVariantKey(record));
+      if (!showAuditCopies && auditVisibility.hiddenIds.has(recordId)) return false;
       if (stateFilter !== 'all' && text(record?.recordState || 'unbound') !== stateFilter) return false;
       if (typeFilter !== 'all' && text(record?.packetType || 'current_snapshot') !== typeFilter) return false;
       if (!search) return true;
@@ -23631,7 +24442,10 @@ const MODE_PROFILES = Object.freeze({
       ].some(value => text(value).toLowerCase().includes(search));
     }).sort(viewerRecordSort);
     const count = root.querySelector?.('#hayakuViewerVisibleCount');
-    if (count) count.textContent = `${records.length} / ${ensureArray(ledger.records).length}`;
+    if (count) {
+      const hiddenAuditCount = showAuditCopies ? 0 : auditVisibility.hiddenIds.size;
+      count.textContent = `${records.length} / ${allRecords.length}${hiddenAuditCount ? ` · 감사 사본 ${hiddenAuditCount} 숨김` : ''}`;
+    }
     if (!records.length) {
       body.innerHTML = '<div class="hv-empty"><strong>표시할 패킷이 없습니다.</strong><span>필터를 바꾸거나 현재 채팅에서 패킷이 저장되었는지 확인하세요.</span></div>';
       return;
@@ -23647,6 +24461,7 @@ const MODE_PROFILES = Object.freeze({
         record?.captureSource,
         record?.memoryClass,
         record?.ledgerSource,
+        record?.auditRetained === true ? '감사 사본' : '',
         record?.inheritedSessionHistory === true ? '영구 과거' : '',
         record?.coldStartEpochId ? '콜드스타트' : ''
       ].filter(Boolean);
@@ -23874,6 +24689,10 @@ const MODE_PROFILES = Object.freeze({
       Memory.ledgerViewer.search = text(event?.target?.value || '');
       viewerRenderRecords();
     });
+    root.querySelector?.('#hayakuViewerShowAuditCopies')?.addEventListener('change', event => {
+      Memory.ledgerViewer.showAuditCopies = event?.target?.checked === true;
+      viewerRenderRecords();
+    });
     root.querySelectorAll?.('[data-hayaku-viewer-tab]')?.forEach(node => {
       node.addEventListener('click', () => viewerSetTab(node.getAttribute('data-hayaku-viewer-tab')));
     });
@@ -23892,7 +24711,7 @@ const MODE_PROFILES = Object.freeze({
       .hv-recall{margin:15px 0;padding:15px;border:1px solid var(--hv-line);border-radius:17px;background:var(--hv-card);box-shadow:0 4px 14px rgba(29,43,75,.04)}.hv-recall-head{display:grid;grid-template-columns:minmax(180px,.65fr) minmax(260px,1.35fr);gap:14px;align-items:start}.hv-recall-title{display:grid;gap:4px}.hv-recall-title strong{font-size:15px}.hv-recall-title small{color:var(--hv-muted)}.hv-current-input{padding:10px 12px;border:1px solid var(--hv-line);border-radius:12px;background:var(--hv-soft)}.hv-current-input span{display:block;color:var(--hv-primary);font-size:9px;font-weight:800;text-transform:uppercase}.hv-current-input p{margin:4px 0 0;max-height:84px;overflow:auto;color:var(--hv-text);white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px;line-height:1.5}.hv-recall-rows{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:8px;margin-top:12px}.hv-recall-item{min-width:0;padding:11px;border:1px solid var(--hv-line);border-radius:12px;background:var(--hv-soft)}.hv-recall-item-head{display:flex;justify-content:space-between;gap:8px;color:var(--hv-primary);font-size:9px}.hv-recall-item-head em{font-style:normal;color:var(--hv-muted)}.hv-recall-item>strong{display:block;margin-top:6px;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.hv-recall-item>p{margin:4px 0;color:var(--hv-muted);font-size:11px;line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere}.hv-recall-item>small{color:var(--hv-muted);font-size:9px}.hv-recall-empty{grid-column:1/-1;padding:14px;border:1px dashed var(--hv-line);border-radius:11px;color:var(--hv-muted);text-align:center}
       .hv-scope{display:grid;gap:5px;margin:15px 0;padding:12px 14px;border:1px solid var(--hv-line);border-radius:14px;background:var(--hv-card)}.hv-scope>div{display:flex;gap:8px;min-width:0}.hv-scope b{min-width:62px}.hv-scope code,.hv-scope span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--hv-muted)}
       .hv-metrics{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:9px;margin-bottom:14px}.hv-metric{padding:12px;border:1px solid var(--hv-line);border-radius:14px;background:var(--hv-card)}.hv-metric span{display:block;color:var(--hv-muted);font-size:10px}.hv-metric strong{display:block;margin-top:3px;font-size:16px}
-      .hv-tools{display:grid;grid-template-columns:180px 210px minmax(220px,1fr) auto;gap:9px;align-items:center;margin-bottom:12px}.hv-tools select,.hv-tools input{width:100%;min-height:38px;padding:7px 10px;border:1px solid var(--hv-line);border-radius:11px;background:var(--hv-card);color:var(--hv-text);font:12px inherit}.hv-tools small{color:var(--hv-muted);text-align:right}
+      .hv-tools{display:grid;grid-template-columns:180px 210px minmax(220px,1fr) auto auto;gap:9px;align-items:center;margin-bottom:12px}.hv-audit-toggle{min-height:36px;padding:7px 10px;display:flex;align-items:center;gap:7px;border:1px solid var(--hv-line);border-radius:11px;background:var(--hv-card);color:var(--hv-muted);font-size:10px;white-space:nowrap;cursor:pointer}.hv-audit-toggle input{width:auto!important;margin:0}.hv-tools select,.hv-tools input{width:100%;min-height:38px;padding:7px 10px;border:1px solid var(--hv-line);border-radius:11px;background:var(--hv-card);color:var(--hv-text);font:12px inherit}.hv-tools small{color:var(--hv-muted);text-align:right}
       .hv-records{display:grid;gap:10px}.hv-record{padding:15px;border:1px solid var(--hv-line);border-radius:16px;background:var(--hv-card);box-shadow:0 4px 14px rgba(29,43,75,.04)}.hv-record-head{display:flex;justify-content:space-between;gap:14px}.hv-record-head>div{display:grid;gap:4px;min-width:0}.hv-record-head strong{font-size:14px}.hv-record-head span{color:var(--hv-muted);white-space:pre-wrap;overflow-wrap:anywhere}.hv-record-head em{height:max-content;padding:3px 8px;border-radius:999px;font-style:normal;font-size:10px;font-weight:800}.hv-record-head em.is-live{background:var(--hv-green-soft);color:var(--hv-green)}.hv-record-head em.is-retired{background:var(--hv-red-soft);color:var(--hv-red)}.hv-record-head em.is-pending{background:var(--hv-primary-soft);color:var(--hv-primary)}.hv-meta{display:flex;flex-wrap:wrap;gap:10px;margin-top:9px;color:var(--hv-muted);font-size:10px}.hv-tags{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}.hv-tags span{padding:2px 7px;border-radius:999px;background:var(--hv-primary-soft);color:var(--hv-primary);font-size:9px}.hv-record details,.hv-diagnostics details,.hv-log-entry details{margin-top:10px}.hv-record summary,.hv-diagnostics summary,.hv-log-entry summary{cursor:pointer;color:var(--hv-muted);font-weight:650}.hv-record pre,.hv-diagnostics pre,.hv-log-entry pre{max-height:430px;overflow:auto;padding:12px;border:1px solid var(--hv-line);border-radius:11px;background:var(--hv-soft);color:#44506a;white-space:pre-wrap;overflow-wrap:anywhere;font:11px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace}
       .hv-diagnostics{margin-top:14px;padding:14px;border:1px solid var(--hv-line);border-radius:16px;background:var(--hv-card)}.hv-empty{min-height:220px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;border:1px dashed var(--hv-line);border-radius:16px;color:var(--hv-muted)}.hv-empty strong{color:var(--hv-text)}.hayaku-viewer.is-busy{opacity:.68;pointer-events:none}
       .hv-log-summary{margin:15px 0;padding:13px 15px;border:1px solid var(--hv-line);border-radius:14px;background:var(--hv-card);color:var(--hv-muted)}.hv-log-summary strong{color:var(--hv-text);font-size:18px}.hv-debug-export{margin:0 0 14px;padding:14px;border:1px solid var(--hv-line);border-radius:16px;background:var(--hv-card)}.hv-debug-export[hidden]{display:none}.hv-debug-export-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.hv-debug-export-head>div{display:grid;gap:4px}.hv-debug-export-head strong{font-size:13px}.hv-debug-export-head span{color:var(--hv-muted);font-size:10px}.hv-debug-export textarea{width:100%;min-height:280px;max-height:560px;margin-top:10px;padding:12px;resize:vertical;border:1px solid var(--hv-line);border-radius:11px;background:var(--hv-soft);color:var(--hv-text);white-space:pre;font:10px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace}.hv-log-list{display:grid;gap:9px}.hv-log-entry{padding:13px 14px;border:1px solid var(--hv-line);border-left:3px solid var(--hv-primary);border-radius:14px;background:var(--hv-card)}.hv-log-entry.success{border-left-color:var(--hv-green)}.hv-log-entry.warn{border-left-color:var(--hv-warn)}.hv-log-entry.error{border-left-color:var(--hv-red)}.hv-log-head{display:flex;justify-content:space-between;gap:12px}.hv-log-head>div{display:grid;gap:3px}.hv-log-head strong{font-size:12px}.hv-log-head span{color:var(--hv-muted);font:10px ui-monospace,SFMono-Regular,Consolas,monospace}.hv-log-head time{color:var(--hv-muted);font-size:10px;white-space:nowrap}
@@ -23927,7 +24746,7 @@ const MODE_PROFILES = Object.freeze({
               <div class="hv-metric"><span>슬롯 헤드</span><strong id="hayakuMetricSlots">0</strong></div>
               <div class="hv-metric"><span>활성 tombstone</span><strong id="hayakuMetricTombstones">0</strong></div>
             </div>
-            <div class="hv-tools"><select id="hayakuViewerState"><option value="all">모든 상태</option></select><select id="hayakuViewerType"><option value="all">모든 패킷 타입</option></select><input id="hayakuViewerSearch" type="search" placeholder="본문·hash·nonce 검색"><small>표시 <b id="hayakuViewerVisibleCount">0 / 0</b></small></div>
+            <div class="hv-tools"><select id="hayakuViewerState"><option value="all">모든 상태</option></select><select id="hayakuViewerType"><option value="all">모든 패킷 타입</option></select><input id="hayakuViewerSearch" type="search" placeholder="본문·hash·nonce 검색"><label class="hv-audit-toggle"><input id="hayakuViewerShowAuditCopies" type="checkbox">감사 사본 표시</label><small>표시 <b id="hayakuViewerVisibleCount">0 / 0</b></small></div>
             <div id="hayakuViewerRecords" class="hv-records"><div class="hv-empty"><strong>조회 대기</strong><span>새로고침하여 플러그인 원장을 읽습니다.</span></div></div>
             <div class="hv-diagnostics">
               <strong>원장 진단 데이터</strong>
@@ -23948,6 +24767,8 @@ const MODE_PROFILES = Object.freeze({
     </section>`;
     const search = root.querySelector?.('#hayakuViewerSearch');
     if (search) search.value = Memory.ledgerViewer.search || '';
+    const auditToggle = root.querySelector?.('#hayakuViewerShowAuditCopies');
+    if (auditToggle) auditToggle.checked = Memory.ledgerViewer.showAuditCopies === true;
     bindLedgerViewerUi();
     viewerSetTab(Memory.ledgerViewer.activeTab || 'packets');
     viewerRenderDebugExportText();
@@ -23965,40 +24786,162 @@ const MODE_PROFILES = Object.freeze({
     await refreshLedgerViewer();
     return true;
   };
+  const ledgerViewerUiRuntime = () => {
+    try {
+      const existing = globalThis[LEDGER_VIEWER_UI_RUNTIME_KEY];
+      if (existing && typeof existing === 'object') return existing;
+      const created = {
+        ownerToken: null,
+        show: null,
+        dispatch: null,
+        settingRegistered: false,
+        buttonRegistered: false,
+        settingHandle: null,
+        buttonHandle: null,
+        settingRegistration: null,
+        buttonRegistration: null,
+        settingRegistrar: null,
+        buttonRegistrar: null
+      };
+      Object.defineProperty(globalThis, LEDGER_VIEWER_UI_RUNTIME_KEY, {
+        value: created,
+        configurable: true,
+        enumerable: false,
+        writable: false
+      });
+      return created;
+    } catch (_) {
+      return null;
+    }
+  };
+  const retireLedgerViewerUiOwner = () => {
+    const registry = ledgerViewerUiRuntime();
+    if (!registry || registry.ownerToken !== RUNTIME_INSTANCE_TOKEN) return false;
+    registry.ownerToken = null;
+    registry.show = null;
+    return true;
+  };
   const registerLedgerViewerUi = async () => {
     const settingApi = apiCandidates().find(candidate => typeof candidate?.registerSetting === 'function') || null;
     const buttonApi = apiCandidates().find(candidate => typeof candidate?.registerButton === 'function') || null;
-    if (!Memory.ledgerViewer.registeredSetting && settingApi) {
-      try {
-        Memory.ledgerViewer.registeredSetting = await settingApi.registerSetting(
-          `${PLUGIN_NAME} 원장 뷰어`,
-          showLedgerViewer,
-          ledgerViewerIconSvg,
-          'html'
-        ) || { uncertain: true };
-      } catch (error) {
-        if (!/already|duplicate|exist/i.test(text(error?.message || error))) {
-          Memory.lastWarnings = [...ensureArray(Memory.lastWarnings), `ledger_viewer_setting_failed:${compact(error?.message || error, 120)}`].slice(-20);
-        }
+    const registry = ledgerViewerUiRuntime();
+    if (!registry) return { setting: false, button: false };
+    registry.ownerToken = RUNTIME_INSTANCE_TOKEN;
+    registry.show = async (...args) => {
+      if (Memory.unloaded || !ownsRuntime()) return false;
+      return showLedgerViewer(...args);
+    };
+    if (typeof registry.dispatch !== 'function') {
+      registry.dispatch = async (...args) => {
+        let current = null;
+        try { current = globalThis[LEDGER_VIEWER_UI_RUNTIME_KEY]; } catch (_) {}
+        if (!current || typeof current.show !== 'function') return false;
+        return current.show(...args);
+      };
+    }
+    if (settingApi) {
+      registry.settingRegistrar = () => settingApi.registerSetting(
+        `${PLUGIN_NAME} 원장 뷰어`,
+        registry.dispatch,
+        ledgerViewerIconSvg,
+        'html'
+      );
+    }
+    if (buttonApi) {
+      registry.buttonRegistrar = () => buttonApi.registerButton({
+        name: `${PLUGIN_NAME} 원장 뷰어`,
+        icon: ledgerViewerIconSvg,
+        iconType: 'html',
+        location: 'hamburger'
+      }, registry.dispatch);
+    }
+    const duplicateRegistrationError = error => /already|duplicate|exist/i.test(text(error?.message || error));
+    const registerSharedPart = async ({
+      kind,
+      registrarKey,
+      registeredKey,
+      handleKey,
+      registrationKey
+    }) => {
+      if (registry[registeredKey] === true) return true;
+      if (!registry[registrationKey]) {
+        const starterToken = RUNTIME_INSTANCE_TOKEN;
+        const starterRegistrar = registry[registrarKey];
+        registry[registrationKey] = (async () => {
+          let finalError = null;
+          const attempt = async registrar => {
+            try {
+              registry[handleKey] = await registrar() || { uncertain: true };
+              registry[registeredKey] = true;
+              return true;
+            } catch (error) {
+              if (duplicateRegistrationError(error)) {
+                registry[handleKey] = { shared: true };
+                registry[registeredKey] = true;
+                return true;
+              }
+              finalError = error;
+              registry[registeredKey] = false;
+              return false;
+            }
+          };
+          try {
+            if (typeof starterRegistrar === 'function') await attempt(starterRegistrar);
+            const latestRegistrar = registry[registrarKey];
+            if (registry[registeredKey] !== true
+              && registry.ownerToken !== starterToken
+              && typeof latestRegistrar === 'function'
+              && latestRegistrar !== starterRegistrar) {
+              await attempt(latestRegistrar);
+            }
+            if (registry[registeredKey] !== true && finalError) {
+              Memory.lastWarnings = [
+                ...ensureArray(Memory.lastWarnings),
+                `ledger_viewer_${kind}_failed:${compact(finalError?.message || finalError, 120)}`
+              ].slice(-20);
+            }
+            return registry[registeredKey] === true;
+          } finally {
+            registry[registrationKey] = null;
+          }
+        })();
       }
+      await registry[registrationKey];
+      return registry[registeredKey] === true;
+    };
+    Memory.ledgerViewer.registeredSetting = registry.settingRegistered && !registry.settingRegistration
+      ? (registry.settingHandle || { shared: true })
+      : null;
+    Memory.ledgerViewer.registeredButton = registry.buttonRegistered && !registry.buttonRegistration
+      ? (registry.buttonHandle || { shared: true })
+      : null;
+    if (!Memory.ledgerViewer.registeredSetting && settingApi) {
+      await registerSharedPart({
+        kind: 'setting',
+        registrarKey: 'settingRegistrar',
+        registeredKey: 'settingRegistered',
+        handleKey: 'settingHandle',
+        registrationKey: 'settingRegistration'
+      });
+      Memory.ledgerViewer.registeredSetting = registry.settingRegistered
+        ? (registry.settingHandle || { shared: true })
+        : null;
     }
     if (!Memory.ledgerViewer.registeredButton && buttonApi) {
-      try {
-        Memory.ledgerViewer.registeredButton = await buttonApi.registerButton({
-          name: `${PLUGIN_NAME} 원장 뷰어`,
-          icon: ledgerViewerIconSvg,
-          iconType: 'html',
-          location: 'hamburger'
-        }, showLedgerViewer) || { uncertain: true };
-      } catch (error) {
-        if (!/already|duplicate|exist/i.test(text(error?.message || error))) {
-          Memory.lastWarnings = [...ensureArray(Memory.lastWarnings), `ledger_viewer_button_failed:${compact(error?.message || error, 120)}`].slice(-20);
-        }
-      }
+      await registerSharedPart({
+        kind: 'button',
+        registrarKey: 'buttonRegistrar',
+        registeredKey: 'buttonRegistered',
+        handleKey: 'buttonHandle',
+        registrationKey: 'buttonRegistration'
+      });
+      Memory.ledgerViewer.registeredButton = registry.buttonRegistered
+        ? (registry.buttonHandle || { shared: true })
+        : null;
     }
     return {
-      setting: Boolean(Memory.ledgerViewer.registeredSetting),
-      button: Boolean(Memory.ledgerViewer.registeredButton)
+      setting: registry.settingRegistered === true,
+      button: registry.buttonRegistered === true
     };
   };
 
@@ -24092,11 +25035,14 @@ const MODE_PROFILES = Object.freeze({
       maxTombstones: STORAGE_LEDGER_MAX_TOMBSTONES,
       maxPacketChars: STORAGE_LEDGER_MAX_PACKET_CHARS,
       maxTotalPacketChars: STORAGE_LEDGER_MAX_TOTAL_CHARS,
+      maxRecordsIsHardLimit: false,
+      maxTotalPacketCharsIsHardLimit: false,
+      protectedRecordsExemptFromRetentionTargets: true,
       permanentHistoricalSlots: true
     }
   });
   const exposeApi = () => {
-    globalThis.HAYAKU = {
+    const exposedApi = {
       version: PLUGIN_VERSION,
       settings: () => clone(Memory.settings, {}),
       runtime: () => clone(hayakuRuntimeSnapshot(), {}),
@@ -24458,13 +25404,20 @@ const MODE_PROFILES = Object.freeze({
         retrievalBm25Document
       }
     };
+    Memory.exposedApi = exposedApi;
+    globalThis.HAYAKU = exposedApi;
+    return exposedApi;
   };
 
   const install = async () => {
     try {
+      Memory.unloaded = false;
+      if (!claimRuntimeOwnership()) throw new Error('runtime_ownership_unavailable');
       await RisuCompat.refreshInfo();
       await loadSettings(true);
-      await RisuCompat.purgeLegacyHayakuStorage();
+      const legacyStorage = await RisuCompat.purgeLegacyHayakuStorage();
+      if (!ownsRuntime()) return;
+      debugLog('install:legacy_storage', legacyStorage);
       debugLog('install:settings', Memory.settings);
       exposeApi();
       try {
@@ -24539,10 +25492,14 @@ const MODE_PROFILES = Object.freeze({
       await RisuCompat.onUnload(async () => {
         Memory.unloaded = true;
         stopWorldlineTopologyObserver();
+        await removeMemoryBridgeIpc();
+        retireLedgerViewerUiOwner();
         Memory.capturePersistInFlight.clear();
         Memory.capturePersistRecent.clear();
         Memory.packetScanCache.clear();
         Memory.projectionCache.clear();
+        Memory.copiedChatSourceCache.clear();
+        Memory.compatRequestDeadlines.clear();
         for (const key of [...Memory.finalizedCaptureMonitors.keys()]) stopFinalizedCaptureMonitor(key);
         Memory.finalizedCaptureInFlight.clear();
         for (const key of [...Memory.finalizedBindingMonitors.keys()]) stopFinalizedBindingMonitor(key);
@@ -24557,14 +25514,20 @@ const MODE_PROFILES = Object.freeze({
         }
         Memory.ledgerViewer.root = null;
         Memory.pendingCaptures = [];
-        try { delete globalThis.HAYAKU; } catch (_) {}
+        try {
+          if (globalThis.HAYAKU === Memory.exposedApi) delete globalThis.HAYAKU;
+        } catch (_) {}
+        Memory.exposedApi = null;
+        try {
+          if (ownsRuntime()) delete globalThis[RUNTIME_OWNER_KEY];
+        } catch (_) {}
       });
       debugLog('ready', { version: PLUGIN_VERSION, compat: RisuCompat.snapshot() });
     } catch (error) {
       const detail = debugError('install_failed', error, { version: PLUGIN_VERSION });
       Memory.replacer.registered = false;
       Memory.replacer.registerError = detail.message;
-      exposeApi();
+      if (ownsRuntime()) exposeApi();
       console.warn(`[HAYAKU] install failed: ${detail.message}`);
     }
   };
