@@ -1,8 +1,8 @@
 //@name hayaku_locator_continuity
-//@display-name HAYAKU · Locator Continuity v2.3.52
+//@display-name HAYAKU · Locator Continuity v2.3.53
 //@author rusinus12@gmail.com
 //@api 3.0
-//@version 2.3.52
+//@version 2.3.53
 //@allowed-ipc flashback_hayaku_bridge
 //@update-url https://raw.githubusercontent.com/rusinus12-droid/hayaku_locator_continuity/main/hayaku_locator_continuity.js
 //@arg hayaku_enabled string true|false
@@ -108,7 +108,7 @@
   };
 
   const PLUGIN_NAME = 'HAYAKU';
-  const PLUGIN_VERSION = '2.3.52';
+  const PLUGIN_VERSION = '2.3.53';
   const HAYAKU_PACKET_AUTHORING_PROFILE_SCHEMA = 'hayaku-packet-authoring-profile-v1';
   const HAYAKU_PACKET_AUTHORING_ALIAS_LANGUAGES = Object.freeze(['ko', 'en', 'ja', 'zh']);
   const HAYAKU_CANONICAL_ANCHOR_PREFIXES = Object.freeze([
@@ -7893,12 +7893,36 @@ const MODE_PROFILES = Object.freeze({
         && Boolean(declaredLogicalTurnId)
         && declaredLogicalTurnId === expectedLogicalTurnId
         && finalizedPairIdentity;
-      const lineageRebased = safeProvisionalLogicalRebase || safeDeclaredParentRebase;
-      const lineageRepairReason = safeDeclaredParentRebase
-        ? 'verified_parent_field_drift'
-        : (safeProvisionalLogicalRebase ? 'verified_final_pair_identity_drift' : '');
-      const declaredMismatch = (declaredParentMismatch && !safeDeclaredParentRebase)
-        || (declaredLogicalMismatch && !safeProvisionalLogicalRebase);
+      // A native RisuAI chat copy duplicates the source transcript byte-for-byte
+      // (including the old packet sidecars) while HAYAKU deliberately derives a
+      // new scope-bound turn graph for the copied chat. inferCopiedChatSource()
+      // only reports risu_native_chat_copy after the candidate source transcript
+      // is an exact prefix match and a source ledger exists. Under that verified
+      // clone contract, an otherwise valid current_snapshot is the same U+A
+      // evidence carried into a new scope, so its source-scope lineage must be
+      // rebased instead of quarantined. Keep this exception deliberately narrow:
+      // branch markers, hand-written copy metadata, arbitrary foreign parents,
+      // invalid packets, and incomplete U+A identities still fail closed.
+      const verifiedNativeChatCopy = Boolean(scope?.copiedFromChatId)
+        && text(scope?.copiedChatDetectionReason || '').trim() === 'risu_native_chat_copy';
+      const safeNativeCopyLineageRebase = verifiedNativeChatCopy
+        && declaredLineage
+        && finalizedPairIdentity
+        && (declaredParentMismatch || declaredLogicalMismatch);
+      const lineageRebased = safeProvisionalLogicalRebase
+        || safeDeclaredParentRebase
+        || safeNativeCopyLineageRebase;
+      const lineageRepairReason = safeNativeCopyLineageRebase
+        ? 'verified_native_copy_scope_rebase'
+        : safeDeclaredParentRebase
+          ? 'verified_parent_field_drift'
+          : (safeProvisionalLogicalRebase ? 'verified_final_pair_identity_drift' : '');
+      const declaredMismatch = (declaredParentMismatch
+          && !safeDeclaredParentRebase
+          && !safeNativeCopyLineageRebase)
+        || (declaredLogicalMismatch
+          && !safeProvisionalLogicalRebase
+          && !safeNativeCopyLineageRebase);
       const storedParentMismatch = node && node.parentTurnNodeId !== parentTurnNodeId;
       const activates = chainOpen && !storedParentMismatch;
       const observedPacketHashes = uniq(ensureArray(pair.packetHashes)
@@ -7918,9 +7942,13 @@ const MODE_PROFILES = Object.freeze({
         : lineageRebased
           ? 'rebased'
           : acceptedPacketHashes.length ? 'valid' : 'absent';
-      const packetLineageReason = declaredParentMismatch && !safeDeclaredParentRebase
+      const packetLineageReason = declaredParentMismatch
+        && !safeDeclaredParentRebase
+        && !safeNativeCopyLineageRebase
         ? 'declared_parent_mismatch'
-        : (declaredLogicalMismatch && !safeProvisionalLogicalRebase)
+        : (declaredLogicalMismatch
+            && !safeProvisionalLogicalRebase
+            && !safeNativeCopyLineageRebase)
           ? 'declared_logical_turn_mismatch'
           : lineageRepairReason;
       if (!node) {
