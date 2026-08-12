@@ -1,8 +1,8 @@
 //@name hayaku_locator_continuity
-//@display-name HAYAKU · Locator Continuity v2.3.53
+//@display-name HAYAKU · Locator Continuity v2.3.54
 //@author rusinus12@gmail.com
 //@api 3.0
-//@version 2.3.53
+//@version 2.3.54
 //@allowed-ipc flashback_hayaku_bridge
 //@update-url https://raw.githubusercontent.com/rusinus12-droid/hayaku_locator_continuity/main/hayaku_locator_continuity.js
 //@arg hayaku_enabled string true|false
@@ -108,7 +108,7 @@
   };
 
   const PLUGIN_NAME = 'HAYAKU';
-  const PLUGIN_VERSION = '2.3.53';
+  const PLUGIN_VERSION = '2.3.54';
   const HAYAKU_PACKET_AUTHORING_PROFILE_SCHEMA = 'hayaku-packet-authoring-profile-v1';
   const HAYAKU_PACKET_AUTHORING_ALIAS_LANGUAGES = Object.freeze(['ko', 'en', 'ja', 'zh']);
   const HAYAKU_CANONICAL_ANCHOR_PREFIXES = Object.freeze([
@@ -2203,12 +2203,26 @@ const MODE_PROFILES = Object.freeze({
         if (required.some(name => typeof current?.[name] !== 'function')) {
           return { key: '', confident: false, reason: 'current_chat_scope_api_unavailable' };
         }
-        const [characterIndexRaw, chatIndexRaw] = await Promise.all([
-          boundedHostCall('getCurrentCharacterIndex', () => current.getCurrentCharacterIndex(), -1),
-          boundedHostCall('getCurrentChatIndex', () => current.getCurrentChatIndex(), -1)
-        ]);
-        const characterIndex = Number(characterIndexRaw);
-        const chatIndex = Number(chatIndexRaw);
+        const readCurrentIndexes = async label => {
+          const operationPrefix = label ? `${label}Get` : 'get';
+          const [characterIndexRaw, chatIndexRaw] = await Promise.all([
+            boundedHostCall(`${operationPrefix}CurrentCharacterIndex`, () => current.getCurrentCharacterIndex(), -1),
+            boundedHostCall(`${operationPrefix}CurrentChatIndex`, () => current.getCurrentChatIndex(), -1)
+          ]);
+          return { characterIndex: Number(characterIndexRaw), chatIndex: Number(chatIndexRaw) };
+        };
+        let indexes = await readCurrentIndexes('');
+        if (!Number.isInteger(indexes.characterIndex) || indexes.characterIndex < 0
+          || !Number.isInteger(indexes.chatIndex) || indexes.chatIndex < 0) {
+          // RisuAI Web can expose a short selection-transition window where
+          // getCurrentChatIndex throws while the selected character object is
+          // being swapped. A single short retry avoids turning that transient
+          // host race into minutes of finalized-binding starvation.
+          await waitMs(45);
+          indexes = await readCurrentIndexes('retry');
+        }
+        const characterIndex = indexes.characterIndex;
+        const chatIndex = indexes.chatIndex;
         if (!Number.isInteger(characterIndex) || characterIndex < 0 || !Number.isInteger(chatIndex) || chatIndex < 0) {
           return { key: '', confident: false, reason: 'current_chat_indexes_invalid' };
         }
@@ -2235,16 +2249,39 @@ const MODE_PROFILES = Object.freeze({
           ignoreExplicit: bridgeMarkerState.present && !bridgeMarkerState.valid
         });
         const copiedFromChatId = inferredCopySource.sourceChatId;
-        const [verifiedCharacterIndexRaw, verifiedChatIndexRaw, verifiedCharacter, verifiedChat] = await Promise.all([
-          boundedHostCall('verifyCurrentCharacterIndex', () => current.getCurrentCharacterIndex(), -1),
-          boundedHostCall('verifyCurrentChatIndex', () => current.getCurrentChatIndex(), -1),
-          boundedHostCall('verifyCharacterFromIndex', () => current.getCharacterFromIndex(characterIndex), null),
-          boundedHostCall('verifyChatFromIndex', () => current.getChatFromIndex(characterIndex, chatIndex), null)
-        ]);
-        const verifiedCharacterIndex = Number(verifiedCharacterIndexRaw);
-        const verifiedChatIndex = Number(verifiedChatIndexRaw);
-        const verifiedCharacterId = text(verifiedCharacter?.chaId || '').trim();
-        const verifiedChatId = text(verifiedChat?.id || '').trim();
+        const verifyScope = async label => {
+          const [verifiedCharacterIndexRaw, verifiedChatIndexRaw, verifiedCharacter, verifiedChat] = await Promise.all([
+            boundedHostCall(`${label}verifyCurrentCharacterIndex`, () => current.getCurrentCharacterIndex(), -1),
+            boundedHostCall(`${label}verifyCurrentChatIndex`, () => current.getCurrentChatIndex(), -1),
+            boundedHostCall(`${label}verifyCharacterFromIndex`, () => current.getCharacterFromIndex(characterIndex), null),
+            boundedHostCall(`${label}verifyChatFromIndex`, () => current.getChatFromIndex(characterIndex, chatIndex), null)
+          ]);
+          return {
+            verifiedCharacterIndex: Number(verifiedCharacterIndexRaw),
+            verifiedChatIndex: Number(verifiedChatIndexRaw),
+            verifiedCharacterId: text(verifiedCharacter?.chaId || '').trim(),
+            verifiedChatId: text(verifiedChat?.id || '').trim()
+          };
+        };
+        let verified = await verifyScope('');
+        const verificationInvalid = candidate => (
+          !Number.isInteger(candidate.verifiedCharacterIndex)
+          || candidate.verifiedCharacterIndex < 0
+          || !Number.isInteger(candidate.verifiedChatIndex)
+          || candidate.verifiedChatIndex < 0
+          || !candidate.verifiedCharacterId
+          || !candidate.verifiedChatId
+        );
+        if (verificationInvalid(verified)) {
+          await waitMs(45);
+          verified = await verifyScope('retry');
+        }
+        const {
+          verifiedCharacterIndex,
+          verifiedChatIndex,
+          verifiedCharacterId,
+          verifiedChatId
+        } = verified;
         if (verifiedCharacterIndex !== characterIndex
           || verifiedChatIndex !== chatIndex
           || verifiedCharacterId !== characterId
@@ -2656,6 +2693,97 @@ const MODE_PROFILES = Object.freeze({
     } catch (_) {
       return fallback;
     }
+  };
+  const waitMs = ms => new Promise(resolve => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
+  // Conservative syntax-only packet repair. It never invents keys, values,
+  // quotes, or closing braces. The only accepted rewrites are JSON-safe escaping
+  // of literal control characters inside strings and removal of trailing commas.
+  // The repaired object must still pass the normal HAYAKU schema + semantic gates.
+  const conservativeJsonSyntaxRepair = raw => {
+    const source = text(raw).replace(/^\uFEFF/, '').trim();
+    if (!source) return { ok: false, raw: source, parsed: null, repairs: [] };
+    if (objectish(safeJsonParse(source, null))) {
+      return { ok: true, raw: source, parsed: safeJsonParse(source, null), repairs: [] };
+    }
+    let escaped = '';
+    let inString = false;
+    let escapeNext = false;
+    const repairs = [];
+    for (let index = 0; index < source.length; index += 1) {
+      const char = source[index];
+      const code = char.charCodeAt(0);
+      if (inString) {
+        if (escapeNext) {
+          escaped += char;
+          escapeNext = false;
+          continue;
+        }
+        if (char === '\\') {
+          escaped += char;
+          escapeNext = true;
+          continue;
+        }
+        if (char === '"') {
+          escaped += char;
+          inString = false;
+          continue;
+        }
+        if (code >= 0 && code < 0x20) {
+          const replacement = char === '\n' ? '\\n'
+            : char === '\r' ? '\\r'
+              : char === '\t' ? '\\t'
+                : `\\u${code.toString(16).padStart(4, '0')}`;
+          escaped += replacement;
+          repairs.push('escaped_string_control_char');
+          continue;
+        }
+        escaped += char;
+        continue;
+      }
+      if (char === '"') inString = true;
+      escaped += char;
+    }
+    // Do not guess a missing quote. Only continue if the string state is closed.
+    if (inString || escapeNext) return { ok: false, raw: source, parsed: null, repairs: [] };
+    let cleaned = '';
+    inString = false;
+    escapeNext = false;
+    for (let index = 0; index < escaped.length; index += 1) {
+      const char = escaped[index];
+      if (inString) {
+        cleaned += char;
+        if (escapeNext) {
+          escapeNext = false;
+        } else if (char === '\\') {
+          escapeNext = true;
+        } else if (char === '"') {
+          inString = false;
+        }
+        continue;
+      }
+      if (char === '"') {
+        inString = true;
+        cleaned += char;
+        continue;
+      }
+      if (char === ',') {
+        let lookahead = index + 1;
+        while (lookahead < escaped.length && /\s/.test(escaped[lookahead])) lookahead += 1;
+        if (escaped[lookahead] === '}' || escaped[lookahead] === ']') {
+          repairs.push('removed_trailing_comma');
+          continue;
+        }
+      }
+      cleaned += char;
+    }
+    const parsed = safeJsonParse(cleaned, null);
+    if (!objectish(parsed)) return { ok: false, raw: source, parsed: null, repairs: [] };
+    return {
+      ok: true,
+      raw: cleaned,
+      parsed,
+      repairs: uniq(repairs, 8)
+    };
   };
   const stableHash64Fallback = (value = '') => {
     const src = text(value);
@@ -20410,27 +20538,58 @@ const MODE_PROFILES = Object.freeze({
         diagnostics.push({ hash: sourceHash, markerType: type, stage: 'oversized', rawChars: sourceRaw.length, errors: ['packet_too_large'], warnings: [] });
         return;
       }
-      const parsed = safeJsonParse(sourceRaw, null);
+      let parsed = safeJsonParse(sourceRaw, null);
+      let syntaxRepair = null;
+      if (!objectish(parsed)) {
+        syntaxRepair = conservativeJsonSyntaxRepair(sourceRaw);
+        if (syntaxRepair.ok === true && objectish(syntaxRepair.parsed)) parsed = syntaxRepair.parsed;
+      }
       if (!objectish(parsed)) {
         diagnostics.push({ hash: sourceHash, markerType: type, stage: 'json_parse_failed', rawChars: sourceRaw.length, errors: ['json_parse_failed'], warnings: [] });
         return;
       }
       parsedCount += 1;
+      const syntaxRepairedRaw = syntaxRepair?.ok === true && syntaxRepair.repairs?.length
+        ? syntaxRepair.raw
+        : sourceRaw;
       const originalValidation = validateHayakuPacket(parsed);
       if (originalValidation.ok === true) {
         const packetType = compact(parsed?.meta?.packet_type || parsed?.meta?.packetType || 'current_snapshot', 48);
         const semantic = assessPacketCaptureSemantics(parsed, packetType, source);
         if (semantic.ok === true) {
-          packets.push(packetFrom({ raw: sourceRaw, hash: sourceHash, parsed, type }));
-          diagnostics.push({
-            hash: sourceHash,
-            markerType: type,
-            stage: 'valid',
-            rawChars: sourceRaw.length,
-            ...semanticDiagnosticFields(semantic),
-            errors: ensureArray(originalValidation.errors),
-            warnings: ensureArray(originalValidation.warnings)
-          });
+          if (syntaxRepair?.ok === true && syntaxRepair.repairs?.length) {
+            const canonicalRawHash = stableHash64(syntaxRepairedRaw);
+            repairablePackets.push(packetFrom({
+              raw: syntaxRepairedRaw,
+              hash: sourceHash,
+              parsed,
+              type,
+              captureNormalized: true,
+              canonicalRawHash
+            }));
+            diagnostics.push({
+              hash: sourceHash,
+              markerType: type,
+              stage: 'json_syntax_repairable',
+              rawChars: sourceRaw.length,
+              canonicalChars: syntaxRepairedRaw.length,
+              syntaxRepairs: ensureArray(syntaxRepair.repairs),
+              ...semanticDiagnosticFields(semantic),
+              errors: [],
+              warnings: []
+            });
+          } else {
+            packets.push(packetFrom({ raw: sourceRaw, hash: sourceHash, parsed, type }));
+            diagnostics.push({
+              hash: sourceHash,
+              markerType: type,
+              stage: 'valid',
+              rawChars: sourceRaw.length,
+              ...semanticDiagnosticFields(semantic),
+              errors: ensureArray(originalValidation.errors),
+              warnings: ensureArray(originalValidation.warnings)
+            });
+          }
         } else {
           semanticIncompletePackets.push(packetFrom({ raw: sourceRaw, hash: sourceHash, parsed, type }));
           diagnostics.push({
@@ -20526,10 +20685,12 @@ const MODE_PROFILES = Object.freeze({
     const repairRaw = (raw, markerType = '') => {
       const sourceRaw = text(raw).trim();
       if (!sourceRaw || sourceRaw.length > STORAGE_LEDGER_MAX_PACKET_CHARS) return null;
-      const parsed = safeJsonParse(sourceRaw, null);
+      let parsed = safeJsonParse(sourceRaw, null);
+      const syntaxRepair = objectish(parsed) ? null : conservativeJsonSyntaxRepair(sourceRaw);
+      if (!objectish(parsed) && syntaxRepair?.ok === true) parsed = syntaxRepair.parsed;
       if (!objectish(parsed)) return null;
       const originalValidation = validateHayakuPacket(parsed);
-      if (originalValidation.ok === true) return null;
+      if (originalValidation.ok === true && !(syntaxRepair?.repairs?.length)) return null;
       const normalized = normalizeHayakuPacket(parsed);
       const normalizedValidation = validateHayakuPacket(normalized);
       if (normalizedValidation.ok !== true) return null;
@@ -20538,6 +20699,7 @@ const MODE_PROFILES = Object.freeze({
         sourceHash: stableHash64(sourceRaw),
         canonicalHash: stableHash64(normalizedRaw),
         markerType,
+        syntaxRepairs: ensureArray(syntaxRepair?.repairs),
         errors: ensureArray(originalValidation.errors),
         warnings: ensureArray(originalValidation.warnings)
       });
@@ -20594,7 +20756,6 @@ const MODE_PROFILES = Object.freeze({
   };
   const retireObsoletePendingCaptures = (scope, lineage, options = {}) => {
     if (!scope?.key || !objectish(lineage)) return { retired: 0, requestSequences: [] };
-    const requestNonce = compact(lineage.requestNonce || '', 96);
     const targetPairIndex = Math.max(1, Number(lineage.targetPairIndex || 1) || 1);
     const recoveryTargetPairIndex = options?.recoveryRequired === true
       ? Math.max(0, Number(
@@ -20605,12 +20766,28 @@ const MODE_PROFILES = Object.freeze({
       : 0;
     const obsolete = ensureArray(Memory.pendingCaptures).filter(entry => {
       if (entry?.scope?.key !== scope.key) return false;
-      if (requestNonce && entry?.lineage?.requestNonce === requestNonce) return false;
+      // requestNonce is deterministic for a request lineage and may repeat on a
+      // reroll of the same user turn. A new beforeRequest invocation therefore
+      // supersedes an older pending capture for the same target even when the
+      // nonce is identical; otherwise a stale reroll can inherit the old capture
+      // sequence and finalized-binding monitor.
       const pendingPairIndex = Math.max(0, Number(entry?.lineage?.targetPairIndex || 0) || 0);
       return pendingPairIndex === targetPairIndex
         || (recoveryTargetPairIndex > 0 && pendingPairIndex === recoveryTargetPairIndex);
     });
-    if (!obsolete.length) return { retired: 0, requestSequences: [] };
+    const retiredBindingSequences = new Set();
+    for (const [bindingKey, bindingState] of Memory.finalizedBindingMonitors.entries()) {
+      const bindingPending = bindingState?.pending;
+      if (bindingPending?.scope?.key !== scope.key) continue;
+      const bindingPairIndex = Math.max(0, Number(bindingPending?.lineage?.targetPairIndex || 0) || 0);
+      const bindingRecoveryPairIndex = Math.max(0, Number(bindingPending?.recoveryTarget?.pairIndex || 0) || 0);
+      if (bindingPairIndex !== targetPairIndex
+        && !(recoveryTargetPairIndex > 0 && bindingRecoveryPairIndex === recoveryTargetPairIndex)) continue;
+      const sequence = Math.max(0, Number(bindingPending?.requestSequence || 0) || 0);
+      if (sequence) retiredBindingSequences.add(sequence);
+      stopFinalizedBindingMonitor(bindingKey);
+    }
+    if (!obsolete.length && !retiredBindingSequences.size) return { retired: 0, bindingMonitorsRetired: 0, requestSequences: [] };
     const retiredSequences = new Set(obsolete.map(entry => Number(entry?.requestSequence || 0)).filter(Boolean));
     obsolete.forEach(entry => {
       stopFinalizedCaptureMonitor(entry);
@@ -20624,7 +20801,8 @@ const MODE_PROFILES = Object.freeze({
       targetPairIndex,
       recoveryTargetPairIndex,
       retired: retiredSequences.size,
-      requestSequences: [...retiredSequences].sort((a, b) => a - b),
+      bindingMonitorsRetired: retiredBindingSequences.size,
+      requestSequences: uniq([...retiredSequences, ...retiredBindingSequences], 32).sort((a, b) => a - b),
       reason: recoveryTargetPairIndex > 0
         ? 'recovery_request_replaced_missing_capture'
         : 'new_request_superseded_same_turn_capture'
@@ -22286,8 +22464,20 @@ const MODE_PROFILES = Object.freeze({
     return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
   };
   const pendingPairIdentityMatch = (pending, pair, snapshot) => {
+    const expectedNonce = compact(pending?.lineage?.requestNonce || '', 96);
+    const pairNonce = compact(pair?.requestNonce || '', 96);
     const expectedUserHash = compact(pending?.lineage?.userHash || '', 96);
     const expectedUserMessageIdHash = compact(pending?.lineage?.userMessageIdHash || '', 96);
+    const userHashConflict = Boolean(expectedUserHash && pair?.userHash && expectedUserHash !== pair.userHash);
+    const userMessageIdConflict = Boolean(
+      expectedUserMessageIdHash
+      && pair?.userMessageIdHash
+      && expectedUserMessageIdHash !== pair.userMessageIdHash
+    );
+    if (expectedNonce && pairNonce && expectedNonce === pairNonce
+      && !userHashConflict && !userMessageIdConflict) {
+      return { matched: true, mode: 'request_nonce_exact' };
+    }
     const exact = expectedUserHash && pair?.userHash
       ? expectedUserHash === pair.userHash
       : (!expectedUserMessageIdHash || !pair?.userMessageIdHash || expectedUserMessageIdHash === pair.userMessageIdHash);
@@ -22580,7 +22770,89 @@ const MODE_PROFILES = Object.freeze({
       ].join('\u0001'))
     };
   };
-  const bindCapturedPacketGroupToFinalizedChat = async (pending, candidate) => enqueueStorageOperation(async () => {
+  const refreshCapturedRecordIdentitiesForFinalPair = (ledger, pending, pair, options = {}) => {
+    const expectedNonce = compact(pending?.lineage?.requestNonce || '', 96);
+    const expectedTypes = new Set(expectedCapturePacketTypes(pending));
+    const targetPairIndex = Math.max(1, Number(pending?.lineage?.targetPairIndex || 1) || 1);
+    const pairIndex = Math.max(0, Number(pair?.pairIndex || 0) || 0);
+    if (!expectedNonce || pairIndex !== targetPairIndex || !pair?.userHash
+      || (!pair?.assistantVisibleHash && !pair?.assistantMessageIdHash)) {
+      return { ledger, changed: false, refreshed: 0, reason: 'final_pair_identity_unavailable' };
+    }
+    const outputVisibleHash = compact(options?.outputVisibleHash || '', 96);
+    const outputRequestNonces = new Set(ensureArray(options?.outputRequestNonces).map(value => compact(value || '', 96)).filter(Boolean));
+    const pairNonce = compact(pair?.requestNonce || '', 96);
+    const pairNonceCompatible = !pairNonce || pairNonce === expectedNonce;
+    const outputBelongsToRequest = outputRequestNonces.has(expectedNonce);
+    const outputVisibleExact = Boolean(
+      outputVisibleHash
+      && pair?.assistantVisibleHash
+      && outputVisibleHash === pair.assistantVisibleHash
+      && outputBelongsToRequest
+    );
+    const pairUserIdentityCompatible = Boolean(
+      (!pending?.lineage?.userHash || !pair?.userHash || pending.lineage.userHash === pair.userHash)
+      && (!pending?.lineage?.userMessageIdHash || !pair?.userMessageIdHash
+        || pending.lineage.userMessageIdHash === pair.userMessageIdHash)
+    );
+    const livePacketHashes = new Set(ensureArray(pair?.packetHashes).map(value => compact(value || '', 96)).filter(Boolean));
+    let changed = false;
+    let refreshed = 0;
+    const reasons = new Set();
+    const records = ensureArray(ledger?.records).map(record => {
+      if (record?.requestNonce !== expectedNonce
+        || !expectedTypes.has(record?.packetType)
+        || Number(record?.targetPairIndex || 0) !== pairIndex
+        || ['tombstoned', 'quarantined', 'detached', 'orphaned', 'superseded'].includes(record?.recordState)) {
+        return record;
+      }
+      const exactPacket = Boolean(record?.hash && livePacketHashes.has(record.hash));
+      const exactVisible = Boolean(record?.assistantVisibleHash
+        && pair?.assistantVisibleHash
+        && record.assistantVisibleHash === pair.assistantVisibleHash);
+      const exactMessage = Boolean(record?.assistantMessageIdHash
+        && pair?.assistantMessageIdHash
+        && record.assistantMessageIdHash === pair.assistantMessageIdHash);
+      const staleVisible = Boolean(record?.assistantVisibleHash && pair?.assistantVisibleHash && !exactVisible);
+      const staleMessage = Boolean(record?.assistantMessageIdHash && pair?.assistantMessageIdHash && !exactMessage);
+      // afterRequest runs before later editOutput/Lua processors. When output and
+      // the finalized live-chat pair agree exactly, the live pair may replace the
+      // provisional afterRequest identities for the same nonce. Exact packet
+      // bytes remain an additional strong proof, but never override a stale
+      // visible identity by themselves because identical packet semantics can be
+      // repeated across a reroll.
+      const postProcessIdentityProof = pairNonceCompatible
+        && pairUserIdentityCompatible
+        && outputVisibleExact;
+      const exactIdentityProof = exactVisible || exactMessage;
+      const identitylessPacketProof = exactPacket && !record?.assistantVisibleHash && !record?.assistantMessageIdHash;
+      if (!(postProcessIdentityProof || exactIdentityProof || identitylessPacketProof)) return record;
+      if ((staleVisible || staleMessage) && !postProcessIdentityProof) return record;
+      const next = {
+        ...record,
+        userHash: compact(pair.userHash || record.userHash || '', 96),
+        userMessageIdHash: compact(pair.userMessageIdHash || record.userMessageIdHash || '', 96),
+        assistantVisibleHash: compact(pair.assistantVisibleHash || record.assistantVisibleHash || '', 96),
+        assistantMessageIdHash: compact(pair.assistantMessageIdHash || record.assistantMessageIdHash || '', 96),
+        boundAt: Number(record.boundAt || 0) > 0 ? record.boundAt : now()
+      };
+      next.slotId = storageRecordSlotId(next);
+      if (JSON.stringify(next) === JSON.stringify(record)) return record;
+      changed = true;
+      refreshed += 1;
+      reasons.add(postProcessIdentityProof
+        ? 'output_final_pair_identity'
+        : exactIdentityProof ? 'exact_final_identity' : 'exact_packet_identityless');
+      return next;
+    });
+    return {
+      ledger: changed ? { ...ledger, records } : ledger,
+      changed,
+      refreshed,
+      reason: reasons.size ? [...reasons].join(',') : 'no_identity_refresh'
+    };
+  };
+  const bindCapturedPacketGroupToFinalizedChat = async (pending, candidate, options = {}) => enqueueStorageOperation(async () => {
     const scope = pending?.scope;
     if (!scope?.confident || !scope?.key || !candidate?.snapshot) {
       return { durable: false, saved: false, bound: false, reason: 'binding_scope_or_snapshot_unavailable' };
@@ -22590,8 +22862,15 @@ const MODE_PROFILES = Object.freeze({
       return { durable: false, saved: false, bound: false, reason: ledger.reason || 'storage_unavailable' };
     }
     const topologyHash = compact(turnTopologySnapshotHash(candidate.snapshot), 96);
-    const worldline = reconcileTurnWorldline(ledger.worldline, candidate.snapshot, scope);
-    const binding = bindStorageLedgerToSnapshot(ledger, candidate.snapshot, worldline);
+    const identityRefresh = refreshCapturedRecordIdentitiesForFinalPair(
+      ledger,
+      pending,
+      candidate.pair,
+      options
+    );
+    const workingLedger = identityRefresh.ledger;
+    const worldline = reconcileTurnWorldline(workingLedger.worldline, candidate.snapshot, scope);
+    const binding = bindStorageLedgerToSnapshot(workingLedger, candidate.snapshot, worldline);
     const expectedNonce = compact(pending?.lineage?.requestNonce || '', 96);
     const expectedTypes = expectedCapturePacketTypes(pending);
     const pairForPacketType = packetType => (
@@ -22630,7 +22909,9 @@ const MODE_PROFILES = Object.freeze({
         bound: false,
         reason: 'finalized_packet_group_not_bound',
         expectedPacketTypes: expectedTypes,
-        boundPacketTypes: [...boundTypes]
+        boundPacketTypes: [...boundTypes],
+        finalizedIdentityRefreshes: Math.max(0, Number(identityRefresh.refreshed || 0) || 0),
+        finalizedIdentityRefreshReason: identityRefresh.reason || ''
       };
     }
     const nextLedger = {
@@ -22647,18 +22928,38 @@ const MODE_PROFILES = Object.freeze({
       targetPairIndex: Number(candidate.pair.pairIndex || 0),
       recoveryTargetPairIndex: Number(pending?.recoveryTarget?.pairIndex || 0),
       ownerTurnNodeIds: uniq(boundRecords.map(record => record.ownerTurnNodeId).filter(Boolean), 4),
-      identityRepairs: Math.max(0, Number(binding.identityRepairs || 0) || 0)
+      identityRepairs: Math.max(0, Number(binding.identityRepairs || 0) || 0),
+      finalizedIdentityRefreshes: Math.max(0, Number(identityRefresh.refreshed || 0) || 0),
+      finalizedIdentityRefreshReason: identityRefresh.reason || ''
     };
   });
   const markFinalizedBindingOutputObserved = async content => {
-    const liveScope = await RisuCompat.currentChatScope();
-    if (!liveScope?.key) return false;
-    const state = [...Memory.finalizedBindingMonitors.values()]
-      .filter(candidate => candidate?.pending?.scope?.key === liveScope.key)
+    // Prefer the request nonce embedded in the output packet itself. This does
+    // not require a second current-chat lookup, so a transient Web selection
+    // race in getCurrentChatIndex cannot discard the strongest evidence that
+    // the finalized output belongs to a specific pending capture.
+    const inspection = packetCaptureInspectionFromText(content);
+    const observedPackets = [...ensureArray(inspection.packets), ...ensureArray(inspection.repairablePackets)];
+    const observedNonces = new Set(observedPackets.map(packet => compact(packet?.requestNonce || '', 96)).filter(Boolean));
+    const allStates = [...Memory.finalizedBindingMonitors.values()];
+    const exactStates = observedNonces.size
+      ? allStates.filter(candidate => observedNonces.has(compact(candidate?.pending?.lineage?.requestNonce || '', 96)))
+      : [];
+    let state = exactStates
       .sort((a, b) => Number(b.startedAt || 0) - Number(a.startedAt || 0))[0] || null;
+    if (!state) {
+      const liveScope = await RisuCompat.currentChatScope();
+      if (!liveScope?.key) return false;
+      state = allStates
+        .filter(candidate => candidate?.pending?.scope?.key === liveScope.key)
+        .sort((a, b) => Number(b.startedAt || 0) - Number(a.startedAt || 0))[0] || null;
+    }
     if (!state) return false;
     state.outputObservedAt = now();
-    state.outputVisibleHash = stableHash64(stripHayakuBlocks(content, { looseMarkers: true }));
+    const visible = canonicalHistoryText(content, 'assistant');
+    state.outputVisibleHash = visible ? stableHash64(visible) : '';
+    state.outputPacketHashes = uniq(observedPackets.map(packet => compact(packet?.hash || '', 96)).filter(Boolean), 8);
+    state.outputRequestNonces = uniq([...observedNonces], 8);
     state.lastSignature = '';
     state.stableSince = 0;
     state.pollDelayMs = FINALIZED_BINDING_POLL_MS;
@@ -22679,6 +22980,8 @@ const MODE_PROFILES = Object.freeze({
         timer: null,
         outputObservedAt: 0,
         outputVisibleHash: '',
+        outputPacketHashes: [],
+        outputRequestNonces: [],
         pollDelayMs: FINALIZED_BINDING_POLL_MS,
         waitingFinalizedChatCount: 0,
         lastWaitingLogAt: 0
@@ -22700,7 +23003,21 @@ const MODE_PROFILES = Object.freeze({
     const poll = async () => {
       if (Memory.unloaded || !ownsRuntime() || Memory.finalizedBindingMonitors.get(key) !== state) return;
       if (now() - state.startedAt > FINALIZED_BINDING_MAX_AGE_MS) {
+        const timeoutDetail = {
+          at: now(),
+          scopeKey: state.pending?.scope?.key || '',
+          requestSequence: state.pending?.requestSequence || 0,
+          requestNonce: compact(state.pending?.lineage?.requestNonce || '', 96),
+          targetPairIndex: Math.max(0, Number(state.pending?.lineage?.targetPairIndex || 0) || 0),
+          outputObserved: Number(state.outputObservedAt || 0) > 0,
+          outputVisibleHash: compact(state.outputVisibleHash || '', 96),
+          waitingFinalizedChatCount: Math.max(0, Number(state.waitingFinalizedChatCount || 0) || 0),
+          elapsedMs: Math.max(0, now() - Number(state.startedAt || now())),
+          reason: 'finalized_binding_timeout'
+        };
         Memory.lastWarnings = [...ensureArray(Memory.lastWarnings), 'finalized_binding_timeout'].slice(-20);
+        Memory.lastStorageBinding = { durable: false, saved: false, bound: false, ...timeoutDetail };
+        pushOperationLog('binding:timeout', timeoutDetail, 'warn');
         stopFinalizedBindingMonitor(key);
         return;
       }
@@ -22725,7 +23042,11 @@ const MODE_PROFILES = Object.freeze({
           if (stableFor >= FINALIZED_BINDING_STABLE_MS && !Memory.finalizedBindingInFlight.has(key)) {
             Memory.finalizedBindingInFlight.add(key);
             try {
-              const result = await bindCapturedPacketGroupToFinalizedChat(state.pending, candidate);
+              const result = await bindCapturedPacketGroupToFinalizedChat(state.pending, candidate, {
+                outputVisibleHash: state.outputVisibleHash,
+                outputPacketHashes: state.outputPacketHashes,
+                outputRequestNonces: state.outputRequestNonces
+              });
               const observedAt = now();
               const waitingForFinalizedChat = result?.reason === 'finalized_packet_group_not_bound';
               if (waitingForFinalizedChat) {
@@ -23086,12 +23407,20 @@ const MODE_PROFILES = Object.freeze({
         && record.assistantVisibleHash === pair.assistantVisibleHash;
       const exactMessageIdentity = hasMessageIdentity
         && record.assistantMessageIdHash === pair.assistantMessageIdHash;
-      if (hasVisibleIdentity && !exactVisibleIdentity) continue;
-      if (hasMessageIdentity && !exactMessageIdentity) continue;
       const exactPacketHash = Boolean(
         record.hash
         && ensureArray(pair.packetHashes).includes(record.hash)
       );
+      const userIdentityCompatible = (!record.userHash || !pair.userHash || record.userHash === pair.userHash)
+        && (!record.userMessageIdHash || !pair.userMessageIdHash || record.userMessageIdHash === pair.userMessageIdHash);
+      // A byte-identical packet physically present in the finalized live chat is
+      // strong evidence that an afterRequest visible hash became stale only after
+      // downstream output processing. Permit that exact packet to refresh the
+      // provisional assistant identity, but never use it to override a conflicting
+      // user identity (which could be a different reroll/request).
+      const exactPacketIdentityRefresh = exactPacketHash && userIdentityCompatible;
+      if (hasVisibleIdentity && !exactVisibleIdentity && !exactPacketIdentityRefresh) continue;
+      if (hasMessageIdentity && !exactMessageIdentity && !exactPacketIdentityRefresh) continue;
       // Variant-safe proof is either the exact packet still present in the live
       // pair or the exact captured visible response. Message id alone is not
       // proof because RisuAI cached rerolls can retain chatId while replacing
@@ -23100,16 +23429,20 @@ const MODE_PROFILES = Object.freeze({
       if (!exactPacketHash && !exactVisibleIdentity) continue;
       const capturedAt = timestampMs(record.capturedAt);
       const assistantAt = timestampMs(pair.assistantMessageTime);
-      if (!capturedAt || !assistantAt || Math.abs(assistantAt - capturedAt) > CAPTURE_ORIGIN_TTL_MS) continue;
+      // Exact packet bytes in the exact user-bound pair are already stronger
+      // evidence than host timestamps, which may be absent on some Web rows.
+      // Keep the temporal gate for visible-hash-only repair paths.
+      if (!exactPacketIdentityRefresh
+        && (!capturedAt || !assistantAt || Math.abs(assistantAt - capturedAt) > CAPTURE_ORIGIN_TTL_MS)) continue;
       if (storageRecordMatchesPairIdentity(record, pair)
         && hasVisibleIdentity
         && hasMessageIdentity) continue;
       record.userHash = compact(pair.userHash || '', 96);
       record.userMessageIdHash = compact(pair.userMessageIdHash || '', 96);
-      if (!record.assistantVisibleHash) {
+      if (!record.assistantVisibleHash || exactPacketIdentityRefresh) {
         record.assistantVisibleHash = compact(pair.assistantVisibleHash || '', 96);
       }
-      if (!record.assistantMessageIdHash) {
+      if (!record.assistantMessageIdHash || exactPacketIdentityRefresh) {
         record.assistantMessageIdHash = compact(pair.assistantMessageIdHash || '', 96);
       }
       if (!record.boundAt) record.boundAt = now();
@@ -25283,6 +25616,7 @@ const MODE_PROFILES = Object.freeze({
         stopFinalizedCaptureMonitor,
         pendingPairIdentityMatch,
         finalizedChatBindingCandidate,
+        refreshCapturedRecordIdentitiesForFinalPair,
         bindCapturedPacketGroupToFinalizedChat,
         markFinalizedBindingOutputObserved,
         scheduleFinalizedBindingMonitor,
