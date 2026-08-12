@@ -1,8 +1,10 @@
 //@name hayaku_locator_continuity
-//@display-name HAYAKU · Locator Continuity v2.3.54
+//@display-name HAYAKU · Locator Continuity v2.3.56
 //@author rusinus12@gmail.com
 //@api 3.0
-//@version 2.3.54
+//@version 2.3.56
+
+/* v2.3.56 gzip-compresses immutable cold archive layers with browser CompressionStream while keeping compact metadata sidecars uncompressed; archive bodies are decompressed lazily and cached. */
 //@allowed-ipc flashback_hayaku_bridge
 //@update-url https://raw.githubusercontent.com/rusinus12-droid/hayaku_locator_continuity/main/hayaku_locator_continuity.js
 //@arg hayaku_enabled string true|false
@@ -108,7 +110,7 @@
   };
 
   const PLUGIN_NAME = 'HAYAKU';
-  const PLUGIN_VERSION = '2.3.54';
+  const PLUGIN_VERSION = '2.3.56';
   const HAYAKU_PACKET_AUTHORING_PROFILE_SCHEMA = 'hayaku-packet-authoring-profile-v1';
   const HAYAKU_PACKET_AUTHORING_ALIAS_LANGUAGES = Object.freeze(['ko', 'en', 'ja', 'zh']);
   const HAYAKU_CANONICAL_ANCHOR_PREFIXES = Object.freeze([
@@ -121,6 +123,22 @@
   const STORAGE_LEDGER_VERSION = 'hayaku_storage_ledger_v2';
   const STORAGE_LEDGER_COMPAT_VERSIONS = new Set(['hayaku_storage_ledger_v1', STORAGE_LEDGER_VERSION]);
   const STORAGE_LEDGER_KEY_PREFIX = 'hayaku.v2.ledger.';
+  const HAYAKU_ARCHIVE_REF_SCHEMA = 'hayaku.shared_archive_ref.v1';
+  const HAYAKU_ARCHIVE_SCHEMA = 'hayaku.shared_archive.v1';
+  const HAYAKU_ARCHIVE_META_SCHEMA = 'hayaku.shared_archive_meta.v1';
+  const HAYAKU_ARCHIVE_GZIP_SCHEMA = 'hayaku.shared_archive.gzip.v1';
+  const HAYAKU_ARCHIVE_GZIP_ENCODING = 'gzip+base64';
+  const HAYAKU_ARCHIVE_GZIP_MIN_CHARS = 16384;
+  const HAYAKU_ARCHIVE_GZIP_MIN_SAVINGS = 0.08;
+  const HAYAKU_ARCHIVE_BODY_CACHE_MAX = 12;
+  const HayakuArchiveBodyCache = new Map();
+  const HayakuArchiveCompressionStats = {
+    compressedWrites: 0, plainWrites: 0, decompressions: 0, cacheHits: 0,
+    compressedBytes: 0, rawChars: 0, failures: 0, lastError: ''
+  };
+  const HAYAKU_ARCHIVE_KEY_PREFIX = 'hayaku.v2.shared_archive.';
+  const HAYAKU_ARCHIVE_META_KEY_PREFIX = 'hayaku.v2.shared_archive_meta.';
+  const HAYAKU_ARCHIVE_MAX_DEPTH = 256;
   const MEMORY_SESSION_BRIDGE_SCHEMA = 'memory-session-bridge-v1';
   const MEMORY_SESSION_BRIDGE_COLD_START_SCHEMA = 'memory-session-bridge-hayaku-cold-start-v1';
   const MEMORY_SESSION_BRIDGE_COLD_START_PREFIX = 'memory_session_bridge:hayaku_cold_start:';
@@ -2816,6 +2834,145 @@ const MODE_PROFILES = Object.freeze({
     } catch (_) {
       return stableHash64Fallback(src);
     }
+  };
+
+  const hayakuBytesToBase64 = bytesInput => {
+    const bytes = bytesInput instanceof Uint8Array ? bytesInput : new Uint8Array(bytesInput || []);
+    if (typeof Buffer !== 'undefined') return Buffer.from(bytes).toString('base64');
+    if (typeof btoa !== 'function') throw new Error('base64_encoder_unavailable');
+    let binary = '';
+    const chunk = 0x8000;
+    for (let offset = 0; offset < bytes.length; offset += chunk) {
+      const part = bytes.subarray(offset, offset + chunk);
+      for (let index = 0; index < part.length; index += 1) binary += String.fromCharCode(part[index]);
+    }
+    return btoa(binary);
+  };
+  const hayakuBase64ToBytes = encoded => {
+    const source = text(encoded || '');
+    if (!source) return new Uint8Array(0);
+    if (typeof Buffer !== 'undefined') return new Uint8Array(Buffer.from(source, 'base64'));
+    if (typeof atob !== 'function') throw new Error('base64_decoder_unavailable');
+    const binary = atob(source);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+    return bytes;
+  };
+  const hayakuGzipSupported = () => typeof CompressionStream === 'function'
+    && typeof DecompressionStream === 'function'
+    && typeof TextEncoder === 'function'
+    && typeof TextDecoder === 'function'
+    && typeof Response === 'function';
+  const hayakuGzipText = async source => {
+    if (!hayakuGzipSupported()) return null;
+    const bytes = new TextEncoder().encode(text(source));
+    const input = new Response(bytes).body;
+    if (!input?.pipeThrough) throw new Error('gzip_input_stream_unavailable');
+    const compressed = input.pipeThrough(new CompressionStream('gzip'));
+    return new Uint8Array(await new Response(compressed).arrayBuffer());
+  };
+  const hayakuGunzipText = async bytesInput => {
+    if (!hayakuGzipSupported()) throw new Error('gzip_decompression_unavailable');
+    const bytes = bytesInput instanceof Uint8Array ? bytesInput : new Uint8Array(bytesInput || []);
+    const input = new Response(bytes).body;
+    if (!input?.pipeThrough) throw new Error('gunzip_input_stream_unavailable');
+    const decompressed = input.pipeThrough(new DecompressionStream('gzip'));
+    return new TextDecoder().decode(await new Response(decompressed).arrayBuffer());
+  };
+  const cacheHayakuArchiveBody = (storageKey, rawHash, parsed) => {
+    if (!storageKey || !parsed) return parsed;
+    HayakuArchiveBodyCache.delete(storageKey);
+    HayakuArchiveBodyCache.set(storageKey, { rawHash, parsed });
+    while (HayakuArchiveBodyCache.size > HAYAKU_ARCHIVE_BODY_CACHE_MAX) {
+      const oldest = HayakuArchiveBodyCache.keys().next().value;
+      if (oldest === undefined) break;
+      HayakuArchiveBodyCache.delete(oldest);
+    }
+    return parsed;
+  };
+  const encodeHayakuArchiveForStorage = async (archive, serialized = JSON.stringify(archive)) => {
+    const raw = text(serialized);
+    const rawHash = stableHash64(raw);
+    if (raw.length < HAYAKU_ARCHIVE_GZIP_MIN_CHARS || !hayakuGzipSupported()) {
+      HayakuArchiveCompressionStats.plainWrites += 1;
+      HayakuArchiveCompressionStats.rawChars += raw.length;
+      return { serialized: raw, rawHash, compressed: false, compressedBytes: 0, rawChars: raw.length };
+    }
+    try {
+      const compressed = await hayakuGzipText(raw);
+      if (!compressed?.length) throw new Error('gzip_empty');
+      const wrapper = {
+        schema: HAYAKU_ARCHIVE_GZIP_SCHEMA,
+        archiveSchema: HAYAKU_ARCHIVE_SCHEMA,
+        archiveId: compact(archive?.archiveId || '', 128),
+        encoding: HAYAKU_ARCHIVE_GZIP_ENCODING,
+        rawHash,
+        rawChars: raw.length,
+        compressedBytes: compressed.byteLength,
+        data: hayakuBytesToBase64(compressed),
+        createdAt: now()
+      };
+      const wrapped = JSON.stringify(wrapper);
+      // Compression has no value if the wrapper is not actually smaller.
+      const savingsRatio = raw.length > 0 ? 1 - (wrapped.length / raw.length) : 0;
+      if (wrapped.length >= raw.length || savingsRatio < HAYAKU_ARCHIVE_GZIP_MIN_SAVINGS) {
+        HayakuArchiveCompressionStats.plainWrites += 1;
+        HayakuArchiveCompressionStats.rawChars += raw.length;
+        return { serialized: raw, rawHash, compressed: false, compressedBytes: 0, rawChars: raw.length };
+      }
+      HayakuArchiveCompressionStats.compressedWrites += 1;
+      HayakuArchiveCompressionStats.rawChars += raw.length;
+      HayakuArchiveCompressionStats.compressedBytes += compressed.byteLength;
+      HayakuArchiveCompressionStats.lastError = '';
+      return { serialized: wrapped, rawHash, compressed: true, compressedBytes: compressed.byteLength, rawChars: raw.length };
+    } catch (error) {
+      HayakuArchiveCompressionStats.failures += 1;
+      HayakuArchiveCompressionStats.lastError = compact(error?.message || error, 300);
+      HayakuArchiveCompressionStats.plainWrites += 1;
+      HayakuArchiveCompressionStats.rawChars += raw.length;
+      return { serialized: raw, rawHash, compressed: false, compressedBytes: 0, rawChars: raw.length, fallbackError: HayakuArchiveCompressionStats.lastError };
+    }
+  };
+  const decodeHayakuArchiveStorage = async (storageKey, rawInput) => {
+    const raw = typeof rawInput === 'string' ? rawInput : JSON.stringify(rawInput ?? null);
+    const rawStorageHash = stableHash64(raw);
+    const cached = HayakuArchiveBodyCache.get(storageKey);
+    if (cached?.rawHash === rawStorageHash) {
+      HayakuArchiveCompressionStats.cacheHits += 1;
+      HayakuArchiveBodyCache.delete(storageKey);
+      HayakuArchiveBodyCache.set(storageKey, cached);
+      return { parsed: cached.parsed, rawHash: rawStorageHash, compressed: cached.compressed === true };
+    }
+    const outer = typeof rawInput === 'string' ? safeJsonParse(rawInput, null) : rawInput;
+    if (!objectish(outer)) return { parsed: null, rawHash: rawStorageHash, compressed: false, reason: 'archive_json_invalid' };
+    if (outer.schema !== HAYAKU_ARCHIVE_GZIP_SCHEMA) {
+      cacheHayakuArchiveBody(storageKey, rawStorageHash, outer);
+      return { parsed: outer, rawHash: rawStorageHash, compressed: false };
+    }
+    try {
+      if (outer.encoding !== HAYAKU_ARCHIVE_GZIP_ENCODING) throw new Error('archive_encoding_invalid');
+      const decompressed = await hayakuGunzipText(hayakuBase64ToBytes(outer.data || ''));
+      const expectedHash = compact(outer.rawHash || '', 96);
+      if (!decompressed || (expectedHash && stableHash64(decompressed) !== expectedHash)) throw new Error('archive_gzip_digest_mismatch');
+      const parsed = safeJsonParse(decompressed, null);
+      if (!objectish(parsed) || parsed.schema !== HAYAKU_ARCHIVE_SCHEMA) throw new Error('archive_gzip_body_invalid');
+      if (outer.archiveId && compact(parsed.archiveId || '', 128) !== compact(outer.archiveId || '', 128)) throw new Error('archive_gzip_identity_mismatch');
+      HayakuArchiveCompressionStats.decompressions += 1;
+      HayakuArchiveCompressionStats.lastError = '';
+      cacheHayakuArchiveBody(storageKey, rawStorageHash, parsed);
+      const entry = HayakuArchiveBodyCache.get(storageKey);
+      if (entry) entry.compressed = true;
+      return { parsed, rawHash: rawStorageHash, compressed: true };
+    } catch (error) {
+      HayakuArchiveCompressionStats.failures += 1;
+      HayakuArchiveCompressionStats.lastError = compact(error?.message || error, 300);
+      return { parsed: null, rawHash: rawStorageHash, compressed: true, reason: HayakuArchiveCompressionStats.lastError };
+    }
+  };
+  const hayakuStoredArchiveRawHash = rawInput => {
+    const outer = typeof rawInput === 'string' ? safeJsonParse(rawInput, null) : rawInput;
+    if (objectish(outer) && outer.schema === HAYAKU_ARCHIVE_GZIP_SCHEMA) return compact(outer.rawHash || '', 96);
+    return typeof rawInput === 'string' ? stableHash64(rawInput) : stableHash64(JSON.stringify(rawInput ?? null));
   };
   const canonicalPromptCacheStringify = value => {
     const seen = new WeakSet();
@@ -19412,6 +19569,11 @@ const MODE_PROFILES = Object.freeze({
       recoveredTurns: []
     },
     worldline: emptyTurnWorldline(),
+    archiveRef: null,
+    archiveOwner: false,
+    archiveId: '',
+    archiveGeneration: 0,
+    archiveDigest: '',
     records: [],
     slotHeads: [],
     tombstones: []
@@ -19560,13 +19722,308 @@ const MODE_PROFILES = Object.freeze({
       auditRetained: record.auditRetained === true,
       divergenceReason: compact(record.divergenceReason || '', 96),
       supersededByHash: compact(record.supersededByHash || '', 96),
-      supersededAt: finiteNonNegativeInteger(record.supersededAt, 0)
+      supersededAt: finiteNonNegativeInteger(record.supersededAt, 0),
+      archiveReferenceOnly: record.archiveReferenceOnly === true,
+      archiveId: compact(record.archiveId || '', 128),
+      archiveSourceKey: compact(record.archiveSourceKey || '', 196),
+      archiveCanonicalId: compact(record.archiveCanonicalId || '', 128)
     };
     return {
       ...normalized,
       slotId: compact(storageRecordSlotId(normalized) || record.slotId || '', 240)
     };
   };
+  const hayakuArchiveRefPointer = value => {
+    const source = objectish(value) ? value : {};
+    const archiveId = compact(source.archiveId || '', 128);
+    if (!archiveId) return null;
+    return {
+      schema: HAYAKU_ARCHIVE_REF_SCHEMA,
+      archiveId,
+      storageKey: compact(source.storageKey || `${HAYAKU_ARCHIVE_KEY_PREFIX}${archiveId}`, 240),
+      metaKey: compact(source.metaKey || `${HAYAKU_ARCHIVE_META_KEY_PREFIX}${archiveId}`, 240),
+      generation: Math.max(1, finiteNonNegativeInteger(source.generation, 1)),
+      depth: Math.max(1, finiteNonNegativeInteger(source.depth, 1)),
+      deltaCount: finiteNonNegativeInteger(source.deltaCount ?? source.recordCount, 0),
+      recordCount: finiteNonNegativeInteger(source.recordCount, 0),
+      localOverlapCount: finiteNonNegativeInteger(source.localOverlapCount, 0),
+      digest: compact(source.digest || '', 96),
+      createdAt: finiteNonNegativeInteger(source.createdAt, 0),
+      updatedAt: finiteNonNegativeInteger(source.updatedAt, 0)
+    };
+  };
+  const normalizeHayakuArchiveRef = value => {
+    const pointer = hayakuArchiveRefPointer(value);
+    if (!pointer) return null;
+    const source = objectish(value) ? value : {};
+    return { ...pointer, parentRef: hayakuArchiveRefPointer(source.parentRef || source.parentArchiveRef) };
+  };
+  const hayakuArchiveRecordIdentity = record => compact(record?.permanentHistoryId || record?.archiveCanonicalId || '', 128)
+    || stableHash64([
+      compact(record?.inheritedFromScopeKey || '', 160),
+      storageRecordSlotId(record),
+      compact(record?.hash || '', 96),
+      compact(record?.packetType || '', 48)
+    ].join(''));
+  const mergeHayakuArchiveRecords = (...lists) => {
+    const byId = new Map();
+    for (const record of lists.flatMap(list => ensureArray(list))) {
+      const normalized = normalizeStorageRecord(record);
+      if (!normalized) continue;
+      const identity = hayakuArchiveRecordIdentity(normalized);
+      if (!identity) continue;
+      const previous = byId.get(identity);
+      if (!previous || Number(normalized.capturedAt || normalized.inheritedAt || 0) >= Number(previous.capturedAt || previous.inheritedAt || 0)) {
+        byId.set(identity, normalized);
+      }
+    }
+    return Array.from(byId.values()).sort(compareStorageHandoffChronology);
+  };
+  const normalizeHayakuArchiveMemberIds = (items = []) => {
+    const out = [];
+    const seen = new Set();
+    for (const raw of ensureArray(items)) {
+      const value = compact(raw || '', 128);
+      if (!value || seen.has(value)) continue;
+      seen.add(value);
+      out.push(value);
+      if (out.length >= 1000000) break;
+    }
+    return out.sort();
+  };
+  const hayakuArchiveMemberDigest = items => stableHash64(normalizeHayakuArchiveMemberIds(items).join('\u0001'));
+  const readHayakuSharedArchiveSummary = async archiveRefValue => {
+    const head = normalizeHayakuArchiveRef(archiveRefValue);
+    if (!head) return { archiveRef: null, memberIds: [], records: 0, layers: [], verified: false, reason: 'archive_ref_absent', maxHistoricalOrdinal: 0 };
+    const seen = new Set();
+    const memberSet = new Set();
+    const layers = [];
+    let cursor = head;
+    let maxHistoricalOrdinal = 0;
+    while (cursor && layers.length < HAYAKU_ARCHIVE_MAX_DEPTH) {
+      if (seen.has(cursor.metaKey)) return { archiveRef: head, memberIds: [], records: 0, layers, verified: false, reason: 'archive_cycle', maxHistoricalOrdinal: 0 };
+      seen.add(cursor.metaKey);
+      const raw = await RisuCompat.getStorageItem(cursor.metaKey, null);
+      const meta = typeof raw === 'string' ? safeJsonParse(raw, null) : raw;
+      if (!objectish(meta) || meta.schema !== HAYAKU_ARCHIVE_META_SCHEMA || compact(meta.archiveId || '', 128) !== cursor.archiveId) {
+        return { archiveRef: head, memberIds: [], records: 0, layers, verified: false, reason: 'archive_meta_missing_or_invalid', maxHistoricalOrdinal: 0 };
+      }
+      const deltaIds = normalizeHayakuArchiveMemberIds(meta.deltaMemberIds || []);
+      const deltaCount = finiteNonNegativeInteger(meta.deltaCount, 0);
+      const deltaDigest = hayakuArchiveMemberDigest(deltaIds);
+      if (deltaIds.length !== deltaCount
+        || deltaCount !== finiteNonNegativeInteger(cursor.deltaCount, 0)
+        || deltaDigest !== compact(meta.deltaDigest || '', 96)) {
+        return { archiveRef: head, memberIds: [], records: 0, layers, verified: false, reason: 'archive_meta_delta_mismatch', maxHistoricalOrdinal: 0 };
+      }
+      let duplicate = false;
+      for (const id of deltaIds) { if (memberSet.has(id)) duplicate = true; memberSet.add(id); }
+      if (duplicate) return { archiveRef: head, memberIds: [], records: 0, layers, verified: false, reason: 'archive_member_duplicate', maxHistoricalOrdinal: 0 };
+      maxHistoricalOrdinal = Math.max(maxHistoricalOrdinal, finiteNonNegativeInteger(meta.maxHistoricalOrdinal, 0));
+      layers.push({ ref: cursor, meta, memberIds: deltaIds });
+      cursor = normalizeHayakuArchiveRef(cursor.parentRef || meta.parentRef || meta.parentArchiveRef);
+    }
+    if (cursor) return { archiveRef: head, memberIds: [], records: 0, layers, verified: false, reason: 'archive_depth_exceeded', maxHistoricalOrdinal: 0 };
+    const memberIds = normalizeHayakuArchiveMemberIds(Array.from(memberSet));
+    const digest = hayakuArchiveMemberDigest(memberIds);
+    const verified = memberIds.length === finiteNonNegativeInteger(head.recordCount, 0)
+      && digest === compact(head.digest || '', 96)
+      && layers.length === Math.max(1, finiteNonNegativeInteger(head.depth, layers.length));
+    return { archiveRef: head, memberIds, records: memberIds.length, layers, verified, digest, reason: verified ? 'archive_meta_verified' : 'archive_meta_digest_mismatch', maxHistoricalOrdinal };
+  };
+  const readHayakuSharedArchive = async archiveRefValue => {
+    const head = normalizeHayakuArchiveRef(archiveRefValue);
+    if (!head) return { archiveRef: null, records: [], archive: null, layers: [], verified: false, reason: 'archive_ref_absent' };
+    const seen = new Set();
+    const layers = [];
+    let cursor = head;
+    while (cursor && layers.length < HAYAKU_ARCHIVE_MAX_DEPTH) {
+      if (seen.has(cursor.storageKey)) return { archiveRef: head, records: [], archive: null, layers, verified: false, reason: 'archive_cycle' };
+      seen.add(cursor.storageKey);
+      const raw = await RisuCompat.getStorageItem(cursor.storageKey, null);
+      const decoded = await decodeHayakuArchiveStorage(cursor.storageKey, raw);
+      const parsed = decoded.parsed;
+      if (!objectish(parsed) || parsed.schema !== HAYAKU_ARCHIVE_SCHEMA || compact(parsed.archiveId || '', 128) !== cursor.archiveId) {
+        return { archiveRef: head, records: [], archive: null, layers, verified: false, reason: decoded.reason || 'archive_missing_or_invalid' };
+      }
+      const records = ensureArray(parsed.records).map(normalizeStorageRecord).filter(Boolean);
+      const deltaDigest = stableHash64(records.map(hayakuArchiveRecordIdentity).sort().join('\u0001'));
+      if (Object.prototype.hasOwnProperty.call(parsed, 'deltaCount') && records.length !== finiteNonNegativeInteger(parsed.deltaCount, records.length)) {
+        return { archiveRef: head, records: [], archive: parsed, layers, verified: false, reason: 'archive_delta_count_mismatch' };
+      }
+      if (parsed.deltaDigest && compact(parsed.deltaDigest, 96) !== deltaDigest) {
+        return { archiveRef: head, records: [], archive: parsed, layers, verified: false, reason: 'archive_delta_digest_mismatch' };
+      }
+      layers.push({ ref: cursor, archive: parsed, records });
+      cursor = normalizeHayakuArchiveRef(cursor.parentRef || parsed.parentRef || parsed.parentArchiveRef);
+    }
+    if (cursor) return { archiveRef: head, records: [], archive: layers[0]?.archive || null, layers, verified: false, reason: 'archive_depth_exceeded' };
+    const records = mergeHayakuArchiveRecords(...layers.slice().reverse().map(layer => layer.records));
+    const digest = stableHash64(records.map(hayakuArchiveRecordIdentity).sort().join('\u0001'));
+    const verified = records.length === head.recordCount && digest === head.digest;
+    return { archiveRef: head, records, archive: layers[0]?.archive || null, layers, verified, digest, reason: verified ? 'archive_verified' : 'archive_digest_mismatch' };
+  };
+  const hydrateHayakuLedgerArchive = async ledger => {
+    const archiveRef = normalizeHayakuArchiveRef(ledger?.archiveRef);
+    if (!archiveRef) return { ...ledger, archiveRef: null, archiveRecords: 0, archiveVerified: true };
+    const archive = await readHayakuSharedArchive(archiveRef);
+    const marked = archive.records.map(record => normalizeStorageRecord({
+      ...record,
+      archiveReferenceOnly: true,
+      archiveId: archiveRef.archiveId,
+      archiveSourceKey: archiveRef.storageKey
+    })).filter(Boolean);
+    const records = mergeHayakuArchiveRecords(marked, ensureArray(ledger.records));
+    return {
+      ...ledger,
+      archiveRef,
+      records,
+      archiveRecords: marked.length,
+      archiveVerified: archive.verified === true,
+      archiveReason: archive.reason
+    };
+  };
+  const ensureHayakuSharedArchive = async (sourceLedger, sourceScopeKey) => {
+    const existingRef = normalizeHayakuArchiveRef(sourceLedger?.archiveRef);
+    const parent = existingRef ? await readHayakuSharedArchiveSummary(existingRef) : null;
+    if (existingRef && parent?.verified !== true) throw new Error('hayaku_parent_archive_meta_verification_failed');
+    const parentMemberIds = normalizeHayakuArchiveMemberIds(parent?.memberIds || []);
+    const parentIds = new Set(parentMemberIds);
+    const localLedger = {
+      ...(sourceLedger || {}),
+      archiveRef: null,
+      records: ensureArray(sourceLedger?.records).filter(record => record?.archiveReferenceOnly !== true)
+    };
+    const eligible = storageRecordsEligibleForHandoff(localLedger, { includeSelectedUnbound: false })
+      .filter(record => !parentIds.has(hayakuArchiveRecordIdentity(record)));
+    if (!eligible.length && existingRef) {
+      return { archiveRef: existingRef, archive: null, records: [], recordCount: parent.records, memberIds: parentMemberIds, changed: false, deltaRecords: 0 };
+    }
+    const archivedAt = now();
+    const parentMaxHistoricalOrdinal = finiteNonNegativeInteger(parent?.maxHistoricalOrdinal, 0);
+    const prepared = eligible.map((record, index) => {
+      const canonicalId = hayakuArchiveRecordIdentity(record);
+      const historicalOrdinal = parentMaxHistoricalOrdinal + index + 1;
+      return normalizeStorageRecord({
+        ...record,
+        recordId: `archive:${canonicalId}:${record.packetType}`,
+        targetPairIndex: 0,
+        requestNonce: '',
+        requestSequence: historicalOrdinal,
+        boundAt: 0,
+        captureSource: 'shared_archive_layer',
+        inheritedSessionHistory: true,
+        memoryClass: 'historical',
+        recordState: 'historical',
+        inheritedFromScopeKey: record.inheritedFromScopeKey || sourceScopeKey,
+        inheritedViaScopeKey: sourceScopeKey,
+        inheritedAt: record.inheritedAt || archivedAt,
+        historicalOrdinal,
+        permanentSessionHistory: true,
+        historicalProtection: PERMANENT_SESSION_HISTORY_PROTECTION,
+        permanentHistoryId: canonicalId,
+        archiveCanonicalId: canonicalId,
+        archiveReferenceOnly: false,
+        orphanExempt: true,
+        retentionProtected: true,
+        deletionProtected: true
+      });
+    }).filter(Boolean);
+    const preparedMemberIds = normalizeHayakuArchiveMemberIds(prepared.map(hayakuArchiveRecordIdentity));
+    const memberIds = normalizeHayakuArchiveMemberIds([...parentMemberIds, ...preparedMemberIds]);
+    const digest = hayakuArchiveMemberDigest(memberIds);
+    const deltaDigest = hayakuArchiveMemberDigest(preparedMemberIds);
+    const generation = Math.max(1, finiteNonNegativeInteger(existingRef?.generation, 0) + 1);
+    const archiveId = `hy_${stableHash64([
+      existingRef?.archiveId || '', sourceScopeKey, generation, deltaDigest, digest
+    ].join('\u0001')).slice(0, 28)}`;
+    const storageKey = `${HAYAKU_ARCHIVE_KEY_PREFIX}${archiveId}`;
+    const metaKey = `${HAYAKU_ARCHIVE_META_KEY_PREFIX}${archiveId}`;
+    const createdAt = finiteNonNegativeInteger(existingRef?.createdAt, archivedAt);
+    const maxHistoricalOrdinal = Math.max(parentMaxHistoricalOrdinal, ...prepared.map(record => finiteNonNegativeInteger(record?.historicalOrdinal, 0)));
+    const archive = {
+      schema: HAYAKU_ARCHIVE_SCHEMA,
+      archiveId,
+      generation,
+      depth: Math.max(1, finiteNonNegativeInteger(existingRef?.depth, 0) + 1),
+      deltaCount: prepared.length,
+      deltaDigest,
+      recordCount: memberIds.length,
+      digest,
+      parentRef: existingRef ? hayakuArchiveRefPointer(existingRef) : null,
+      createdAt,
+      updatedAt: archivedAt,
+      records: prepared
+    };
+    const meta = {
+      schema: HAYAKU_ARCHIVE_META_SCHEMA,
+      archiveId,
+      storageKey,
+      metaKey,
+      generation,
+      depth: archive.depth,
+      deltaCount: preparedMemberIds.length,
+      deltaDigest,
+      deltaMemberIds: preparedMemberIds,
+      recordCount: memberIds.length,
+      digest,
+      maxHistoricalOrdinal,
+      parentRef: existingRef ? hayakuArchiveRefPointer(existingRef) : null,
+      createdAt,
+      updatedAt: archivedAt
+    };
+    const rawArchiveSerialized = JSON.stringify(archive);
+    const encodedArchive = await encodeHayakuArchiveForStorage(archive, rawArchiveSerialized);
+    meta.storageEncoding = encodedArchive.compressed === true ? HAYAKU_ARCHIVE_GZIP_ENCODING : 'plain-json';
+    meta.rawChars = encodedArchive.rawChars;
+    meta.compressedBytes = encodedArchive.compressedBytes;
+    const serialized = encodedArchive.serialized;
+    const existingRaw = await RisuCompat.getStorageItem(storageKey, null);
+    const existingDecoded = typeof existingRaw === 'string' && hayakuStoredArchiveRawHash(existingRaw) === encodedArchive.rawHash
+      ? await decodeHayakuArchiveStorage(storageKey, existingRaw)
+      : { parsed: null };
+    const existingValid = objectish(existingDecoded.parsed)
+      && compact(existingDecoded.parsed.archiveId || '', 128) === archiveId
+      && stableHash64(JSON.stringify(existingDecoded.parsed)) === encodedArchive.rawHash;
+    if (!existingValid) {
+      const saved = await RisuCompat.setStorageItem(storageKey, serialized);
+      const readback = saved ? await RisuCompat.getStorageItem(storageKey, null) : null;
+      const verifiedReadback = saved ? await decodeHayakuArchiveStorage(storageKey, readback) : { parsed: null };
+      if (!saved
+        || !objectish(verifiedReadback.parsed)
+        || compact(verifiedReadback.parsed.archiveId || '', 128) !== archiveId
+        || stableHash64(JSON.stringify(verifiedReadback.parsed)) !== encodedArchive.rawHash) {
+        const error = new Error('hayaku_shared_archive_write_failed');
+        error.code = 'HAYAKU_SHARED_ARCHIVE_WRITE_FAILED';
+        throw error;
+      }
+    }
+    const metaSerialized = JSON.stringify(meta);
+    const metaSaved = await RisuCompat.setStorageItem(metaKey, metaSerialized);
+    const metaReadback = metaSaved ? await RisuCompat.getStorageItem(metaKey, null) : null;
+    if (!metaSaved || typeof metaReadback !== 'string' || stableHash64(metaReadback) !== stableHash64(metaSerialized)) {
+      const error = new Error('hayaku_shared_archive_meta_write_failed');
+      error.code = 'HAYAKU_SHARED_ARCHIVE_META_WRITE_FAILED';
+      throw error;
+    }
+    const archiveRef = {
+      schema: HAYAKU_ARCHIVE_REF_SCHEMA,
+      archiveId,
+      storageKey,
+      metaKey,
+      generation,
+      depth: archive.depth,
+      deltaCount: preparedMemberIds.length,
+      recordCount: memberIds.length,
+      localOverlapCount: 0,
+      digest,
+      createdAt,
+      updatedAt: archivedAt,
+      parentRef: existingRef ? hayakuArchiveRefPointer(existingRef) : null
+    };
+    return { archiveRef, archive, records: prepared, recordCount: memberIds.length, memberIds, changed: true, deltaRecords: prepared.length };
+  };
+
   const normalizeStorageLedger = (value, scope) => {
     const parsed = typeof value === 'string' ? safeJsonParse(value, null) : value;
     const empty = emptyStorageLedger(scope);
@@ -19610,6 +20067,11 @@ const MODE_PROFILES = Object.freeze({
           .map(Number).filter(Number.isInteger)
       },
       worldline: normalizeTurnWorldline(parsed.worldline),
+      archiveRef: normalizeHayakuArchiveRef(parsed.archiveRef),
+      archiveOwner: parsed.archiveOwner === true,
+      archiveId: compact(parsed.archiveId || '', 128),
+      archiveGeneration: finiteNonNegativeInteger(parsed.archiveGeneration, 0),
+      archiveDigest: compact(parsed.archiveDigest || '', 96),
       records: Array.from(byId.values()),
       slotHeads: Array.from(headsBySlot.values()).slice(-STORAGE_LEDGER_MAX_SLOT_HEADS),
       tombstones: Array.from(tombstonesBySlot.values()).slice(-STORAGE_LEDGER_MAX_TOMBSTONES)
@@ -19637,6 +20099,7 @@ const MODE_PROFILES = Object.freeze({
   };
   const storageRecordsEligibleForHandoff = (ledger, options = {}) => {
     const records = ensureArray(ledger?.records).map(normalizeStorageRecord).filter(Boolean);
+    const archiveRecords = records.filter(record => record.archiveReferenceOnly === true);
     const heads = ensureArray(ledger?.slotHeads).map(normalizeStorageSlotHead).filter(Boolean);
     const allowedStates = options?.includeSelectedUnbound === true
       ? ['active', 'historical', 'unbound']
@@ -19652,11 +20115,19 @@ const MODE_PROFILES = Object.freeze({
     }
     const byId = new Map(records.map(record => [record.recordId, record]));
     const byHash = new Map(records.map(record => [record.hash, record]));
-    return heads
+    const selected = heads
       .filter(head => allowedStates.includes(head.state))
       .map(head => byId.get(head.selectedRecordId) || byHash.get(head.selectedVariantHash) || null)
-      .filter(record => record && !storageRecordSuppressedByTombstone(record, tombstonesBySlot.get(storageRecordSlotId(record))))
-      .sort(compareStorageHandoffChronology);
+      .filter(record => record && !storageRecordSuppressedByTombstone(record, tombstonesBySlot.get(storageRecordSlotId(record))));
+    return mergeHayakuArchiveRecords(archiveRecords, selected).sort(compareStorageHandoffChronology);
+  };
+  const logicalHayakuRecordCount = ledger => {
+    const archiveRef = normalizeHayakuArchiveRef(ledger?.archiveRef);
+    const localLedger = { ...(ledger || {}), archiveRef: null, records: ensureArray(ledger?.records).filter(record => record?.archiveReferenceOnly !== true) };
+    const localEffective = storageRecordsEligibleForHandoff(localLedger, { includeSelectedUnbound: false }).length;
+    if (!archiveRef) return localEffective;
+    const overlap = Math.min(localEffective, Math.max(0, Number(archiveRef.localOverlapCount || 0) || 0));
+    return Math.max(0, Number(archiveRef.recordCount || 0) || 0) + localEffective - overlap;
   };
   const nativeCopiedStorageRecord = (record, scope, sourceScopeKey, index) => {
     const sourceHistorical = record?.inheritedSessionHistory === true
@@ -19793,92 +20264,89 @@ const MODE_PROFILES = Object.freeze({
     };
   };
   const inheritStorageLedgerForCopiedChat = async (ledger, scope) => {
-    if (ensureArray(ledger?.records).length > 0) return { ledger, changed: false, reason: 'target_not_empty' };
+    if (ensureArray(ledger?.records).length > 0 || normalizeHayakuArchiveRef(ledger?.archiveRef)) {
+      return { ledger, changed: false, reason: 'target_not_empty' };
+    }
     const bridgeHandoff = scope?.bridgeHandoffValid === true
       && Boolean(compact(scope?.bridgeHandoffSourceChatId || '', 160));
-    const sourceChatId = compact(
-      bridgeHandoff ? scope?.bridgeHandoffSourceChatId : scope?.copiedFromChatId,
-      160
-    );
+    const sourceChatId = compact(bridgeHandoff ? scope?.bridgeHandoffSourceChatId : scope?.copiedFromChatId, 160);
     const characterId = compact(scope?.characterId || '', 160);
     if (!sourceChatId || !characterId) return { ledger, changed: false, reason: 'copy_marker_absent' };
-    const sourceScopeKey = `chat_${stableHash64(`${characterId}\n${sourceChatId}`)}`;
+    const sourceScopeKey = `chat_${stableHash64(`${characterId}
+${sourceChatId}`)}`;
     if (sourceScopeKey === scope.key) return { ledger, changed: false, reason: 'same_scope' };
-    const sourceStored = await RisuCompat.getStorageItem(`${STORAGE_LEDGER_KEY_PREFIX}${sourceScopeKey}`, null);
-    let sourceLedger = normalizeStorageLedger(sourceStored, { key: sourceScopeKey });
-    const sourceColdStart = await importBridgeColdStartIntoStorageLedger(sourceLedger, { key: sourceScopeKey });
-    sourceLedger = sourceColdStart.ledger;
-    const sourceIncrementalRecovery = await importBridgeIncrementalRecoveryIntoStorageLedger(
-      sourceLedger,
-      { key: sourceScopeKey }
-    );
-    sourceLedger = sourceIncrementalRecovery.ledger;
-    if (!sourceLedger.records.length) return { ledger, changed: false, reason: 'source_empty', sourceScopeKey };
-    const inheritedAt = now();
-    const sourceRecords = storageRecordsEligibleForHandoff(sourceLedger, {
-      // A native RisuAI chat copy clones the same visible transcript and may
-      // safely carry its selected pending sidecar for local rebinding. A bridge
-      // session handoff promotes records to permanent history, so unbound
-      // evidence must remain behind until its U+A ownership is proven.
-      includeSelectedUnbound: !bridgeHandoff
-    });
-    const records = sourceRecords.map((record, index) => {
-      if (!bridgeHandoff) return nativeCopiedStorageRecord(record, scope, sourceScopeKey, index);
-      const inheritedFromScopeKey = record.inheritedFromScopeKey || sourceScopeKey;
-      const permanentHistoryId = record.permanentHistoryId || stableHash64([
-        PERMANENT_SESSION_HISTORY_PROTECTION,
-        inheritedFromScopeKey,
-        storageRecordSlotId(record),
-        record.hash || '',
-        record.packetType || ''
-      ].join('\u0001'));
-      return normalizeStorageRecord({
-        ...record,
-        recordId: `copy:${stableHash64([scope.key, permanentHistoryId, index + 1].join('\u0001'))}:${record.packetType}`,
-        targetPairIndex: index + 1,
-        userHash: '',
-        userMessageIdHash: '',
-        assistantVisibleHash: '',
-        assistantMessageIdHash: '',
-        parentTurnNodeId: '',
-        logicalTurnId: '',
-        requestNonce: '',
-        requestSequence: index + 1,
-        boundAt: 0,
-        captureSource: 'session_handoff',
-        inheritedSessionHistory: true,
-        memoryClass: 'historical',
-        recordState: 'historical',
-        inheritedFromScopeKey,
-        inheritedViaScopeKey: sourceScopeKey,
-        inheritedAt,
-        historicalOrdinal: index + 1,
-        permanentSessionHistory: true,
-        historicalProtection: PERMANENT_SESSION_HISTORY_PROTECTION,
-        permanentHistoryId,
-        orphanExempt: true,
-        retentionProtected: true,
-        deletionProtected: true
-      });
-    }).filter(Boolean);
-    if (!records.length) return { ledger, changed: false, reason: 'source_invalid', sourceScopeKey };
+    const sourceStorageKey = `${STORAGE_LEDGER_KEY_PREFIX}${sourceScopeKey}`;
+    const sourceStored = await RisuCompat.getStorageItem(sourceStorageKey, null);
+    let sourceLocalLedger = normalizeStorageLedger(sourceStored, { key: sourceScopeKey });
+    const sourceColdStart = await importBridgeColdStartIntoStorageLedger(sourceLocalLedger, { key: sourceScopeKey });
+    sourceLocalLedger = sourceColdStart.ledger;
+    const sourceIncrementalRecovery = await importBridgeIncrementalRecoveryIntoStorageLedger(sourceLocalLedger, { key: sourceScopeKey });
+    sourceLocalLedger = sourceIncrementalRecovery.ledger;
+    const sourceArchiveRef = normalizeHayakuArchiveRef(sourceLocalLedger.archiveRef);
+    const archiveSummary = sourceArchiveRef ? await readHayakuSharedArchiveSummary(sourceArchiveRef) : null;
+    if (sourceArchiveRef && archiveSummary?.verified !== true) throw new Error('hayaku_source_archive_meta_invalid');
+    const archiveIdentities = new Set(archiveSummary?.memberIds || []);
+    const localEligible = storageRecordsEligibleForHandoff(
+      { ...sourceLocalLedger, archiveRef: null },
+      { includeSelectedUnbound: !bridgeHandoff }
+    ).filter(record => !archiveIdentities.has(hayakuArchiveRecordIdentity(record)));
+    const sourceLogicalCount = normalizeHayakuArchiveMemberIds([
+      ...(archiveSummary?.memberIds || []),
+      ...localEligible.map(hayakuArchiveRecordIdentity)
+    ]).length;
+    if (!sourceLogicalCount) return { ledger, changed: false, reason: 'source_empty', sourceScopeKey };
+    if (!bridgeHandoff) {
+      const inheritedAt = now();
+      const records = localEligible.map((record, index) => nativeCopiedStorageRecord(record, scope, sourceScopeKey, index)).filter(Boolean);
+      const targetArchiveRef = sourceArchiveRef ? normalizeHayakuArchiveRef({ ...sourceArchiveRef, localOverlapCount: 0 }) : null;
+      const logicalRecords = normalizeHayakuArchiveMemberIds([
+        ...(archiveSummary?.memberIds || []),
+        ...records.map(hayakuArchiveRecordIdentity)
+      ]).length;
+      if (!logicalRecords) return { ledger, changed: false, reason: 'source_invalid', sourceScopeKey };
+      return {
+        ledger: {
+          ...emptyStorageLedger(scope),
+          migration: { complete: false, importedAt: inheritedAt, importedRecords: logicalRecords, chatSnapshotHash: '' },
+          archiveRef: targetArchiveRef,
+          records
+        },
+        changed: true,
+        reason: 'copied_chat_live_clone',
+        sourceScopeKey,
+        records: logicalRecords,
+        physicalRecords: records.length,
+        archiveRecords: Math.max(0, Number(targetArchiveRef?.recordCount || 0) || 0)
+      };
+    }
+    const archive = await ensureHayakuSharedArchive(sourceLocalLedger, sourceScopeKey);
+    const archivedIdentities = new Set(archive.memberIds || []);
+    const remainingLocalRecords = ensureArray(sourceLocalLedger.records).map(normalizeStorageRecord).filter(Boolean)
+      .filter(record => !archivedIdentities.has(hayakuArchiveRecordIdentity(record)));
+    const nextSourceArchiveRef = normalizeHayakuArchiveRef({ ...archive.archiveRef, localOverlapCount: 0 });
+    const targetArchiveRef = normalizeHayakuArchiveRef({ ...archive.archiveRef, localOverlapCount: 0 });
+    const sourceWithRef = { ...sourceLocalLedger, archiveRef: nextSourceArchiveRef, records: remainingLocalRecords };
+    const sourceSerialized = JSON.stringify(sourceWithRef);
+    const sourceSaved = await RisuCompat.setStorageItem(sourceStorageKey, sourceSerialized);
+    const sourceReadback = sourceSaved ? await RisuCompat.getStorageItem(sourceStorageKey, null) : null;
+    if (!sourceSaved || typeof sourceReadback !== 'string' || stableHash64(sourceReadback) !== stableHash64(sourceSerialized)) {
+      throw new Error('hayaku_source_archive_ref_write_failed');
+    }
     return {
       ledger: {
         ...emptyStorageLedger(scope),
-        migration: {
-          complete: bridgeHandoff,
-          importedAt: inheritedAt,
-          importedRecords: records.length,
-          chatSnapshotHash: ''
-        },
-        records
+        migration: { complete: true, importedAt: now(), importedRecords: archive.recordCount, chatSnapshotHash: '' },
+        archiveRef: targetArchiveRef,
+        records: []
       },
       changed: true,
-      reason: bridgeHandoff ? 'bridge_session_handoff' : 'copied_chat_live_clone',
+      reason: 'bridge_session_archive_link',
       sourceScopeKey,
-      records: records.length
+      records: archive.recordCount,
+      archiveRef: targetArchiveRef
     };
   };
+
   const inheritStorageLedgerForBridgeSession = inheritStorageLedgerForCopiedChat;
   const validateBridgeAnalysisCapsulePacketSet = capsule => {
     const packets = ensureArray(capsule?.packets);
@@ -20458,7 +20926,7 @@ const MODE_PROFILES = Object.freeze({
       Memory.projectionCacheScopeKey = '';
     }
   };
-  const loadStorageLedger = async scope => {
+  const loadStorageLedger = async (scope, options = {}) => {
     const key = storageLedgerStorageKey(scope);
     if (!key) return { ...emptyStorageLedger(scope), enabled: false, reason: 'scope_unavailable' };
     if (!RisuCompat.hasPluginStorage()) return { ...emptyStorageLedger(scope), enabled: false, reason: 'plugin_storage_unavailable' };
@@ -20466,15 +20934,15 @@ const MODE_PROFILES = Object.freeze({
     const ledger = normalizeStorageLedger(stored, scope);
     const adopted = await inheritStorageLedgerForCopiedChat(ledger, scope);
     const copyRepair = repairMisclassifiedCopiedChatLedger(adopted.ledger, scope);
-    return {
+    const local = {
       ...copyRepair.ledger,
       enabled: true,
-      reason: copyRepair.ledger.records.length
+      reason: copyRepair.ledger.records.length || normalizeHayakuArchiveRef(copyRepair.ledger.archiveRef)
         ? (copyRepair.changed ? copyRepair.reason : (adopted.changed ? adopted.reason : 'loaded'))
         : 'empty',
       storageKey: key,
       copiedChatAdoption: adopted.changed === true,
-      bridgeSessionAdoption: adopted.changed === true && adopted.reason === 'bridge_session_handoff',
+      bridgeSessionAdoption: adopted.changed === true && adopted.reason === 'bridge_session_archive_link',
       copiedChatLiveClone: adopted.changed === true && adopted.reason === 'copied_chat_live_clone',
       copiedChatRepair: copyRepair.changed === true,
       copiedChatRepairStats: copyRepair.changed === true ? {
@@ -20485,7 +20953,29 @@ const MODE_PROFILES = Object.freeze({
         ? copyRepair.reason
         : (adopted.changed === true ? adopted.reason : '')
     };
+    if (options?.hydrateArchive === false) {
+      const archiveRef = normalizeHayakuArchiveRef(local.archiveRef);
+      const archiveSummary = archiveRef
+        ? await readHayakuSharedArchiveSummary(archiveRef)
+        : { verified: true, reason: 'archive_ref_absent', records: 0 };
+      return {
+        ...local,
+        archiveRef,
+        archiveRecords: Math.max(0, Number(archiveSummary.records || 0) || 0),
+        archiveVerified: archiveSummary.verified === true,
+        archiveReason: archiveSummary.reason,
+        logicalRecordCount: logicalHayakuRecordCount(local),
+        recordsIncluded: false
+      };
+    }
+    const hydrated = await hydrateHayakuLedgerArchive(local);
+    return {
+      ...hydrated,
+      logicalRecordCount: storageRecordsEligibleForHandoff(hydrated, { includeSelectedUnbound: false }).length,
+      recordsIncluded: true
+    };
   };
+
   const packetCaptureInspectionFromText = value => {
     const source = text(value);
     const packets = [];
@@ -21052,10 +21542,12 @@ const MODE_PROFILES = Object.freeze({
     }
     const key = storageLedgerStorageKey(scope);
     if (!key) return { durable: false, saved: false, reason: 'scope_unavailable' };
-    const activeRecords = ensureArray(ledger.records).filter(record => (
+    const localRecords = ensureArray(ledger.records).filter(record => record?.archiveReferenceOnly !== true);
+    const ledgerForWrite = { ...ledger, records: localRecords };
+    const activeRecords = localRecords.filter(record => (
       ['active', 'historical', 'unbound', 'quarantined'].includes(record?.recordState)
     ));
-    const reconciled = reconcileStorageSlotHeads(ledger, activeRecords, []);
+    const reconciled = reconcileStorageSlotHeads(ledgerForWrite, activeRecords, []);
     const records = pruneStorageRecords(ensureArray(reconciled.ledger.records), reconciled.ledger);
     const survivingRecordIds = new Set(records.map(record => record.recordId));
     const survivingHashes = new Set(records.map(record => record.hash));
@@ -21075,6 +21567,11 @@ const MODE_PROFILES = Object.freeze({
       coldStart: ledger.coldStart || emptyStorageLedger(scope).coldStart,
       incrementalRecovery: ledger.incrementalRecovery || emptyStorageLedger(scope).incrementalRecovery,
       worldline: normalizeTurnWorldline(ledger.worldline),
+      archiveRef: normalizeHayakuArchiveRef(ledger.archiveRef),
+      archiveOwner: ledger.archiveOwner === true,
+      archiveId: compact(ledger.archiveId || '', 128),
+      archiveGeneration: finiteNonNegativeInteger(ledger.archiveGeneration, 0),
+      archiveDigest: compact(ledger.archiveDigest || '', 96),
       records,
       slotHeads,
       tombstones: ensureArray(reconciled.ledger.tombstones)
@@ -21129,176 +21626,58 @@ const MODE_PROFILES = Object.freeze({
     enqueueStorageOperation(() => writeStorageLedgerDirect(scope, ledger, reason));
   const adoptBridgeSessionHandoff = async (options = {}) => enqueueStorageOperation(async () => {
     const scope = await RisuCompat.currentChatScope();
-    if (!scope?.confident || !scope?.key) {
-      return {
-        ok: false,
-        adopted: false,
-        verified: false,
-        durable: false,
-        reason: scope?.reason || 'scope_unavailable',
-        records: 0
-      };
-    }
+    if (!scope?.confident || !scope?.key) return { ok: false, adopted: false, verified: false, durable: false, reason: scope?.reason || 'scope_unavailable', records: 0, physicalCopies: 0 };
     const expectedTargetChatId = compact(options?.targetChatId || '', 160);
     const expectedTransferId = compact(options?.transferId || '', 160);
     const expectedSourceScopeKey = compact(options?.sourceScopeKey || '', 196);
     const hasExpectedRecords = Object.prototype.hasOwnProperty.call(options || {}, 'expectedRecords');
     const expectedRecordsRaw = Number(options?.expectedRecords);
-    const expectedRecords = hasExpectedRecords && Number.isInteger(expectedRecordsRaw) && expectedRecordsRaw >= 0
-      ? expectedRecordsRaw
-      : 0;
-    if (hasExpectedRecords && (!Number.isInteger(expectedRecordsRaw) || expectedRecordsRaw < 0)) {
-      return {
-        ok: false,
-        adopted: false,
-        verified: false,
-        durable: false,
-        reason: 'expected_record_count_invalid',
-        records: 0,
-        expectedRecords: 0
-      };
+    const expectedRecords = hasExpectedRecords && Number.isInteger(expectedRecordsRaw) && expectedRecordsRaw >= 0 ? expectedRecordsRaw : 0;
+    if (hasExpectedRecords && (!Number.isInteger(expectedRecordsRaw) || expectedRecordsRaw < 0)) return { ok: false, adopted: false, verified: false, durable: false, reason: 'expected_record_count_invalid', records: 0, expectedRecords: 0, physicalCopies: 0 };
+    if (scope.bridgeHandoffValid !== true) return { ok: false, adopted: false, verified: false, durable: false, reason: scope.bridgeHandoffValidationReason || 'bridge_marker_invalid', records: 0, scopeKey: scope.key, physicalCopies: 0 };
+    if (expectedTargetChatId && scope.chatId !== expectedTargetChatId) return { ok: false, adopted: false, verified: false, durable: false, reason: 'expected_target_mismatch', records: 0, scopeKey: scope.key, physicalCopies: 0 };
+    if (expectedTransferId && scope.bridgeHandoffTransferId !== expectedTransferId) return { ok: false, adopted: false, verified: false, durable: false, reason: 'expected_transfer_mismatch', records: 0, scopeKey: scope.key, physicalCopies: 0 };
+    let ledger = await loadStorageLedger(scope, { hydrateArchive: false });
+    if (ledger.enabled !== true) return { ok: false, adopted: false, verified: false, durable: false, reason: ledger.reason || 'storage_unavailable', records: 0, scopeKey: scope.key, physicalCopies: 0 };
+    const archiveRef = normalizeHayakuArchiveRef(ledger.archiveRef);
+    if (archiveRef && ledger.archiveVerified === false) return { ok: false, adopted: false, verified: false, durable: false, reason: ledger.archiveReason || 'session_archive_meta_invalid', records: 0, scopeKey: scope.key, physicalCopies: 0 };
+    const logicalRecords = logicalHayakuRecordCount(ledger);
+    const expected = hasExpectedRecords ? expectedRecords : logicalRecords;
+    if (logicalRecords !== expected) return { ok: false, adopted: false, verified: false, durable: false, reason: 'expected_record_count_mismatch', records: logicalRecords, expectedRecords: expected, scopeKey: scope.key, physicalCopies: 0 };
+    if (expected === 0) {
+      const commit = ledger.bridgeSessionAdoption === true ? await writeStorageLedgerDirect(scope, ledger, 'bridge_session_handoff') : { durable: true, saved: false, ledger };
+      return { ok: commit.durable === true, adopted: ledger.bridgeSessionAdoption === true && commit.durable === true, verified: commit.durable === true, durable: commit.durable === true, reason: 'session_handoff_empty', records: 0, expectedRecords: 0, scopeKey: scope.key, targetChatId: scope.chatId, transferId: scope.bridgeHandoffTransferId, physicalCopies: 0 };
     }
-    if (scope.bridgeHandoffValid !== true) {
-      return {
-        ok: false,
-        adopted: false,
-        verified: false,
-        durable: false,
-        reason: scope.bridgeHandoffValidationReason || 'bridge_marker_invalid',
-        records: 0,
-        scopeKey: scope.key
-      };
+    if (!archiveRef) return { ok: false, adopted: false, verified: false, durable: false, reason: 'session_archive_ref_missing', records: logicalRecords, expectedRecords: expected, scopeKey: scope.key, physicalCopies: 0 };
+    if (expectedSourceScopeKey && compact(scope.bridgeHandoffSourceScopeKey || '', 196) && expectedSourceScopeKey !== compact(scope.bridgeHandoffSourceScopeKey || '', 196)) {
+      return { ok: false, adopted: false, verified: false, durable: false, reason: 'source_scope_mismatch', records: logicalRecords, expectedRecords: expected, scopeKey: scope.key, physicalCopies: 0 };
     }
-    if (expectedTargetChatId && scope.chatId !== expectedTargetChatId) {
-      return {
-        ok: false,
-        adopted: false,
-        verified: false,
-        durable: false,
-        reason: 'expected_target_mismatch',
-        records: 0,
-        scopeKey: scope.key
-      };
-    }
-    if (expectedTransferId && scope.bridgeHandoffTransferId !== expectedTransferId) {
-      return {
-        ok: false,
-        adopted: false,
-        verified: false,
-        durable: false,
-        reason: 'expected_transfer_mismatch',
-        records: 0,
-        scopeKey: scope.key
-      };
-    }
-
-    const ledger = await loadStorageLedger(scope);
-    if (ledger.enabled !== true) {
-      return {
-        ok: false,
-        adopted: false,
-        verified: false,
-        durable: false,
-        reason: ledger.reason || 'storage_unavailable',
-        records: 0,
-        scopeKey: scope.key
-      };
-    }
-    const inherited = ensureArray(ledger.records).filter(record => (
-      record?.captureSource === 'session_handoff'
-      && isPermanentHistoricalStorageRecord(record)
-    ));
-    const sourceMatches = !expectedSourceScopeKey
-      || (inherited.length === 0
-        ? (!hasExpectedRecords || expectedRecords === 0)
-        : inherited.every(record => (
-          compact(record?.inheritedViaScopeKey || '', 196) === expectedSourceScopeKey
-        )));
-    const recordCountMatches = !hasExpectedRecords || inherited.length === expectedRecords;
-    const emptyHandoff = inherited.length === 0 && (!hasExpectedRecords || expectedRecords === 0);
-    if (!recordCountMatches) {
-      return {
-        ok: false,
-        adopted: false,
-        verified: false,
-        durable: false,
-        reason: 'expected_record_count_mismatch',
-        records: inherited.length,
-        expectedRecords,
-        scopeKey: scope.key,
-        transferId: scope.bridgeHandoffTransferId
-      };
-    }
-    if (!inherited.length && !emptyHandoff) {
-      return {
-        ok: false,
-        adopted: false,
-        verified: false,
-        durable: false,
-        reason: ledger.reason === 'source_empty' ? 'source_empty' : 'session_handoff_not_found',
-        records: 0,
-        expectedRecords,
-        scopeKey: scope.key,
-        transferId: scope.bridgeHandoffTransferId
-      };
-    }
-    if (!sourceMatches) {
-      return {
-        ok: false,
-        adopted: false,
-        verified: false,
-        durable: false,
-        reason: 'source_scope_mismatch',
-        records: inherited.length,
-        expectedRecords,
-        scopeKey: scope.key,
-        transferId: scope.bridgeHandoffTransferId
-      };
-    }
-
     const newlyAdopted = ledger.bridgeSessionAdoption === true;
-    const commit = newlyAdopted
-      ? await writeStorageLedgerDirect(scope, ledger, 'bridge_session_handoff')
-      : { durable: true, saved: false, reason: emptyHandoff ? 'session_handoff_empty' : 'session_handoff_already_adopted' };
-    const durableInherited = ensureArray(commit?.ledger?.records || ledger.records).filter(record => (
-      record?.captureSource === 'session_handoff'
-      && isPermanentHistoricalStorageRecord(record)
-    ));
-    const durableCountMatches = !hasExpectedRecords || durableInherited.length === expectedRecords;
-    const durableSourceMatches = !expectedSourceScopeKey
-      || (durableInherited.length === 0
-        ? (!hasExpectedRecords || expectedRecords === 0)
-        : durableInherited.every(record => (
-          compact(record?.inheritedViaScopeKey || '', 196) === expectedSourceScopeKey
-        )));
-    const verified = commit.durable === true
-      && durableCountMatches
-      && durableSourceMatches
-      && (emptyHandoff || durableInherited.length > 0);
+    const commit = newlyAdopted ? await writeStorageLedgerDirect(scope, ledger, 'bridge_session_handoff') : { durable: true, saved: false, ledger };
+    const durableLocal = normalizeStorageLedger(await RisuCompat.getStorageItem(storageLedgerStorageKey(scope), null), scope);
+    const durableRef = normalizeHayakuArchiveRef(durableLocal.archiveRef);
+    const archive = await readHayakuSharedArchiveSummary(durableRef);
+    const verified = commit.durable === true && archive.verified === true && archive.records === expected;
     return {
       ok: verified,
       adopted: newlyAdopted && verified,
       verified,
-      durable: commit.durable === true,
-      reason: verified
-        ? (emptyHandoff
-          ? 'session_handoff_empty'
-          : newlyAdopted
-            ? 'session_handoff_adopted'
-            : 'session_handoff_already_adopted')
-        : (!durableCountMatches
-          ? 'durable_expected_record_count_mismatch'
-          : !durableSourceMatches
-            ? 'durable_source_scope_mismatch'
-            : commit.reason || 'session_handoff_write_failed'),
-      records: durableInherited.length,
-      expectedRecords,
+      durable: verified,
+      reason: verified ? (newlyAdopted ? 'session_archive_link_adopted' : 'session_archive_link_already_adopted') : 'session_archive_link_verification_failed',
+      records: archive.records,
+      expectedRecords: expected,
       scopeKey: scope.key,
-      sourceScopeKey: expectedSourceScopeKey || compact(durableInherited[0]?.inheritedViaScopeKey || '', 196),
+      sourceScopeKey: expectedSourceScopeKey || compact(scope.bridgeHandoffSourceScopeKey || '', 196),
       targetChatId: scope.chatId,
-      transferId: scope.bridgeHandoffTransferId
+      transferId: scope.bridgeHandoffTransferId,
+      archiveId: durableRef?.archiveId || '',
+      archiveGeneration: durableRef?.generation || 0,
+      archiveDigest: durableRef?.digest || '',
+      archiveRecordCount: durableRef?.recordCount || 0,
+      physicalCopies: 0
     };
   });
+
   const resolveStorageSlotId = (ledger, target) => {
     const direct = compact(typeof target === 'string' ? target : target?.slotId || '', 240);
     if (direct && (
@@ -21865,7 +22244,11 @@ const MODE_PROFILES = Object.freeze({
               result = { available: false, reason: scope?.reason || 'scope_unavailable' };
             } else {
               const bridgeSync = await syncBridgeAnalysisCapsules();
-              const ledger = await loadStorageLedger(scope);
+              const includeRecords = request.payload?.includeRecords !== false;
+              const ledger = await loadStorageLedger(scope, { hydrateArchive: includeRecords });
+              const logicalRecordCount = includeRecords
+                ? storageRecordsEligibleForHandoff(ledger, { includeSelectedUnbound: false }).length
+                : Math.max(0, Number(ledger.logicalRecordCount || 0) || 0);
               result = {
                 available: ledger.enabled === true,
                 version: ledger.version,
@@ -21878,16 +22261,23 @@ const MODE_PROFILES = Object.freeze({
                 coldStart: ledger.coldStart,
                 incrementalRecovery: ledger.incrementalRecovery,
                 worldline: ledger.worldline,
-                records: ensureArray(ledger.records),
-                slotHeads: ensureArray(ledger.slotHeads),
-                tombstones: ensureArray(ledger.tombstones),
+                records: includeRecords ? ensureArray(ledger.records) : [],
+                recordCount: logicalRecordCount,
+                recordsIncluded: includeRecords,
+                archiveRef: normalizeHayakuArchiveRef(ledger.archiveRef),
+                archiveVerified: ledger.archiveVerified !== false,
+                slotHeads: includeRecords ? ensureArray(ledger.slotHeads) : [],
+                tombstones: includeRecords ? ensureArray(ledger.tombstones) : [],
                 packetAuthoring: buildHayakuPacketAuthoringProfile(Memory.settings),
                 storageLimits: storageLimitsSnapshot(),
                 ipcCapabilities: {
                   inspect: true,
                   adoptSessionHandoff: true,
                   forget: true,
-                  mutationOwner: HAYAKU_PLUGIN_ID
+                  mutationOwner: HAYAKU_PLUGIN_ID,
+                  archiveHandoffV1: true,
+                  summaryInspect: true,
+                  physicalRecordCopyOnHandoff: false
                 },
                 bridgeSync
               };
@@ -25399,7 +25789,9 @@ const MODE_PROFILES = Object.freeze({
       maxRecordsIsHardLimit: false,
       maxTotalPacketCharsIsHardLimit: false,
       protectedRecordsExemptFromRetentionTargets: true,
-      permanentHistoricalSlots: true
+      permanentHistoricalSlots: true,
+      sharedArchiveRef: true,
+      archiveKeyPrefix: HAYAKU_ARCHIVE_KEY_PREFIX
     }
   });
   const exposeApi = () => {
@@ -25479,11 +25871,15 @@ const MODE_PROFILES = Object.freeze({
             packetHashes: activeRecords.map(record => record.hash)
           }, {});
         },
-        inspect: async () => {
+        inspect: async (options = {}) => {
           const bridgeSync = await syncBridgeAnalysisCapsules();
           const scope = await RisuCompat.currentChatScope();
           if (!scope?.confident) return { available: false, reason: scope?.reason || 'scope_unavailable' };
-          const ledger = await loadStorageLedger(scope);
+          const includeRecords = options?.includeRecords !== false;
+          const ledger = await loadStorageLedger(scope, { hydrateArchive: includeRecords });
+          const logicalRecordCount = includeRecords
+            ? storageRecordsEligibleForHandoff(ledger, { includeSelectedUnbound: false }).length
+            : Math.max(0, Number(ledger.logicalRecordCount || 0) || 0);
           return clone({
             available: ledger.enabled === true,
             version: ledger.version,
@@ -25496,9 +25892,13 @@ const MODE_PROFILES = Object.freeze({
             coldStart: ledger.coldStart,
             incrementalRecovery: ledger.incrementalRecovery,
             worldline: ledger.worldline,
-            records: ensureArray(ledger.records),
-            slotHeads: ensureArray(ledger.slotHeads),
-            tombstones: ensureArray(ledger.tombstones),
+            records: includeRecords ? ensureArray(ledger.records) : [],
+            recordCount: logicalRecordCount,
+            recordsIncluded: includeRecords,
+            archiveRef: normalizeHayakuArchiveRef(ledger.archiveRef),
+            archiveVerified: ledger.archiveVerified !== false,
+            slotHeads: includeRecords ? ensureArray(ledger.slotHeads) : [],
+            tombstones: includeRecords ? ensureArray(ledger.tombstones) : [],
             packetAuthoring: buildHayakuPacketAuthoringProfile(Memory.settings),
             storageLimits: storageLimitsSnapshot(),
             bridgeSync
@@ -25553,6 +25953,12 @@ const MODE_PROFILES = Object.freeze({
           entries: Memory.projectionCache?.size || 0,
           stats: clone(Memory.projectionCacheStats, {})
         },
+        archiveCompression: {
+          schema: HAYAKU_ARCHIVE_GZIP_SCHEMA,
+          supported: hayakuGzipSupported(),
+          cacheEntries: HayakuArchiveBodyCache.size,
+          ...clone(HayakuArchiveCompressionStats, {})
+        },
         operationLog: operationLogSnapshot(),
         lastSparseSearch: clone(Memory.lastSparseSearch || null, null),
         lastWarnings: Memory.lastWarnings,
@@ -25572,7 +25978,18 @@ const MODE_PROFILES = Object.freeze({
         authoritativeLedgerFromSnapshot,
         normalizeStorageRecord,
         normalizeStorageLedger,
+        normalizeHayakuArchiveRef,
+        readHayakuSharedArchive,
+        readHayakuSharedArchiveSummary,
+        ensureHayakuSharedArchive,
+        hydrateHayakuLedgerArchive,
+        encodeHayakuArchiveForStorage,
+        decodeHayakuArchiveStorage,
+        hayakuStoredArchiveRawHash,
+        hayakuGzipSupported,
+        hayakuArchiveRecordIdentity,
         storageRecordsEligibleForHandoff,
+        logicalHayakuRecordCount,
         projectionCachePlanFor,
         getProjectionCacheEntry,
         setProjectionCacheEntry,
