@@ -1,9 +1,12 @@
 //@name hayaku_locator_continuity
-//@display-name HAYAKU · Locator Continuity v2.3.57
+//@display-name HAYAKU · Locator Continuity v2.3.60
 //@author rusinus12@gmail.com
 //@api 3.0
-//@version 2.3.57
+//@version 2.3.60
 
+/* v2.3.60 restores only complete, semantically valid bare packet markers through the existing afterRequest/editoutput response path while keeping bare-wrapper restoration disabled for streaming output and leaving render-only scrubbing unchanged. */
+/* v2.3.59 completes safely reconciled finalized bindings during the next beforeRequest and preserves runtime ledger availability after durable reconcile writes. */
+/* v2.3.58 enables the render-only packet scrubber by default, verifies damaged and incomplete packet concealment, and includes output-observation evidence while finalized binding is still waiting. */
 /* v2.3.57 performs one authoritative final-chat reconcile before binding timeout, separates capture durability from binding status, and carries exact-hash rejection for mismatched request nonces through later requests and verified native chat copies. */
 /* v2.3.56 gzip-compresses immutable cold archive layers with browser CompressionStream while keeping compact metadata sidecars uncompressed; archive bodies are decompressed lazily and cached. */
 //@allowed-ipc flashback_hayaku_bridge
@@ -111,7 +114,7 @@
   };
 
   const PLUGIN_NAME = 'HAYAKU';
-  const PLUGIN_VERSION = '2.3.57';
+  const PLUGIN_VERSION = '2.3.60';
   const HAYAKU_PACKET_AUTHORING_PROFILE_SCHEMA = 'hayaku-packet-authoring-profile-v1';
   const HAYAKU_PACKET_AUTHORING_ALIAS_LANGUAGES = Object.freeze(['ko', 'en', 'ja', 'zh']);
   const HAYAKU_CANONICAL_ANCHOR_PREFIXES = Object.freeze([
@@ -375,7 +378,7 @@
     packetRecovery: true,
     packetCoverageAudit: true,
     packetCoverageFallbackRecall: true,
-    displayScrubber: false
+    displayScrubber: true
   });
   // Performance guard profiles. HAYAKU rebuilds a request-local index from visible
   // chat packets plus a bounded compact ledger; without an ingest cap, long chats can
@@ -1678,6 +1681,7 @@ const MODE_PROFILES = Object.freeze({
       runCount: 0,
       lastError: '',
       handler: null,
+      modeHandlers: {},
       registeredModes: []
     },
     promptCache: {
@@ -2613,25 +2617,29 @@ const MODE_PROFILES = Object.freeze({
         Memory.outputHandler.registerError = 'addRisuScriptHandler_unavailable';
         return false;
       }
-      const wrapped = async content => {
+      const wrapped = async (content, mode = 'output') => {
         if (Memory.unloaded || !ownsRuntime()) return content;
         Memory.outputHandler.runCount += 1;
         Memory.outputHandler.lastRunAt = now();
         try {
-          return await handler(content);
+          return await handler(content, mode);
         } catch (error) {
           Memory.outputHandler.lastError = text(error?.message || error || 'output_handler_failed');
           return content;
         }
       };
       const registeredModes = [];
+      const modeHandlers = {};
       for (const mode of ['output', 'editoutput']) {
         try {
-          await current.addRisuScriptHandler(mode, wrapped);
+          const modeHandler = content => wrapped(content, mode);
+          await current.addRisuScriptHandler(mode, modeHandler);
+          modeHandlers[mode] = modeHandler;
           registeredModes.push(mode);
         } catch (_) {}
       }
       Memory.outputHandler.handler = registeredModes.length ? wrapped : null;
+      Memory.outputHandler.modeHandlers = modeHandlers;
       Memory.outputHandler.registeredModes = registeredModes;
       Memory.outputHandler.registered = registeredModes.length > 0;
       Memory.outputHandler.registerError = registeredModes.length ? '' : 'output_and_editoutput_registration_failed';
@@ -2642,12 +2650,14 @@ const MODE_PROFILES = Object.freeze({
         const current = host('removeRisuScriptHandler');
         if (Memory.outputHandler.handler && typeof current?.removeRisuScriptHandler === 'function') {
           for (const mode of ensureArray(Memory.outputHandler.registeredModes)) {
-            try { await current.removeRisuScriptHandler(mode, Memory.outputHandler.handler); } catch (_) {}
+            const modeHandler = Memory.outputHandler.modeHandlers?.[mode] || Memory.outputHandler.handler;
+            try { await current.removeRisuScriptHandler(mode, modeHandler); } catch (_) {}
           }
         }
       } catch (_) {}
       Memory.outputHandler.registered = false;
       Memory.outputHandler.handler = null;
+      Memory.outputHandler.modeHandlers = {};
       Memory.outputHandler.registeredModes = [];
     };
     const onUnload = async handler => {
@@ -18173,6 +18183,7 @@ const MODE_PROFILES = Object.freeze({
     let storageLedger = null;
     let storageMigration = { imported: 0, fullMigration: false, changed: false };
     let storageCommit = { saved: false, durable: false, reason: 'not_checked' };
+    let finalizedBindingCompletions = [];
     let dualLedgerMerge = {
       policy: 'live_chat_primary_plugin_storage_fallback',
       liveChatRecords: 0,
@@ -18472,26 +18483,51 @@ const MODE_PROFILES = Object.freeze({
             packets: livePackets
           };
           Memory.authoritativeLedgerCache = nextCache;
+          const finalizedBindingCompletionCandidates = finalizedBindingMonitorCompletionCandidates(
+            chatScope,
+            authoritativeSnapshot,
+            storageLedger
+          );
           if (storageLedger.copiedChatAdoption === true || storageLedger.copiedChatRepair === true
             || bridgeColdStartImport.changed || bridgeIncrementalRecoveryImport.changed
             || storageMigration.changed || binding.changed || slotHeadReconcile.changed || worldlineChanged) {
+            const reconcileReason = bridgeColdStartImport.changed
+              ? 'bridge_cold_start'
+              : bridgeIncrementalRecoveryImport.changed
+                ? 'bridge_incremental_recovery'
+              : storageLedger.copiedChatRepair === true
+                ? 'copied_chat_history_reclassified_live'
+                : storageLedger.copiedChatAdoption === true
+                ? storageLedger.adoptionReason || 'copied_chat_adoption'
+                : storageMigration.fullMigration ? 'legacy_migration' : 'topology_reconcile';
             storageCommit = await stageAsync('persistStorageLedgerReconcile', () => writeStorageLedger(
               chatScope,
               storageLedger,
-              bridgeColdStartImport.changed
-                ? 'bridge_cold_start'
-                : bridgeIncrementalRecoveryImport.changed
-                  ? 'bridge_incremental_recovery'
-                : storageLedger.copiedChatRepair === true
-                  ? 'copied_chat_history_reclassified_live'
-                  : storageLedger.copiedChatAdoption === true
-                  ? storageLedger.adoptionReason || 'copied_chat_adoption'
-                  : storageMigration.fullMigration ? 'legacy_migration' : 'topology_reconcile'
+              reconcileReason === 'topology_reconcile' && finalizedBindingCompletionCandidates.length
+                ? 'before_request_finalized_binding'
+                : reconcileReason
             ));
-            if (storageCommit.ledger) storageLedger = storageCommit.ledger;
+            if (storageCommit.ledger) {
+              // The serialized ledger intentionally excludes runtime-only load
+              // state. Preserve it when adopting the committed normalized body,
+              // otherwise diagnostics and the request projection cache falsely
+              // report plugin storage as unavailable for this reconcile pass.
+              storageLedger = {
+                ...storageLedger,
+                ...storageCommit.ledger,
+                enabled: storageLedger.enabled === true
+              };
+            }
           } else {
             storageCommit = { saved: false, durable: storageLedger.enabled === true, reason: 'unchanged' };
           }
+          finalizedBindingCompletions = finalizeBindingMonitorsReconciledDuringBeforeRequest({
+            scope: chatScope,
+            snapshot: authoritativeSnapshot,
+            ledger: storageLedger,
+            commit: storageCommit
+          });
+          authoritativeLedger.current = storageLedger;
         } else {
           // Some RisuAI surfaces do not expose an authoritative chat API. In that
           // environment the request transcript is still the only available live
@@ -19142,7 +19178,8 @@ const MODE_PROFILES = Object.freeze({
           merge: clone(dualLedgerMerge, {}),
           worldlineNodes: ensureArray(authoritativeLedger.worldline?.nodes).length,
           migration: clone(storageMigration, {}),
-          reconcileCommit: clone(storageCommit, {})
+          reconcileCommit: clone(storageCommit, {}),
+          finalizedBindingCompletions: clone(finalizedBindingCompletions, [])
         },
         storagePolicy: {
           ledger: 'live_chat_primary_plugin_storage_fallback',
@@ -21368,7 +21405,7 @@ ${sourceChatId}`)}`;
     };
   };
   const completeValidHayakuPacketsFromText = value => packetCaptureInspectionFromText(value).packets;
-  const repairCapturePacketText = value => {
+  const repairCapturePacketText = (value, options = {}) => {
     const source = text(value);
     const repairs = [];
     const repairRaw = (raw, markerType = '') => {
@@ -21388,11 +21425,41 @@ ${sourceChatId}`)}`;
         sourceHash: stableHash64(sourceRaw),
         canonicalHash: stableHash64(normalizedRaw),
         markerType,
+        repairKind: 'packet_payload_normalized',
         syntaxRepairs: ensureArray(syntaxRepair?.repairs),
         errors: ensureArray(originalValidation.errors),
         warnings: ensureArray(originalValidation.warnings)
       });
       return normalizedRaw;
+    };
+    const validatedBarePacket = raw => {
+      const sourceRaw = text(raw).trim();
+      if (!sourceRaw || sourceRaw.length > STORAGE_LEDGER_MAX_PACKET_CHARS) return null;
+      if (/<!--|-->/.test(sourceRaw)) return null;
+      if (/<!--|-->/.test(sourceRaw)) return null;
+      let parsed = safeJsonParse(sourceRaw, null);
+      const syntaxRepair = objectish(parsed) ? null : conservativeJsonSyntaxRepair(sourceRaw);
+      let canonicalRaw = sourceRaw;
+      if (!objectish(parsed) && syntaxRepair?.ok === true) {
+        parsed = syntaxRepair.parsed;
+        canonicalRaw = syntaxRepair.raw;
+      }
+      if (!objectish(parsed)) return null;
+      const validation = validateHayakuPacket(parsed);
+      // A missing transport wrapper must never authorize schema invention.
+      // Only an already valid packet, optionally recovered by syntax-only JSON
+      // escaping, is eligible for canonical HTML-comment restoration.
+      if (validation.ok !== true) return null;
+      const packetType = compact(parsed?.meta?.packet_type || parsed?.meta?.packetType || 'current_snapshot', 48);
+      const semantic = assessPacketCaptureSemantics(parsed, packetType, source);
+      if (semantic.ok !== true) return null;
+      return {
+        raw: canonicalRaw,
+        sourceHash: stableHash64(sourceRaw),
+        canonicalHash: stableHash64(canonicalRaw),
+        syntaxRepairs: ensureArray(syntaxRepair?.repairs),
+        packetType
+      };
     };
     let repaired = source.replace(
       new RegExp(`(<!--\\s*${PACKET_START}\\s*)([\\s\\S]*?)(\\s*${PACKET_END}\\s*-->)`, 'gi'),
@@ -21408,6 +21475,39 @@ ${sourceChatId}`)}`;
         return normalizedRaw ? `${prefix}${normalizedRaw}${suffix}` : match;
       }
     );
+    if (options.restoreHtmlCommentWrapper === true) {
+      repaired = repaired.replace(
+        new RegExp(`${PACKET_START}\\s*([\\s\\S]*?)\\s*${PACKET_END}`, 'gi'),
+        (match, raw, offset, whole) => {
+          const before = whole.slice(0, offset);
+          const afterOffset = offset + match.length;
+          const beforeTail = before.slice(-64);
+          const afterHead = whole.slice(afterOffset, afterOffset + 64);
+          const hasHtmlOpen = /<!--\s*$/i.test(beforeTail);
+          const hasHtmlClose = /^\s*-->/.test(afterHead);
+          if (hasHtmlOpen && hasHtmlClose) return match;
+          const insideOtherHtmlComment = before.lastIndexOf('<!--') > before.lastIndexOf('-->');
+          const visibleMarker = /<<<\s*$/i.test(beforeTail) || /^\s*>>>/i.test(afterHead);
+          const damagedWrapper = /<\s*!\s*,?\s*$/i.test(beforeTail) || /^\s*,?\s*>/i.test(afterHead);
+          if ((insideOtherHtmlComment && !hasHtmlOpen) || visibleMarker || damagedWrapper) return match;
+          const packet = validatedBarePacket(raw);
+          if (!packet) return match;
+          repairs.push({
+            sourceHash: packet.sourceHash,
+            canonicalHash: packet.canonicalHash,
+            markerType: 'bare_marker',
+            repairKind: 'html_comment_wrapper_restored',
+            packetType: packet.packetType,
+            wrapperOpenRestored: !hasHtmlOpen,
+            wrapperCloseRestored: !hasHtmlClose,
+            syntaxRepairs: packet.syntaxRepairs,
+            errors: [],
+            warnings: []
+          });
+          return `${hasHtmlOpen ? '' : '<!-- '}${PACKET_START} ${packet.raw} ${PACKET_END}${hasHtmlClose ? '' : ' -->'}`;
+        }
+      );
+    }
     return {
       text: repaired,
       changed: repairs.length > 0 && repaired !== source,
@@ -22982,7 +23082,11 @@ ${sourceChatId}`)}`;
     }
   };
   const captureHayakuOutput = async (content = '', captureSource = 'afterRequest', requestType = '') => {
-    const repair = repairCapturePacketText(content);
+    const repair = repairCapturePacketText(content, {
+      restoreHtmlCommentWrapper: /^(?:afterRequest|editoutput)$/i.test(captureSource)
+    });
+    const wrapperRestoredCount = ensureArray(repair.repairs)
+      .filter(entry => entry?.repairKind === 'html_comment_wrapper_restored').length;
     const captureContent = repair.text;
     if (repair.changed) {
       pushOperationLog('capture:hidden_packet_normalized', {
@@ -23055,7 +23159,8 @@ ${sourceChatId}`)}`;
       transportPacketRemoved: PACKET_REMOVAL_ENABLED,
       removedChars: Math.max(0, text(captureContent).length - text(returnedContent).length),
       capturePacketNormalized: repair.changed === true,
-      capturePacketNormalizedCount: repair.repairedCount
+      capturePacketNormalizedCount: repair.repairedCount,
+      capturePacketWrapperRestoredCount: wrapperRestoredCount
     };
     pushOperationLog('capture:mirror_complete', Memory.lastStorageCapture, 'success');
     // Keep lower-priority output-hook captures pending until afterRequest has had
@@ -23590,7 +23695,12 @@ ${sourceChatId}`)}`;
     captureDurable: state?.capture?.durable === true,
     captureSaved: state?.capture?.saved === true,
     captureReason: compact(state?.capture?.reason || '', 120),
-    capturePacketGroupComplete: state?.capture?.packetGroupComplete === true
+    capturePacketGroupComplete: state?.capture?.packetGroupComplete === true,
+    outputObserved: Number(state?.outputObservedAt || 0) > 0,
+    outputObservedAt: Math.max(0, Number(state?.outputObservedAt || 0) || 0),
+    outputVisibleHash: compact(state?.outputVisibleHash || '', 96),
+    outputPacketHashes: ensureArray(state?.outputPacketHashes),
+    outputRequestNonces: ensureArray(state?.outputRequestNonces)
   });
   const finalizedBindingAttemptDiagnostics = attempt => ({
     finalReconcileAttempted: attempt?.attempted === true,
@@ -23642,6 +23752,151 @@ ${sourceChatId}`)}`;
     return expectedCapturePacketTypes(pending).every(packetType => packets.some(packet => (
       packet.packetType === packetType && packet.requestNonce === expectedNonce
     )));
+  };
+  const finalizedBindingBoundGroupFromLedger = (pending, snapshot, ledger) => {
+    const expectedRequestNonce = compact(pending?.lineage?.requestNonce || '', 96);
+    const expectedPacketTypes = expectedCapturePacketTypes(pending);
+    const targetPairIndex = Math.max(1, Number(pending?.lineage?.targetPairIndex || 1) || 1);
+    const currentPair = ensureArray(snapshot?.conversationPairs).find(pair => (
+      Number(pair?.pairIndex || 0) === targetPairIndex
+    )) || null;
+    if (!expectedRequestNonce || !expectedPacketTypes.length || !currentPair) {
+      return {
+        bound: false,
+        reason: 'finalized_binding_group_context_unavailable',
+        expectedRequestNonce,
+        expectedPacketTypes,
+        boundPacketTypes: [],
+        ownerTurnNodeIds: []
+      };
+    }
+    const identityMatch = pendingPairIdentityMatch(pending, currentPair, snapshot);
+    if (identityMatch.matched !== true) {
+      return {
+        bound: false,
+        reason: identityMatch.reason || 'finalized_binding_pair_identity_mismatch',
+        identityMatchMode: identityMatch.mode || '',
+        expectedRequestNonce,
+        expectedPacketTypes,
+        boundPacketTypes: [],
+        ownerTurnNodeIds: []
+      };
+    }
+    // A different immutable nonce in the authoritative final pair needs the
+    // dedicated rejection flow. Never let a coincidentally active sidecar turn
+    // that situation into an optimistic beforeRequest completion.
+    const foreignPackets = finalizedBindingForeignPackets(pending, { pair: currentPair });
+    if (foreignPackets.length) {
+      return {
+        bound: false,
+        reason: 'finalized_packet_request_nonce_mismatch',
+        identityMatchMode: identityMatch.mode || '',
+        expectedRequestNonce,
+        expectedPacketTypes,
+        boundPacketTypes: [],
+        ownerTurnNodeIds: [],
+        rejectedPacketHashes: foreignPackets.map(packet => packet.hash)
+      };
+    }
+    const pairForPacketType = packetType => (
+      packetType === 'recovery_snapshot'
+        ? ensureArray(snapshot?.conversationPairs).find(pair => (
+            Number(pair?.pairIndex || 0) === Number(pending?.recoveryTarget?.pairIndex || 0)
+            && (!pending?.recoveryTarget?.userHash || pair?.userHash === pending.recoveryTarget.userHash)
+          )) || null
+        : currentPair
+    );
+    const boundRecords = ensureArray(ledger?.records).filter(record => (
+      record?.requestNonce === expectedRequestNonce
+      && expectedPacketTypes.includes(record?.packetType)
+      && record?.recordState === 'active'
+      && Boolean(record?.ownerTurnNodeId)
+      && (() => {
+        const pair = pairForPacketType(record.packetType);
+        if (!pair || Number(record.targetPairIndex || 0) !== Number(pair.pairIndex || 0)) return false;
+        const hasMessageIdentity = Boolean(record.assistantMessageIdHash);
+        const hasVisibleIdentity = Boolean(record.assistantVisibleHash);
+        if (!hasMessageIdentity && !hasVisibleIdentity) return false;
+        if (hasMessageIdentity
+          && (!pair.assistantMessageIdHash
+            || record.assistantMessageIdHash !== pair.assistantMessageIdHash)) return false;
+        if (hasVisibleIdentity
+          && (!pair.assistantVisibleHash
+            || record.assistantVisibleHash !== pair.assistantVisibleHash)) return false;
+        return true;
+      })()
+    ));
+    const boundPacketTypes = uniq(boundRecords.map(record => record.packetType).filter(Boolean), 4);
+    const boundTypeSet = new Set(boundPacketTypes);
+    const bound = expectedPacketTypes.every(packetType => boundTypeSet.has(packetType));
+    return {
+      bound,
+      reason: bound ? 'finalized_packet_group_bound' : 'finalized_packet_group_not_bound',
+      identityMatchMode: identityMatch.mode || '',
+      expectedRequestNonce,
+      expectedPacketTypes,
+      boundPacketTypes,
+      ownerTurnNodeIds: uniq(boundRecords.map(record => record.ownerTurnNodeId).filter(Boolean), 4),
+      targetPairIndex
+    };
+  };
+  const finalizedBindingMonitorCompletionCandidates = (scope, snapshot, ledger) => {
+    if (!scope?.key || !snapshot || !ledger) return [];
+    return [...Memory.finalizedBindingMonitors.entries()]
+      .filter(([key, state]) => (
+        state?.pending?.scope?.key === scope.key
+        && !Memory.finalizedBindingInFlight.has(key)
+      ))
+      .map(([key, state]) => ({
+        key,
+        state,
+        proof: finalizedBindingBoundGroupFromLedger(state.pending, snapshot, ledger)
+      }))
+      .filter(candidate => candidate.proof.bound === true)
+      .sort((a, b) => Number(a.state?.pending?.requestSequence || 0) - Number(b.state?.pending?.requestSequence || 0));
+  };
+  const finalizeBindingMonitorsReconciledDuringBeforeRequest = ({ scope, snapshot, ledger, commit } = {}) => {
+    if (commit?.durable !== true) return [];
+    const completed = [];
+    for (const candidate of finalizedBindingMonitorCompletionCandidates(scope, snapshot, ledger)) {
+      const { key, state, proof } = candidate;
+      if (Memory.finalizedBindingMonitors.get(key) !== state || Memory.finalizedBindingInFlight.has(key)) continue;
+      const completedAt = now();
+      const detail = {
+        at: completedAt,
+        scopeKey: state.pending.scope.key,
+        requestSequence: Math.max(0, Number(state.pending.requestSequence || 0) || 0),
+        requestNonce: proof.expectedRequestNonce,
+        targetPairIndex: proof.targetPairIndex,
+        durable: true,
+        saved: commit.saved === true,
+        bound: true,
+        reason: 'before_request_authoritative_reconcile',
+        completionPath: 'before_request_authoritative_reconcile',
+        reconciledDuringBeforeRequest: true,
+        bindingDurable: true,
+        bindingSaved: commit.saved === true,
+        bindingBound: true,
+        expectedPacketTypes: proof.expectedPacketTypes,
+        boundPacketTypes: proof.boundPacketTypes,
+        ownerTurnNodeIds: proof.ownerTurnNodeIds,
+        identityMatchMode: proof.identityMatchMode,
+        waitingForFinalizedChat: false,
+        waitingFinalizedChatCount: Math.max(0, Number(state.waitingFinalizedChatCount || 0) || 0),
+        hardFailureAttempts: Math.max(0, Number(state.attempts || 0) || 0),
+        elapsedMs: Math.max(0, completedAt - Number(state.startedAt || completedAt)),
+        maxAgeMs: FINALIZED_BINDING_MAX_AGE_MS,
+        storageCommitReason: compact(commit.reason || '', 120),
+        ...finalizedBindingCaptureDiagnostics(state)
+      };
+      Memory.lastStorageBinding = detail;
+      pushOperationLog('binding:completed', detail, 'success');
+      stopFinalizedCaptureMonitor(state.pending);
+      removePendingCapture(state.pending);
+      stopFinalizedBindingMonitor(key);
+      completed.push(detail);
+    }
+    return completed;
   };
   const persistFinalizedBindingForeignPacketRejection = async (pending, candidate, foreignPackets) => (
     enqueueStorageOperation(async () => {
@@ -25276,7 +25531,7 @@ ${sourceChatId}`)}`;
         const recoveryTargetBound = packetType === 'recovery_snapshot'
           && record?.recordState === 'active'
           && Boolean(record?.ownerTurnNodeId)
-          && /^(?:afterRequest|output|finalized_live_chat|bridge_incremental_recovery)$/i.test(captureSource);
+          && /^(?:afterRequest|output|editoutput|finalized_live_chat|bridge_incremental_recovery)$/i.test(captureSource);
         const messageIndex = inherited ? 0 : Math.max(0, Number(pair?.assistantMessageIndex || 0) || 0);
         const distanceFromLatest = Math.max(0, messageCount - 1 - messageIndex);
         const inheritedOrdinal = Math.max(1, Number(record.historicalOrdinal || recordIndex + 1) || recordIndex + 1);
@@ -26724,6 +26979,10 @@ ${sourceChatId}`)}`;
         finalizedChatBindingCandidate,
         refreshCapturedRecordIdentitiesForFinalPair,
         bindCapturedPacketGroupToFinalizedChat,
+        finalizedBindingCaptureDiagnostics,
+        finalizedBindingBoundGroupFromLedger,
+        finalizedBindingMonitorCompletionCandidates,
+        finalizeBindingMonitorsReconciledDuringBeforeRequest,
         attemptFinalizedBindingTimeoutReconcile,
         resolveExpiredFinalizedBindingMonitor,
         markFinalizedBindingOutputObserved,
@@ -26941,8 +27200,9 @@ ${sourceChatId}`)}`;
       if (!afterRequestRegistered) {
         console.warn(`[HAYAKU] afterRequest packet capture unavailable: ${Memory.afterRequest.registerError || 'registration_failed'}`);
       }
-      const outputRegistered = await RisuCompat.addOutputHandler(async content => {
-        const captured = await captureHayakuOutput(content, 'output', '');
+      const outputRegistered = await RisuCompat.addOutputHandler(async (content, mode = 'output') => {
+        const captureSource = mode === 'editoutput' ? 'editoutput' : 'output';
+        const captured = await captureHayakuOutput(content, captureSource, '');
         try { await markFinalizedBindingOutputObserved(captured); } catch (_) {}
         return captured;
       });
