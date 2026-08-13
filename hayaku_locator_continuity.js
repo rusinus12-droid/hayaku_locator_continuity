@@ -1,9 +1,10 @@
 //@name hayaku_locator_continuity
-//@display-name HAYAKU · Locator Continuity v2.3.62
+//@display-name HAYAKU · Locator Continuity v2.3.63
 //@author rusinus12@gmail.com
 //@api 3.0
-//@version 2.3.62
+//@version 2.3.63
 
+/* v2.3.63 makes a unique persisted user-message id authoritative over request/live text-hash drift, rejects conflicting ids and nonces before append affinity, and immediately rekeys a post-processed finalized packet when the same stable U, target pair, and validated request nonce agree. */
 /* v2.3.62 gives the response model a typed continuity-evidence contract, resolves latest valid state and chronological transitions, and keeps unresolved constraints, knowledge boundaries, and prohibited inferences from becoming occurred events. */
 /* v2.3.61 keeps response hooks byte-preserving, recovers the innermost valid packet candidate internally, and removes repeated or damaged reserved packet prefixes consistently from display and visible-identity text. */
 /* v2.3.60 restores only complete, semantically valid bare packet markers through the existing afterRequest/editoutput response path while keeping bare-wrapper restoration disabled for streaming output and leaving render-only scrubbing unchanged. */
@@ -116,7 +117,7 @@
   };
 
   const PLUGIN_NAME = 'HAYAKU';
-  const PLUGIN_VERSION = '2.3.62';
+  const PLUGIN_VERSION = '2.3.63';
   const HAYAKU_PACKET_AUTHORING_PROFILE_SCHEMA = 'hayaku-packet-authoring-profile-v1';
   const HAYAKU_PACKET_AUTHORING_ALIAS_LANGUAGES = Object.freeze(['ko', 'en', 'ja', 'zh']);
   const HAYAKU_CANONICAL_ANCHOR_PREFIXES = Object.freeze([
@@ -23287,7 +23288,12 @@ ${sourceChatId}`)}`;
     );
     const authoritativePairProven = authoritativePairIdentity.matched === true
       && authoritativePairHasExactUserIdentity
-      && ['exact', 'request_nonce_exact'].includes(authoritativePairIdentity.mode);
+      && [
+        'exact',
+        'request_nonce_exact',
+        'stable_user_id_exact',
+        'stable_user_id_text_drift'
+      ].includes(authoritativePairIdentity.mode);
     const candidates = ensureArray(packets).filter(packet => packet?.raw);
     if (pending?.recoveryRequired === true && !pending?.recoveryTarget?.pairIndex) {
       return {
@@ -23780,12 +23786,35 @@ ${sourceChatId}`)}`;
     const pairNonce = compact(pair?.requestNonce || '', 96);
     const expectedUserHash = compact(pending?.lineage?.userHash || '', 96);
     const expectedUserMessageIdHash = compact(pending?.lineage?.userMessageIdHash || '', 96);
+    const targetPairIndex = Math.max(1, Number(pending?.lineage?.targetPairIndex || 1) || 1);
+    const pairIndex = Math.max(0, Number(pair?.pairIndex || 0) || 0);
     const userHashConflict = Boolean(expectedUserHash && pair?.userHash && expectedUserHash !== pair.userHash);
     const userMessageIdConflict = Boolean(
       expectedUserMessageIdHash
       && pair?.userMessageIdHash
       && expectedUserMessageIdHash !== pair.userMessageIdHash
     );
+    const requestNonceConflict = Boolean(expectedNonce && pairNonce && expectedNonce !== pairNonce);
+    const stableUserMessageIdExact = Boolean(
+      expectedUserMessageIdHash
+      && pair?.userMessageIdHash
+      && expectedUserMessageIdHash === pair.userMessageIdHash
+    );
+    if (userMessageIdConflict) return { matched: false, mode: 'user_message_id_conflict' };
+    if (stableUserMessageIdExact && pairIndex !== targetPairIndex) {
+      return { matched: false, mode: 'pair_index_conflict' };
+    }
+    if (stableUserMessageIdExact) {
+      if (userHashConflict && text(pending?.lineage?.mode || 'append').trim() !== 'append') {
+        return { matched: false, mode: 'reroll_user_hash_conflict' };
+      }
+      return {
+        matched: true,
+        mode: requestNonceConflict
+          ? 'stable_user_id_request_nonce_conflict'
+          : (userHashConflict ? 'stable_user_id_text_drift' : 'stable_user_id_exact')
+      };
+    }
     if (expectedNonce && pairNonce && expectedNonce === pairNonce
       && !userHashConflict && !userMessageIdConflict) {
       return { matched: true, mode: 'request_nonce_exact' };
@@ -23794,8 +23823,6 @@ ${sourceChatId}`)}`;
       ? expectedUserHash === pair.userHash
       : (!expectedUserMessageIdHash || !pair?.userMessageIdHash || expectedUserMessageIdHash === pair.userMessageIdHash);
     if (exact) return { matched: true, mode: 'exact' };
-    const targetPairIndex = Math.max(1, Number(pending?.lineage?.targetPairIndex || 1) || 1);
-    const pairIndex = Math.max(0, Number(pair?.pairIndex || 0) || 0);
     const conversationPairCount = Math.max(0, Number(snapshot?.conversationPairCount || 0) || 0);
     const pendingAt = timestampMs(pending?.createdAt);
     const assistantAt = timestampMs(pair?.assistantMessageTime);
@@ -23809,6 +23836,8 @@ ${sourceChatId}`)}`;
       && !pending?.baselineAssistantVisibleHash
       && !pending?.baselineAssistantMessageIdHash
       && Boolean(pair?.assistantVisibleHash || pair?.assistantMessageIdHash)
+      && !userMessageIdConflict
+      && !requestNonceConflict
       && temporalAffinity;
     return safeAppendFallback
       ? { matched: true, mode: 'append_target_time_affinity' }
@@ -24102,12 +24131,33 @@ ${sourceChatId}`)}`;
       && outputVisibleHash === pair.assistantVisibleHash
       && outputBelongsToRequest
     );
-    const pairUserIdentityCompatible = Boolean(
-      (!pending?.lineage?.userHash || !pair?.userHash || pending.lineage.userHash === pair.userHash)
-      && (!pending?.lineage?.userMessageIdHash || !pair?.userMessageIdHash
-        || pending.lineage.userMessageIdHash === pair.userMessageIdHash)
+    const pendingUserMessageIdHash = compact(pending?.lineage?.userMessageIdHash || '', 96);
+    const pairUserMessageIdHash = compact(pair?.userMessageIdHash || '', 96);
+    const stableUserMessageIdExact = Boolean(
+      pendingUserMessageIdHash
+      && pairUserMessageIdHash
+      && pendingUserMessageIdHash === pairUserMessageIdHash
     );
+    const userMessageIdConflict = Boolean(
+      pendingUserMessageIdHash
+      && pairUserMessageIdHash
+      && pendingUserMessageIdHash !== pairUserMessageIdHash
+    );
+    const userHashCompatible = !pending?.lineage?.userHash
+      || !pair?.userHash
+      || pending.lineage.userHash === pair.userHash;
+    const pairUserIdentityCompatible = !userMessageIdConflict
+      && (userHashCompatible || stableUserMessageIdExact);
     const livePacketHashes = new Set(ensureArray(pair?.packetHashes).map(value => compact(value || '', 96)).filter(Boolean));
+    const requestPacketStableUserProof = Boolean(
+      pairNonce
+      && pairNonce === expectedNonce
+      && stableUserMessageIdExact
+      && ensureArray(pair?.validPackets).some(packet => (
+        expectedTypes.has(compact(packet?.packetType || 'current_snapshot', 48).toLowerCase())
+        && compact(packet?.requestNonce || '', 96) === expectedNonce
+      ))
+    );
     let changed = false;
     let refreshed = 0;
     const reasons = new Set();
@@ -24138,8 +24188,8 @@ ${sourceChatId}`)}`;
         && outputVisibleExact;
       const exactIdentityProof = exactVisible || exactMessage;
       const identitylessPacketProof = exactPacket && !record?.assistantVisibleHash && !record?.assistantMessageIdHash;
-      if (!(postProcessIdentityProof || exactIdentityProof || identitylessPacketProof)) return record;
-      if ((staleVisible || staleMessage) && !postProcessIdentityProof) return record;
+      if (!(postProcessIdentityProof || requestPacketStableUserProof || exactIdentityProof || identitylessPacketProof)) return record;
+      if ((staleVisible || staleMessage) && !(postProcessIdentityProof || requestPacketStableUserProof)) return record;
       const next = {
         ...record,
         userHash: compact(pair.userHash || record.userHash || '', 96),
@@ -24154,7 +24204,9 @@ ${sourceChatId}`)}`;
       refreshed += 1;
       reasons.add(postProcessIdentityProof
         ? 'output_final_pair_identity'
-        : exactIdentityProof ? 'exact_final_identity' : 'exact_packet_identityless');
+        : requestPacketStableUserProof
+          ? 'request_packet_stable_user_identity'
+          : exactIdentityProof ? 'exact_final_identity' : 'exact_packet_identityless');
       return next;
     });
     return {
