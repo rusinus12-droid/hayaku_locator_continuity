@@ -1,9 +1,10 @@
 //@name hayaku_locator_continuity
-//@display-name HAYAKU · Locator Continuity v2.3.56
+//@display-name HAYAKU · Locator Continuity v2.3.57
 //@author rusinus12@gmail.com
 //@api 3.0
-//@version 2.3.56
+//@version 2.3.57
 
+/* v2.3.57 performs one authoritative final-chat reconcile before binding timeout, separates capture durability from binding status, and carries exact-hash rejection for mismatched request nonces through later requests and verified native chat copies. */
 /* v2.3.56 gzip-compresses immutable cold archive layers with browser CompressionStream while keeping compact metadata sidecars uncompressed; archive bodies are decompressed lazily and cached. */
 //@allowed-ipc flashback_hayaku_bridge
 //@update-url https://raw.githubusercontent.com/rusinus12-droid/hayaku_locator_continuity/main/hayaku_locator_continuity.js
@@ -110,7 +111,7 @@
   };
 
   const PLUGIN_NAME = 'HAYAKU';
-  const PLUGIN_VERSION = '2.3.56';
+  const PLUGIN_VERSION = '2.3.57';
   const HAYAKU_PACKET_AUTHORING_PROFILE_SCHEMA = 'hayaku-packet-authoring-profile-v1';
   const HAYAKU_PACKET_AUTHORING_ALIAS_LANGUAGES = Object.freeze(['ko', 'en', 'ja', 'zh']);
   const HAYAKU_CANONICAL_ANCHOR_PREFIXES = Object.freeze([
@@ -154,6 +155,8 @@
   const STORAGE_LEDGER_MAX_RECORDS = 1024;
   const STORAGE_LEDGER_MAX_SLOT_HEADS = 4096;
   const STORAGE_LEDGER_MAX_TOMBSTONES = 1024;
+  const FINALIZED_BINDING_REJECTIONS_PER_NODE = 16;
+  const FINALIZED_BINDING_REJECTED_PACKETS_PER_ENTRY = 8;
   const STORAGE_LEDGER_MAX_PACKET_CHARS = 96000;
   const STORAGE_LEDGER_MAX_TOTAL_CHARS = 16000000;
   const MEMORY_BRIDGE_MAX_CAPSULE_PACKETS = 1024;
@@ -163,6 +166,8 @@
     maxRecords: STORAGE_LEDGER_MAX_RECORDS,
     maxSlotHeads: STORAGE_LEDGER_MAX_SLOT_HEADS,
     maxTombstones: STORAGE_LEDGER_MAX_TOMBSTONES,
+    maxFinalizedBindingRejectionsPerNode: FINALIZED_BINDING_REJECTIONS_PER_NODE,
+    maxFinalizedBindingRejectedPacketsPerEntry: FINALIZED_BINDING_REJECTED_PACKETS_PER_ENTRY,
     maxPacketChars: STORAGE_LEDGER_MAX_PACKET_CHARS,
     maxTotalPacketChars: STORAGE_LEDGER_MAX_TOTAL_CHARS,
     maxRecordsIsHardLimit: false,
@@ -2196,9 +2201,14 @@ const MODE_PROFILES = Object.freeze({
       const candidates = (await Promise.all(matchingChats.slice(0, 48).map(async candidate => {
         const stored = await getStorageItem(`${STORAGE_LEDGER_KEY_PREFIX}${candidate.sourceScopeKey}`, null);
         const parsed = typeof stored === 'string' ? safeJsonParse(stored, null) : stored;
-        if (!Array.isArray(parsed?.records) || !parsed.records.length) return null;
+        const localRecords = Array.isArray(parsed?.records) ? parsed.records.length : 0;
+        const archiveRef = normalizeHayakuArchiveRef(parsed?.archiveRef);
+        const archive = archiveRef ? await readHayakuSharedArchiveSummary(archiveRef) : null;
+        const archiveRecords = archive?.verified === true ? Math.max(0, Number(archive.records || 0) || 0) : 0;
+        if (!localRecords && !archiveRecords) return null;
         return {
           ...candidate,
+          logicalRecords: localRecords + archiveRecords,
           updatedAt: Math.max(0, Number(parsed?.updatedAt || 0) || 0)
         };
       }))).filter(Boolean);
@@ -8036,6 +8046,53 @@ const MODE_PROFILES = Object.freeze({
       pair?.assistantMessageIdHash || ''
     ].join('\u0001'))
   ].join('\u0002'));
+  const normalizeFinalizedBindingRejectedPacket = value => {
+    const hash = compact(value?.hash || value?.packetHash || '', 96);
+    if (!hash) return null;
+    return {
+      hash,
+      requestNonce: compact(value?.requestNonce || '', 96),
+      packetType: compact(value?.packetType || 'current_snapshot', 48).toLowerCase()
+    };
+  };
+  const normalizeFinalizedBindingRejection = value => {
+    const expectedRequestNonce = compact(value?.expectedRequestNonce || '', 96);
+    const rejectedByHash = new Map();
+    ensureArray(value?.rejectedPackets)
+      .map(normalizeFinalizedBindingRejectedPacket)
+      .filter(Boolean)
+      .forEach(packet => rejectedByHash.set(packet.hash, packet));
+    const rejectedPackets = [...rejectedByHash.values()]
+      .slice(-FINALIZED_BINDING_REJECTED_PACKETS_PER_ENTRY);
+    if (!expectedRequestNonce || !rejectedPackets.length) return null;
+    const expectedPacketTypes = uniq(ensureArray(value?.expectedPacketTypes)
+      .map(packetType => compact(packetType || '', 48).toLowerCase())
+      .filter(Boolean), 8);
+    if (!expectedPacketTypes.length) expectedPacketTypes.push('current_snapshot');
+    const id = compact(value?.id || stableHash64([
+      'finalized_binding_rejection_v1',
+      expectedRequestNonce,
+      expectedPacketTypes.join(','),
+      rejectedPackets.map(packet => `${packet.hash}:${packet.requestNonce}:${packet.packetType}`).join(',')
+    ].join('\u0001')), 96);
+    return {
+      id,
+      expectedRequestNonce,
+      expectedPacketTypes,
+      rejectedPackets,
+      reason: compact(value?.reason || 'finalized_packet_request_nonce_mismatch', 96),
+      createdAt: finiteNonNegativeInteger(value?.createdAt, 0)
+    };
+  };
+  const normalizeFinalizedBindingRejections = values => {
+    const byId = new Map();
+    ensureArray(values)
+      .map(normalizeFinalizedBindingRejection)
+      .filter(Boolean)
+      .sort((left, right) => left.createdAt - right.createdAt)
+      .forEach(entry => byId.set(entry.id, entry));
+    return [...byId.values()].slice(-FINALIZED_BINDING_REJECTIONS_PER_NODE);
+  };
   const normalizeTurnWorldline = value => {
     const parsed = objectish(value) ? value : {};
     if (parsed.version !== TURN_WORLDLINE_VERSION) return emptyTurnWorldline();
@@ -8059,6 +8116,7 @@ const MODE_PROFILES = Object.freeze({
       packetHashes: uniq(ensureArray(node.packetHashes).map(hash => compact(hash, 96)).filter(Boolean), 8),
       quarantinedPacketHashes: uniq(ensureArray(node.quarantinedPacketHashes)
         .map(hash => compact(hash, 96)).filter(Boolean), 16),
+      finalizedBindingRejections: normalizeFinalizedBindingRejections(node.finalizedBindingRejections),
       packetLineageStatus: ['valid', 'rebased', 'quarantined', 'absent'].includes(node.packetLineageStatus)
         ? node.packetLineageStatus
         : (ensureArray(node.packetHashes).length ? 'valid' : 'absent'),
@@ -8081,6 +8139,65 @@ const MODE_PROFILES = Object.freeze({
       revision: finiteNonNegativeInteger(parsed.revision, 0),
       headTurnNodeId: ids.has(parsed.headTurnNodeId) ? compact(parsed.headTurnNodeId, 96) : '',
       nodes
+    };
+  };
+  const finalizedBindingUsablePairPackets = pair => {
+    const byHash = new Map();
+    [...ensureArray(pair?.validPackets), ...ensureArray(pair?.repairablePackets)]
+      .map(packet => ({
+        ...packet,
+        hash: compact(packet?.hash || '', 96),
+        requestNonce: compact(packet?.requestNonce || '', 96),
+        packetType: compact(packet?.packetType || 'current_snapshot', 48).toLowerCase()
+      }))
+      .filter(packet => packet.hash)
+      .forEach(packet => byHash.set(packet.hash, packet));
+    return [...byHash.values()];
+  };
+  const finalizedBindingRejectedPacketHashesForNode = node => new Set(
+    normalizeFinalizedBindingRejections(node?.finalizedBindingRejections)
+      .flatMap(entry => entry.rejectedPackets.map(packet => packet.hash))
+      .filter(Boolean)
+  );
+  const finalizedBindingRejectionPolicy = (worldline, snapshot = null) => {
+    const normalizedWorldline = normalizeTurnWorldline(worldline);
+    const rejectedPacketHashes = new Set(normalizedWorldline.nodes
+      .flatMap(node => [...finalizedBindingRejectedPacketHashesForNode(node)]));
+    const pairsByIndex = new Map(ensureArray(snapshot?.conversationPairs)
+      .map(pair => [Number(pair?.pairIndex || 0), pair])
+      .filter(([pairIndex]) => pairIndex > 0));
+    const activeGroupGates = [];
+    for (const node of normalizedWorldline.nodes.filter(candidate => candidate.status === 'active')) {
+      const pair = pairsByIndex.get(Number(node.pairIndex || 0));
+      if (!pair) continue;
+      const packets = finalizedBindingUsablePairPackets(pair);
+      const observedHashes = new Set(packets.map(packet => packet.hash));
+      for (const entry of normalizeFinalizedBindingRejections(node.finalizedBindingRejections)) {
+        const foreignCurrentlyObserved = entry.rejectedPackets.some(packet => observedHashes.has(packet.hash));
+        if (!foreignCurrentlyObserved) continue;
+        const completeExpectedGroup = entry.expectedPacketTypes.every(packetType => packets.some(packet => (
+          packet.packetType === packetType
+          && packet.requestNonce === entry.expectedRequestNonce
+          && !rejectedPacketHashes.has(packet.hash)
+        )));
+        if (!completeExpectedGroup) activeGroupGates.push({ node, pair, entry });
+      }
+    }
+    const exactHashRejected = hash => rejectedPacketHashes.has(compact(hash || '', 96));
+    const expectedGroupBlocked = value => {
+      const requestNonce = compact(value?.requestNonce || '', 96);
+      const packetType = compact(value?.packetType || 'current_snapshot', 48).toLowerCase();
+      return Boolean(requestNonce) && activeGroupGates.some(({ entry }) => (
+        entry.expectedRequestNonce === requestNonce
+        && entry.expectedPacketTypes.includes(packetType)
+      ));
+    };
+    return {
+      rejectedPacketHashes,
+      activeGroupGates,
+      exactHashRejected,
+      expectedGroupBlocked,
+      blocks: value => exactHashRejected(value?.hash) || expectedGroupBlocked(value)
     };
   };
   const mergeAuthoritativeAndRequestPackets = (authoritativePackets = [], requestPackets = []) => {
@@ -8210,23 +8327,35 @@ const MODE_PROFILES = Object.freeze({
           && !safeNativeCopyLineageRebase);
       const storedParentMismatch = node && node.parentTurnNodeId !== parentTurnNodeId;
       const activates = chainOpen && !storedParentMismatch;
+      const finalizedBindingRejections = normalizeFinalizedBindingRejections(node?.finalizedBindingRejections);
+      const finalizedRejectedHashes = new Set(finalizedBindingRejections
+        .flatMap(entry => entry.rejectedPackets.map(packet => packet.hash))
+        .filter(Boolean));
       const observedPacketHashes = uniq(ensureArray(pair.packetHashes)
         .map(hash => compact(hash, 96)).filter(Boolean), 8);
-      const acceptedPacketHashes = declaredMismatch ? [] : observedPacketHashes;
+      const observedRejectedPacketHashes = observedPacketHashes.filter(hash => finalizedRejectedHashes.has(hash));
+      const acceptedPacketHashes = declaredMismatch
+        ? []
+        : observedPacketHashes.filter(hash => !finalizedRejectedHashes.has(hash));
       const acceptedPacketHashSet = new Set(acceptedPacketHashes);
       const quarantinedPacketHashes = declaredMismatch
         ? uniq([
-            ...ensureArray(node?.quarantinedPacketHashes),
-            ...observedPacketHashes
+            ...observedRejectedPacketHashes,
+            ...observedPacketHashes,
+            ...ensureArray(node?.quarantinedPacketHashes)
           ].map(hash => compact(hash, 96)).filter(Boolean), 16)
-        : uniq(ensureArray(node?.quarantinedPacketHashes)
-          .map(hash => compact(hash, 96))
+        : uniq([
+            ...observedRejectedPacketHashes,
+            ...ensureArray(node?.quarantinedPacketHashes)
+          ].map(hash => compact(hash, 96))
           .filter(hash => hash && !acceptedPacketHashSet.has(hash)), 16);
       const packetLineageStatus = declaredMismatch
         ? 'quarantined'
         : lineageRebased
           ? 'rebased'
-          : acceptedPacketHashes.length ? 'valid' : 'absent';
+          : acceptedPacketHashes.length
+            ? 'valid'
+            : observedRejectedPacketHashes.length ? 'quarantined' : 'absent';
       const packetLineageReason = declaredParentMismatch
         && !safeDeclaredParentRebase
         && !safeNativeCopyLineageRebase
@@ -8235,7 +8364,9 @@ const MODE_PROFILES = Object.freeze({
             && !safeProvisionalLogicalRebase
             && !safeNativeCopyLineageRebase)
           ? 'declared_logical_turn_mismatch'
-          : lineageRepairReason;
+          : observedRejectedPacketHashes.length
+            ? 'finalized_binding_request_nonce_mismatch'
+            : lineageRepairReason;
       if (!node) {
         const turnNodeId = stableHash64(['node', scope?.key || '', logicalTurnId, variantId].join('\u0001'));
         node = {
@@ -8251,6 +8382,7 @@ const MODE_PROFILES = Object.freeze({
           assistantMessageIdHash: compact(pair.assistantMessageIdHash || '', 96),
           packetHashes: acceptedPacketHashes,
           quarantinedPacketHashes,
+          finalizedBindingRejections,
           packetLineageStatus,
           packetLineageReason,
           lineageRebased,
@@ -8279,6 +8411,7 @@ const MODE_PROFILES = Object.freeze({
           assistantMessageIdHash: compact(pair.assistantMessageIdHash || '', 96),
           packetHashes: acceptedPacketHashes,
           quarantinedPacketHashes,
+          finalizedBindingRejections,
           packetLineageStatus,
           packetLineageReason,
           lineageRebased,
@@ -8484,7 +8617,18 @@ const MODE_PROFILES = Object.freeze({
         headTurnNodeId: normalizedWorldline.headTurnNodeId,
         active: normalizedWorldline.nodes
           .filter(node => node.status === 'active')
-          .map(node => [node.turnNodeId, node.parentTurnNodeId, node.pairIndex, node.packetHashes])
+          .map(node => [node.turnNodeId, node.parentTurnNodeId, node.pairIndex, node.packetHashes]),
+        finalizedBindingRejections: normalizedWorldline.nodes
+          .filter(node => ensureArray(node.finalizedBindingRejections).length > 0)
+          .map(node => [
+            node.turnNodeId,
+            normalizeFinalizedBindingRejections(node.finalizedBindingRejections).map(entry => [
+              entry.id,
+              entry.expectedRequestNonce,
+              entry.expectedPacketTypes,
+              entry.rejectedPackets.map(packet => packet.hash)
+            ])
+          ])
       },
       slotHeads: ensureArray(ledger?.slotHeads).map(head => [
         head?.slotId || '',
@@ -18220,7 +18364,9 @@ const MODE_PROFILES = Object.freeze({
         };
         if (historySyncGuard.allowed) {
           await stageAsync('awaitStorageWrites', () => Promise.resolve(Memory.storageWriteQueue).catch(() => null));
-          storageLedger = await stageAsync('loadStorageLedger', () => loadStorageLedger(chatScope));
+          storageLedger = await stageAsync('loadStorageLedger', () => loadStorageLedger(chatScope, {
+            authoritativeSnapshot
+          }));
           const bridgeColdStartImport = await stageAsync('importBridgeColdStart', () => importBridgeColdStartIntoStorageLedger(
             storageLedger,
             chatScope
@@ -20129,7 +20275,7 @@ const MODE_PROFILES = Object.freeze({
     const overlap = Math.min(localEffective, Math.max(0, Number(archiveRef.localOverlapCount || 0) || 0));
     return Math.max(0, Number(archiveRef.recordCount || 0) || 0) + localEffective - overlap;
   };
-  const nativeCopiedStorageRecord = (record, scope, sourceScopeKey, index) => {
+  const nativeCopiedStorageRecord = (record, scope, sourceScopeKey, index, options = {}) => {
     const sourceHistorical = record?.inheritedSessionHistory === true
       || record?.memoryClass === 'historical'
       || isPermanentHistoricalStorageRecord(record);
@@ -20145,13 +20291,16 @@ const MODE_PROFILES = Object.freeze({
         captureSource: 'copied_chat_history_clone'
       });
     }
-    const requestNonce = stableHash64([
-      'copied_chat_live',
-      scope.key,
-      sourceScopeKey,
-      record.recordId || record.hash || '',
-      index + 1
-    ].join('\u0001'));
+    const preservedRequestNonce = options?.preserveRequestNonce === true
+      ? compact(record?.requestNonce || '', 96)
+      : '';
+    const requestNonce = preservedRequestNonce || stableHash64([
+        'copied_chat_live',
+        scope.key,
+        sourceScopeKey,
+        record.recordId || record.hash || '',
+        index + 1
+      ].join('\u0001'));
     return normalizeStorageRecord({
       ...record,
       recordId: `copylive:${requestNonce}:${record.packetType}`,
@@ -20263,7 +20412,41 @@ const MODE_PROFILES = Object.freeze({
       convertedRecords
     };
   };
-  const inheritStorageLedgerForCopiedChat = async (ledger, scope) => {
+  const nativeCopiedWorldlineWithFinalizedBindingRejections = (sourceWorldline, scope, providedSnapshot = null) => {
+    const sourceNodes = normalizeTurnWorldline(sourceWorldline).nodes
+      .filter(node => ensureArray(node.finalizedBindingRejections).length > 0);
+    const chatMessages = ensureArray(scope?.chatMessages);
+    const snapshot = objectish(providedSnapshot)
+      && Array.isArray(providedSnapshot?.conversationPairs)
+      ? providedSnapshot
+      : (chatMessages.length ? authoritativeChatSnapshot(chatMessages, scope) : null);
+    if (!sourceNodes.length || !snapshot) return emptyTurnWorldline();
+    let targetWorldline = reconcileTurnWorldline(emptyTurnWorldline(), snapshot, scope);
+    for (const targetNode of targetWorldline.nodes) {
+      const sourceNode = sourceNodes.find(candidate => (
+        Number(candidate.pairIndex || 0) === Number(targetNode.pairIndex || 0)
+        && Boolean(candidate.userHash)
+        && candidate.userHash === targetNode.userHash
+        && (
+          (candidate.assistantVisibleHash
+            && candidate.assistantVisibleHash === targetNode.assistantVisibleHash)
+          || (!candidate.assistantVisibleHash
+            && candidate.assistantMessageIdHash
+            && candidate.assistantMessageIdHash === targetNode.assistantMessageIdHash)
+        )
+      ));
+      if (!sourceNode) continue;
+      targetNode.finalizedBindingRejections = normalizeFinalizedBindingRejections(
+        sourceNode.finalizedBindingRejections
+      );
+    }
+    // Re-run once after attaching the source audit so copied transcript packets
+    // with an exact rejected hash cannot be accepted during the first target
+    // request. New target node ids and lineage remain scope-local.
+    targetWorldline = reconcileTurnWorldline(targetWorldline, snapshot, scope);
+    return targetWorldline;
+  };
+  const inheritStorageLedgerForCopiedChat = async (ledger, scope, options = {}) => {
     if (ensureArray(ledger?.records).length > 0 || normalizeHayakuArchiveRef(ledger?.archiveRef)) {
       return { ledger, changed: false, reason: 'target_not_empty' };
     }
@@ -20297,7 +20480,22 @@ ${sourceChatId}`)}`;
     if (!sourceLogicalCount) return { ledger, changed: false, reason: 'source_empty', sourceScopeKey };
     if (!bridgeHandoff) {
       const inheritedAt = now();
-      const records = localEligible.map((record, index) => nativeCopiedStorageRecord(record, scope, sourceScopeKey, index)).filter(Boolean);
+      const rejectionExpectedNonces = new Set(normalizeTurnWorldline(sourceLocalLedger.worldline).nodes
+        .flatMap(node => normalizeFinalizedBindingRejections(node.finalizedBindingRejections))
+        .map(entry => entry.expectedRequestNonce)
+        .filter(Boolean));
+      const records = localEligible.map((record, index) => nativeCopiedStorageRecord(
+        record,
+        scope,
+        sourceScopeKey,
+        index,
+        { preserveRequestNonce: rejectionExpectedNonces.has(compact(record?.requestNonce || '', 96)) }
+      )).filter(Boolean);
+      const worldline = nativeCopiedWorldlineWithFinalizedBindingRejections(
+        sourceLocalLedger.worldline,
+        scope,
+        options?.authoritativeSnapshot || null
+      );
       const targetArchiveRef = sourceArchiveRef ? normalizeHayakuArchiveRef({ ...sourceArchiveRef, localOverlapCount: 0 }) : null;
       const logicalRecords = normalizeHayakuArchiveMemberIds([
         ...(archiveSummary?.memberIds || []),
@@ -20309,6 +20507,7 @@ ${sourceChatId}`)}`;
           ...emptyStorageLedger(scope),
           migration: { complete: false, importedAt: inheritedAt, importedRecords: logicalRecords, chatSnapshotHash: '' },
           archiveRef: targetArchiveRef,
+          worldline,
           records
         },
         changed: true,
@@ -20932,7 +21131,7 @@ ${sourceChatId}`)}`;
     if (!RisuCompat.hasPluginStorage()) return { ...emptyStorageLedger(scope), enabled: false, reason: 'plugin_storage_unavailable' };
     const stored = await RisuCompat.getStorageItem(key, null);
     const ledger = normalizeStorageLedger(stored, scope);
-    const adopted = await inheritStorageLedgerForCopiedChat(ledger, scope);
+    const adopted = await inheritStorageLedgerForCopiedChat(ledger, scope, options);
     const copyRepair = repairMisclassifiedCopiedChatLedger(adopted.ledger, scope);
     const local = {
       ...copyRepair.ledger,
@@ -22386,6 +22585,23 @@ ${sourceChatId}`)}`;
     const expectedNonce = compact(pending?.lineage?.requestNonce || '', 96);
     const expectedTypes = expectedCapturePacketTypes(pending);
     const authoritativePair = options?.authoritativePair === true;
+    const authoritativePairIdentity = authoritativePair && options?.pair
+      ? pendingPairIdentityMatch(pending, options.pair, {
+        conversationPairCount: Math.max(0, Number(options.pair?.pairIndex || 0) || 0)
+      })
+      : { matched: false, mode: 'absent' };
+    const authoritativePairHasExactUserIdentity = Boolean(
+      compact(pending?.lineage?.userHash || '', 96)
+        && compact(options?.pair?.userHash || '', 96)
+        && compact(pending.lineage.userHash, 96) === compact(options.pair.userHash, 96)
+    ) || Boolean(
+      compact(pending?.lineage?.userMessageIdHash || '', 96)
+        && compact(options?.pair?.userMessageIdHash || '', 96)
+        && compact(pending.lineage.userMessageIdHash, 96) === compact(options.pair.userMessageIdHash, 96)
+    );
+    const authoritativePairProven = authoritativePairIdentity.matched === true
+      && authoritativePairHasExactUserIdentity
+      && ['exact', 'request_nonce_exact'].includes(authoritativePairIdentity.mode);
     const candidates = ensureArray(packets).filter(packet => packet?.raw);
     if (pending?.recoveryRequired === true && !pending?.recoveryTarget?.pairIndex) {
       return {
@@ -22405,7 +22621,7 @@ ${sourceChatId}`)}`;
     }
     const nonceMismatch = candidates.find(packet => (
       packet.requestNonce !== expectedNonce
-      && !(authoritativePair && !packet.requestNonce)
+      && !(authoritativePairProven && !packet.requestNonce)
     ));
     if (nonceMismatch) {
       return {
@@ -22442,6 +22658,11 @@ ${sourceChatId}`)}`;
     const expectedLogicalTurnId = compact(pending?.lineage?.logicalTurnId || '', 96);
     const declaredParentTurnNodeId = compact(currentPacket?.parentTurnNodeId || '', 96);
     const declaredLogicalTurnId = compact(currentPacket?.logicalTurnId || '', 96);
+    const declaredLineageAbsent = Boolean(currentPacket)
+      && !compact(currentPacket?.requestNonce || '', 96)
+      && !declaredParentTurnNodeId
+      && !declaredLogicalTurnId;
+    const authoritativeLineageFallback = authoritativePairProven && declaredLineageAbsent;
     const parentLineageMismatch = Boolean(currentPacket)
       && declaredParentTurnNodeId !== expectedParentTurnNodeId;
     const logicalLineageMismatch = Boolean(currentPacket)
@@ -22449,7 +22670,8 @@ ${sourceChatId}`)}`;
     const safeParentFieldDrift = parentLineageMismatch
       && !logicalLineageMismatch
       && Boolean(expectedLogicalTurnId);
-    if (logicalLineageMismatch || (parentLineageMismatch && !safeParentFieldDrift)) {
+    if (!authoritativeLineageFallback
+      && (logicalLineageMismatch || (parentLineageMismatch && !safeParentFieldDrift))) {
       return {
         ok: false,
         reason: logicalLineageMismatch ? 'logical_lineage_mismatch' : 'parent_lineage_mismatch',
@@ -22463,13 +22685,17 @@ ${sourceChatId}`)}`;
     }
     return {
       ok: true,
-      reason: safeParentFieldDrift ? 'packet_group_complete_parent_lineage_repaired' : 'packet_group_complete',
+      reason: authoritativeLineageFallback
+        ? 'packet_group_complete_authoritative_pair_lineage'
+        : safeParentFieldDrift ? 'packet_group_complete_parent_lineage_repaired' : 'packet_group_complete',
       expectedTypes,
       presentTypes,
       packets: candidates,
       expectedNonce,
-      lineageRepairApplied: safeParentFieldDrift,
-      lineageRepairReason: safeParentFieldDrift ? 'verified_parent_field_drift' : '',
+      lineageRepairApplied: authoritativeLineageFallback || safeParentFieldDrift,
+      lineageRepairReason: authoritativeLineageFallback
+        ? 'verified_authoritative_pair_lineage'
+        : safeParentFieldDrift ? 'verified_parent_field_drift' : '',
       expectedParentTurnNodeId,
       declaredParentTurnNodeId,
       expectedLogicalTurnId,
@@ -22693,7 +22919,13 @@ ${sourceChatId}`)}`;
         result.durable === true ? 'success' : 'warn'
       );
       if (pending && result.durable === true) {
-        scheduleFinalizedBindingMonitor(pending);
+        scheduleFinalizedBindingMonitor(pending, {
+          source: captureSource,
+          durable: result.durable === true,
+          saved: result.saved === true,
+          reason: result.reason || '',
+          packetGroupComplete: result.packetGroupComplete === true
+        });
         if (captureSource === 'afterRequest') {
           stopFinalizedCaptureMonitor(pending);
           removePendingCapture(pending);
@@ -23251,9 +23483,28 @@ ${sourceChatId}`)}`;
     if (ledger.enabled !== true) {
       return { durable: false, saved: false, bound: false, reason: ledger.reason || 'storage_unavailable' };
     }
+    // The normal monitor deliberately binds only the already captured sidecar.
+    // At the terminal timeout boundary, import only the authoritative current
+    // snapshot from the finalized pair before re-running identity/worldline
+    // checks. A recovery snapshot belongs to its earlier recovery target and
+    // must never be retargeted to the physical pair that carries the comment.
+    const finalizedChatMirror = options?.importFinalizedChatMirror === true
+      ? importChatPacketsIntoStorageLedger(ledger, candidate.snapshot, scope, {
+          pairIndexes: [Number(candidate?.pair?.pairIndex || 0)],
+          packetTypes: ['current_snapshot'],
+          updateMigration: false
+        })
+      : {
+          ledger,
+          changed: false,
+          imported: 0,
+          updated: 0,
+          normalizedImported: 0,
+          normalizedUpdated: 0
+        };
     const topologyHash = compact(turnTopologySnapshotHash(candidate.snapshot), 96);
     const identityRefresh = refreshCapturedRecordIdentitiesForFinalPair(
-      ledger,
+      finalizedChatMirror.ledger,
       pending,
       candidate.pair,
       options
@@ -23301,7 +23552,12 @@ ${sourceChatId}`)}`;
         expectedPacketTypes: expectedTypes,
         boundPacketTypes: [...boundTypes],
         finalizedIdentityRefreshes: Math.max(0, Number(identityRefresh.refreshed || 0) || 0),
-        finalizedIdentityRefreshReason: identityRefresh.reason || ''
+        finalizedIdentityRefreshReason: identityRefresh.reason || '',
+        finalizedChatMirrorChanged: finalizedChatMirror.changed === true,
+        finalizedChatMirrorImported: Math.max(0, Number(finalizedChatMirror.imported || 0) || 0),
+        finalizedChatMirrorUpdated: Math.max(0, Number(finalizedChatMirror.updated || 0) || 0),
+        finalizedChatMirrorNormalizedImported: Math.max(0, Number(finalizedChatMirror.normalizedImported || 0) || 0),
+        finalizedChatMirrorNormalizedUpdated: Math.max(0, Number(finalizedChatMirror.normalizedUpdated || 0) || 0)
       };
     }
     const nextLedger = {
@@ -23309,7 +23565,8 @@ ${sourceChatId}`)}`;
       chatTopologyHash: topologyHash,
       worldline
     };
-    const commit = await writeStorageLedgerDirect(scope, nextLedger, 'finalized_binding');
+    const commitReason = compact(options?.commitReason || 'finalized_binding', 96) || 'finalized_binding';
+    const commit = await writeStorageLedgerDirect(scope, nextLedger, commitReason);
     return {
       ...commit,
       bound: commit.durable === true,
@@ -23320,9 +23577,360 @@ ${sourceChatId}`)}`;
       ownerTurnNodeIds: uniq(boundRecords.map(record => record.ownerTurnNodeId).filter(Boolean), 4),
       identityRepairs: Math.max(0, Number(binding.identityRepairs || 0) || 0),
       finalizedIdentityRefreshes: Math.max(0, Number(identityRefresh.refreshed || 0) || 0),
-      finalizedIdentityRefreshReason: identityRefresh.reason || ''
+      finalizedIdentityRefreshReason: identityRefresh.reason || '',
+      finalizedChatMirrorChanged: finalizedChatMirror.changed === true,
+      finalizedChatMirrorImported: Math.max(0, Number(finalizedChatMirror.imported || 0) || 0),
+      finalizedChatMirrorUpdated: Math.max(0, Number(finalizedChatMirror.updated || 0) || 0),
+      finalizedChatMirrorNormalizedImported: Math.max(0, Number(finalizedChatMirror.normalizedImported || 0) || 0),
+      finalizedChatMirrorNormalizedUpdated: Math.max(0, Number(finalizedChatMirror.normalizedUpdated || 0) || 0)
     };
   });
+  const finalizedBindingCaptureDiagnostics = state => ({
+    captureSource: compact(state?.capture?.source || '', 48),
+    captureDurable: state?.capture?.durable === true,
+    captureSaved: state?.capture?.saved === true,
+    captureReason: compact(state?.capture?.reason || '', 120),
+    capturePacketGroupComplete: state?.capture?.packetGroupComplete === true
+  });
+  const finalizedBindingAttemptDiagnostics = attempt => ({
+    finalReconcileAttempted: attempt?.attempted === true,
+    finalReconcileCandidateFound: attempt?.candidateFound === true,
+    finalReconcileIdentityMatchMode: compact(attempt?.identityMatchMode || '', 48),
+    finalReconcileReason: compact(attempt?.reason || '', 160),
+    finalReconcileDurable: attempt?.durable === true,
+    finalReconcileSaved: attempt?.saved === true,
+    finalReconcileBound: attempt?.bound === true,
+    finalReconcileImportedRecords: Math.max(0, Number(attempt?.finalizedChatMirrorImported || 0) || 0),
+    finalReconcileUpdatedRecords: Math.max(0, Number(attempt?.finalizedChatMirrorUpdated || 0) || 0),
+    finalReconcileIdentityRepairs: Math.max(0, Number(attempt?.identityRepairs || 0) || 0),
+    finalReconcileFinalizedIdentityRefreshes: Math.max(0, Number(attempt?.finalizedIdentityRefreshes || 0) || 0),
+    finalReconcileElapsedMs: Math.max(0, Number(attempt?.elapsedMs || 0) || 0),
+    finalReconcileExpectedPacketTypes: ensureArray(attempt?.expectedPacketTypes),
+    finalReconcileBoundPacketTypes: ensureArray(attempt?.boundPacketTypes),
+    finalReconcileOwnerTurnNodeIds: ensureArray(attempt?.ownerTurnNodeIds),
+    finalReconcileRejectedPacketType: compact(attempt?.rejectedPacketType || '', 48),
+    finalReconcileRejectedRequestNonce: compact(attempt?.rejectedRequestNonce || '', 96),
+    finalReconcileRejectedPacketHash: compact(attempt?.rejectedPacketHash || '', 96),
+    finalReconcileRejectedPacketHashes: ensureArray(attempt?.rejectedPacketHashes),
+    finalReconcileRejectedRequestNonces: ensureArray(attempt?.rejectedRequestNonces),
+    finalReconcileRejectionSaved: attempt?.rejectionSaved === true,
+    finalReconcileRejectionDurable: attempt?.rejectionDurable === true,
+    finalReconcileRejectionReason: compact(attempt?.rejectionReason || '', 160),
+    finalReconcileRejectionOwnerTurnNodeId: compact(attempt?.rejectionOwnerTurnNodeId || '', 96),
+    finalReconcileError: compact(attempt?.error || '', 240)
+  });
+  const finalizedBindingForeignPackets = (pending, candidate) => {
+    const expectedNonce = compact(pending?.lineage?.requestNonce || '', 96);
+    if (!expectedNonce) return [];
+    const expectedTypes = new Set(expectedCapturePacketTypes(pending));
+    const byHash = new Map();
+    [...ensureArray(candidate?.pair?.validPackets), ...ensureArray(candidate?.pair?.repairablePackets)]
+      .filter(packet => {
+        const packetType = compact(packet?.packetType || 'current_snapshot', 48).toLowerCase();
+        const requestNonce = compact(packet?.requestNonce || '', 96);
+        return expectedTypes.has(packetType) && requestNonce && requestNonce !== expectedNonce;
+      })
+      .map(normalizeFinalizedBindingRejectedPacket)
+      .filter(Boolean)
+      .forEach(packet => byHash.set(packet.hash, packet));
+    return [...byHash.values()];
+  };
+  const finalizedBindingExpectedPacketGroupPresent = (pending, pair) => {
+    const expectedNonce = compact(pending?.lineage?.requestNonce || '', 96);
+    if (!expectedNonce) return false;
+    const packets = finalizedBindingUsablePairPackets(pair);
+    return expectedCapturePacketTypes(pending).every(packetType => packets.some(packet => (
+      packet.packetType === packetType && packet.requestNonce === expectedNonce
+    )));
+  };
+  const persistFinalizedBindingForeignPacketRejection = async (pending, candidate, foreignPackets) => (
+    enqueueStorageOperation(async () => {
+      const scope = pending?.scope;
+      const rejectedPackets = ensureArray(foreignPackets)
+        .map(normalizeFinalizedBindingRejectedPacket)
+        .filter(Boolean)
+        .slice(0, FINALIZED_BINDING_REJECTED_PACKETS_PER_ENTRY);
+      if (!scope?.confident || !scope?.key || !candidate?.snapshot || !candidate?.pair || !rejectedPackets.length) {
+        return { durable: false, saved: false, reason: 'finalized_binding_rejection_context_invalid' };
+      }
+      const ledger = await loadStorageLedger(scope);
+      if (ledger.enabled !== true) {
+        return { durable: false, saved: false, reason: ledger.reason || 'storage_unavailable' };
+      }
+      const worldline = reconcileTurnWorldline(ledger.worldline, candidate.snapshot, scope);
+      const targetPairIndex = Number(candidate.pair.pairIndex || 0);
+      const owner = ensureArray(worldline.nodes).find(node => (
+        node?.status === 'active'
+        && Number(node?.pairIndex || 0) === targetPairIndex
+        && (!candidate.pair.userHash || node.userHash === candidate.pair.userHash)
+        && (!candidate.pair.assistantVisibleHash
+          || node.assistantVisibleHash === candidate.pair.assistantVisibleHash)
+        && (!candidate.pair.assistantMessageIdHash
+          || node.assistantMessageIdHash === candidate.pair.assistantMessageIdHash)
+      )) || null;
+      if (!owner) {
+        return { durable: false, saved: false, reason: 'finalized_binding_rejection_owner_unavailable' };
+      }
+      const expectedRequestNonce = compact(pending?.lineage?.requestNonce || '', 96);
+      const expectedPacketTypes = expectedCapturePacketTypes(pending);
+      const rejection = normalizeFinalizedBindingRejection({
+        expectedRequestNonce,
+        expectedPacketTypes,
+        rejectedPackets,
+        reason: 'finalized_packet_request_nonce_mismatch',
+        createdAt: now()
+      });
+      if (!rejection) {
+        return { durable: false, saved: false, reason: 'finalized_binding_rejection_invalid' };
+      }
+      owner.finalizedBindingRejections = normalizeFinalizedBindingRejections([
+        ...ensureArray(owner.finalizedBindingRejections),
+        rejection
+      ]);
+      const rejectedHashes = new Set(rejectedPackets.map(packet => packet.hash));
+      owner.packetHashes = ensureArray(owner.packetHashes).filter(hash => !rejectedHashes.has(hash));
+      owner.quarantinedPacketHashes = uniq([
+        ...rejectedHashes,
+        ...ensureArray(owner.quarantinedPacketHashes)
+      ].map(hash => compact(hash, 96)).filter(Boolean), 16);
+      if (!owner.packetHashes.length) {
+        owner.packetLineageStatus = 'quarantined';
+        owner.packetLineageReason = 'finalized_binding_request_nonce_mismatch';
+      }
+      owner.updatedAt = now();
+      worldline.revision = Math.max(0, Number(worldline.revision || 0) || 0) + 1;
+      const policy = finalizedBindingRejectionPolicy(worldline, candidate.snapshot);
+      const records = ensureArray(ledger.records).map(record => {
+        if (record?.inheritedSessionHistory === true) return record;
+        if (policy.exactHashRejected(record?.hash)) {
+          return {
+            ...record,
+            ownerTurnNodeId: '',
+            logicalTurnId: '',
+            parentTurnNodeId: '',
+            recordState: 'superseded',
+            auditRetained: true,
+            divergenceReason: 'finalized_packet_request_nonce_mismatch',
+            supersededAt: record.supersededAt || now()
+          };
+        }
+        if (policy.expectedGroupBlocked(record)) {
+          return {
+            ...record,
+            ownerTurnNodeId: '',
+            logicalTurnId: '',
+            parentTurnNodeId: '',
+            boundAt: 0,
+            recordState: 'unbound'
+          };
+        }
+        return record;
+      });
+      const commit = await writeStorageLedgerDirect(scope, {
+        ...ledger,
+        chatTopologyHash: compact(turnTopologySnapshotHash(candidate.snapshot), 96),
+        worldline,
+        records
+      }, 'finalized_binding_foreign_hash_rejection');
+      if (commit.durable === true) {
+        Memory.authoritativeLedgerCache = null;
+        try { Memory.projectionCache?.clear?.(); } catch (_) {}
+      }
+      return {
+        ...commit,
+        rejectionId: rejection.id,
+        rejectionDurable: commit.durable === true,
+        rejectedPacketCount: rejectedPackets.length,
+        rejectedPacketHashes: rejectedPackets.map(packet => packet.hash),
+        rejectedRequestNonces: uniq(rejectedPackets.map(packet => packet.requestNonce).filter(Boolean), 8),
+        expectedRequestNonce,
+        expectedPacketTypes,
+        targetPairIndex,
+        ownerTurnNodeId: owner.turnNodeId
+      };
+    })
+  );
+  const attemptFinalizedBindingTimeoutReconcile = async (state, providedLiveScope = null) => {
+    const startedAt = now();
+    let candidateFound = false;
+    let identityMatchMode = '';
+    const finish = detail => ({
+      attempted: true,
+      candidateFound: false,
+      durable: false,
+      saved: false,
+      bound: false,
+      ...detail,
+      elapsedMs: Math.max(0, now() - startedAt)
+    });
+    try {
+      const liveScope = providedLiveScope || await RisuCompat.currentChatScope();
+      if (!liveScope?.confident
+        || !liveScope?.key
+        || liveScope.key !== state?.pending?.scope?.key
+        || liveScope.chatMessagesAvailable !== true) {
+        return finish({ reason: 'finalized_chat_unavailable' });
+      }
+      const candidate = finalizedChatBindingCandidate(state.pending, liveScope);
+      if (!candidate) return finish({ reason: 'finalized_binding_candidate_unavailable' });
+      candidateFound = true;
+      identityMatchMode = candidate.identityMatch?.mode || '';
+      // A final-chat packet with a different immutable request nonce must never
+      // win now or be re-adopted by the next chat-primary reconciliation. Store
+      // an exact-hash rejection on the authoritative worldline node first. A
+      // complete corrected expected-nonce group may still recover in this pass.
+      const foreignPackets = finalizedBindingForeignPackets(state.pending, candidate);
+      let rejectionDiagnostics = {};
+      if (foreignPackets.length) {
+        const rejection = await persistFinalizedBindingForeignPacketRejection(
+          state.pending,
+          candidate,
+          foreignPackets
+        );
+        const firstRejected = foreignPackets[0];
+        rejectionDiagnostics = {
+          rejectedPacketType: compact(firstRejected?.packetType || 'current_snapshot', 48).toLowerCase(),
+          rejectedRequestNonce: compact(firstRejected?.requestNonce || '', 96),
+          rejectedPacketHash: compact(firstRejected?.hash || '', 96),
+          rejectedPacketHashes: ensureArray(rejection?.rejectedPacketHashes),
+          rejectedRequestNonces: ensureArray(rejection?.rejectedRequestNonces),
+          rejectionSaved: rejection?.saved === true,
+          rejectionDurable: rejection?.durable === true,
+          rejectionReason: compact(rejection?.reason || '', 160),
+          rejectionOwnerTurnNodeId: compact(rejection?.ownerTurnNodeId || '', 96)
+        };
+        if (rejection?.durable !== true) {
+          return finish({
+            ...rejectionDiagnostics,
+            candidateFound: true,
+            identityMatchMode,
+            reason: 'finalized_binding_rejection_not_durable'
+          });
+        }
+        if (!finalizedBindingExpectedPacketGroupPresent(state.pending, candidate.pair)) {
+          return finish({
+            ...rejectionDiagnostics,
+            candidateFound: true,
+            identityMatchMode,
+            reason: 'finalized_packet_request_nonce_mismatch'
+          });
+        }
+      }
+      const result = await bindCapturedPacketGroupToFinalizedChat(state.pending, candidate, {
+        importFinalizedChatMirror: true,
+        commitReason: 'finalized_binding_timeout_reconcile',
+        outputVisibleHash: state.outputVisibleHash,
+        outputPacketHashes: state.outputPacketHashes,
+        outputRequestNonces: state.outputRequestNonces
+      });
+      const { ledger: _ledger, ...diagnostics } = objectish(result) ? result : {};
+      return finish({
+        ...rejectionDiagnostics,
+        ...diagnostics,
+        candidateFound: true,
+        identityMatchMode,
+        durable: result?.durable === true,
+        saved: result?.saved === true,
+        bound: result?.bound === true,
+        reason: result?.reason || 'finalized_binding_result_unavailable',
+        result
+      });
+    } catch (error) {
+      return finish({
+        candidateFound,
+        identityMatchMode,
+        reason: 'finalized_binding_timeout_reconcile_failed',
+        error: compact(error?.message || error, 240)
+      });
+    }
+  };
+  const resolveExpiredFinalizedBindingMonitor = async (pendingOrKey, options = {}) => {
+    const key = typeof pendingOrKey === 'string'
+      ? pendingOrKey
+      : finalizedBindingMonitorKey(pendingOrKey);
+    const state = Memory.finalizedBindingMonitors.get(key);
+    if (!state || (options?.expectedState && options.expectedState !== state)) {
+      return { terminal: false, recovered: false, timedOut: false, stale: true, reason: 'binding_monitor_retired' };
+    }
+    if (Memory.finalizedBindingInFlight.has(key)) {
+      return { terminal: false, recovered: false, timedOut: false, stale: false, reason: 'binding_reconcile_in_flight' };
+    }
+    const timeoutDetectedAt = Math.max(0, Number(options?.timeoutDetectedAt || now()) || now());
+    Memory.finalizedBindingInFlight.add(key);
+    let finalReconcile;
+    try {
+      finalReconcile = await attemptFinalizedBindingTimeoutReconcile(
+        state,
+        options?.liveScope || null
+      );
+    } finally {
+      Memory.finalizedBindingInFlight.delete(key);
+    }
+    // A new request may retire this monitor while the storage queue is awaited.
+    // In that case the newer request owns all terminal logging and cleanup.
+    if (Memory.finalizedBindingMonitors.get(key) !== state) {
+      return { terminal: false, recovered: false, timedOut: false, stale: true, reason: 'binding_monitor_retired' };
+    }
+    const observedAt = now();
+    const elapsedMs = Math.max(0, observedAt - Number(state.startedAt || observedAt));
+    const common = {
+      at: observedAt,
+      timeoutDetectedAt,
+      scopeKey: state.pending?.scope?.key || '',
+      requestSequence: state.pending?.requestSequence || 0,
+      requestNonce: compact(state.pending?.lineage?.requestNonce || '', 96),
+      targetPairIndex: Math.max(0, Number(state.pending?.lineage?.targetPairIndex || 0) || 0),
+      outputObserved: Number(state.outputObservedAt || 0) > 0,
+      outputVisibleHash: compact(state.outputVisibleHash || '', 96),
+      outputPacketHashes: ensureArray(state.outputPacketHashes),
+      outputRequestNonces: ensureArray(state.outputRequestNonces),
+      waitingFinalizedChatCount: Math.max(0, Number(state.waitingFinalizedChatCount || 0) || 0),
+      hardFailureAttempts: Math.max(0, Number(state.attempts || 0) || 0),
+      elapsedMs,
+      maxAgeMs: FINALIZED_BINDING_MAX_AGE_MS,
+      timeoutBoundaryReached: true,
+      ...finalizedBindingCaptureDiagnostics(state),
+      ...finalizedBindingAttemptDiagnostics(finalReconcile)
+    };
+    const result = objectish(finalReconcile?.result) ? finalReconcile.result : null;
+    if (result?.durable === true && result?.bound === true) {
+      const { ledger: _ledger, ...resultDiagnostics } = result;
+      Memory.lastStorageBinding = {
+        ...common,
+        ...resultDiagnostics,
+        bindingDurable: result.durable === true,
+        bindingSaved: result.saved === true,
+        bindingBound: result.bound === true,
+        completionPath: 'timeout_final_reconcile',
+        recoveredAtTimeout: true,
+        timedOut: false
+      };
+      pushOperationLog('binding:recovered', Memory.lastStorageBinding, 'success');
+      stopFinalizedCaptureMonitor(state.pending);
+      removePendingCapture(state.pending);
+      stopFinalizedBindingMonitor(key);
+      return { terminal: true, recovered: true, timedOut: false, ...Memory.lastStorageBinding };
+    }
+    const timeoutDetail = {
+      ...common,
+      durable: false,
+      saved: false,
+      bound: false,
+      bindingDurable: finalReconcile?.durable === true,
+      bindingSaved: finalReconcile?.saved === true,
+      bindingBound: finalReconcile?.bound === true,
+      recoveredAtTimeout: false,
+      timedOut: true,
+      reason: 'finalized_binding_timeout'
+    };
+    Memory.lastWarnings = [...ensureArray(Memory.lastWarnings), 'finalized_binding_timeout'].slice(-20);
+    Memory.lastStorageBinding = timeoutDetail;
+    pushOperationLog('binding:timeout', timeoutDetail, 'warn');
+    stopFinalizedCaptureMonitor(state.pending);
+    removePendingCapture(state.pending);
+    stopFinalizedBindingMonitor(key);
+    return { terminal: true, recovered: false, timedOut: true, ...timeoutDetail };
+  };
   const markFinalizedBindingOutputObserved = async content => {
     // Prefer the request nonce embedded in the output packet itself. This does
     // not require a second current-chat lookup, so a transient Web selection
@@ -23355,7 +23963,7 @@ ${sourceChatId}`)}`;
     state.pollDelayMs = FINALIZED_BINDING_POLL_MS;
     return true;
   };
-  const scheduleFinalizedBindingMonitor = pending => {
+  const scheduleFinalizedBindingMonitor = (pending, capture = {}) => {
     if (Memory.unloaded || !ownsRuntime() || !pending?.scope?.key || !pending?.lineage?.requestNonce) return false;
     const key = finalizedBindingMonitorKey(pending);
     let state = Memory.finalizedBindingMonitors.get(key);
@@ -23372,6 +23980,13 @@ ${sourceChatId}`)}`;
         outputVisibleHash: '',
         outputPacketHashes: [],
         outputRequestNonces: [],
+        capture: {
+          source: compact(capture?.source || '', 48),
+          durable: capture?.durable === true,
+          saved: capture?.saved === true,
+          reason: compact(capture?.reason || '', 120),
+          packetGroupComplete: capture?.packetGroupComplete === true
+        },
         pollDelayMs: FINALIZED_BINDING_POLL_MS,
         waitingFinalizedChatCount: 0,
         lastWaitingLogAt: 0
@@ -23379,6 +23994,14 @@ ${sourceChatId}`)}`;
       Memory.finalizedBindingMonitors.set(key, state);
     } else {
       state.pending = clone(pending, pending);
+      state.capture = {
+        source: compact(capture?.source || state.capture?.source || '', 48),
+        durable: capture?.durable === true || state.capture?.durable === true,
+        saved: capture?.saved === true || state.capture?.saved === true,
+        reason: compact(capture?.reason || state.capture?.reason || '', 120),
+        packetGroupComplete: capture?.packetGroupComplete === true
+          || state.capture?.packetGroupComplete === true
+      };
     }
     const schedulePoll = delay => {
       if (Memory.unloaded || !ownsRuntime() || Memory.finalizedBindingMonitors.get(key) !== state || state.timer != null) return;
@@ -23393,22 +24016,15 @@ ${sourceChatId}`)}`;
     const poll = async () => {
       if (Memory.unloaded || !ownsRuntime() || Memory.finalizedBindingMonitors.get(key) !== state) return;
       if (now() - state.startedAt > FINALIZED_BINDING_MAX_AGE_MS) {
-        const timeoutDetail = {
-          at: now(),
-          scopeKey: state.pending?.scope?.key || '',
-          requestSequence: state.pending?.requestSequence || 0,
-          requestNonce: compact(state.pending?.lineage?.requestNonce || '', 96),
-          targetPairIndex: Math.max(0, Number(state.pending?.lineage?.targetPairIndex || 0) || 0),
-          outputObserved: Number(state.outputObservedAt || 0) > 0,
-          outputVisibleHash: compact(state.outputVisibleHash || '', 96),
-          waitingFinalizedChatCount: Math.max(0, Number(state.waitingFinalizedChatCount || 0) || 0),
-          elapsedMs: Math.max(0, now() - Number(state.startedAt || now())),
-          reason: 'finalized_binding_timeout'
-        };
-        Memory.lastWarnings = [...ensureArray(Memory.lastWarnings), 'finalized_binding_timeout'].slice(-20);
-        Memory.lastStorageBinding = { durable: false, saved: false, bound: false, ...timeoutDetail };
-        pushOperationLog('binding:timeout', timeoutDetail, 'warn');
-        stopFinalizedBindingMonitor(key);
+        const resolution = await resolveExpiredFinalizedBindingMonitor(key, {
+          expectedState: state,
+          timeoutDetectedAt: now()
+        });
+        if (resolution?.terminal !== true
+          && resolution?.stale !== true
+          && Memory.finalizedBindingMonitors.get(key) === state) {
+          schedulePoll(FINALIZED_BINDING_POLL_MS);
+        }
         return;
       }
       try {
@@ -23447,6 +24063,10 @@ ${sourceChatId}`)}`;
                 scopeKey: state.pending.scope.key,
                 requestSequence: state.pending.requestSequence,
                 ...result,
+                ...finalizedBindingCaptureDiagnostics(state),
+                bindingDurable: result?.durable === true,
+                bindingSaved: result?.saved === true,
+                bindingBound: result?.bound === true,
                 waitingForFinalizedChat,
                 waitingFinalizedChatCount: Math.max(0, Number(state.waitingFinalizedChatCount || 0)),
                 hardFailureAttempts: Math.max(0, Number(state.attempts || 0)),
@@ -23564,6 +24184,7 @@ ${sourceChatId}`)}`;
   };
   const liveChatLedgerRecordsFromSnapshot = (snapshot, scope, worldline = null) => {
     const activeNodesByPairIndex = worldlineNodesByPairIndex(worldline, { activeOnly: true });
+    const finalizedBindingPolicy = finalizedBindingRejectionPolicy(worldline, snapshot);
     return ensureArray(snapshot?.conversationPairs)
       .flatMap(pair => {
         const owner = activeWorldlineNodeForPair(worldline, pair, activeNodesByPairIndex);
@@ -23571,7 +24192,11 @@ ${sourceChatId}`)}`;
       const usablePackets = [...ensureArray(pair?.validPackets), ...ensureArray(pair?.repairablePackets)]
         .filter((packet, index, rows) => packet?.hash && rows.findIndex(candidate => candidate?.hash === packet.hash) === index);
       return usablePackets
-        .filter(packet => owner && acceptedPacketHashes.has(packet?.hash))
+        .filter(packet => (
+          owner
+          && acceptedPacketHashes.has(packet?.hash)
+          && !finalizedBindingPolicy.blocks(packet)
+        ))
         .map(packet => {
           const record = liveChatLedgerRecordFromPacket(packet, pair, scope);
           return record ? normalizeStorageRecord({
@@ -23588,6 +24213,7 @@ ${sourceChatId}`)}`;
   const mergeLiveChatAndStorageRecords = (storageRecords = [], liveChatRecords = [], ledgerOptions = {}) => {
     const merged = new Map();
     const sourceBySlot = new Map();
+    const finalizedBindingPolicy = finalizedBindingRejectionPolicy(ledgerOptions?.worldline, null);
     const headsBySlot = new Map(ensureArray(ledgerOptions?.slotHeads)
       .map(normalizeStorageSlotHead).filter(Boolean).map(head => [head.slotId, head]));
     const tombstonesBySlot = new Map(ensureArray(ledgerOptions?.tombstones)
@@ -23598,8 +24224,13 @@ ${sourceChatId}`)}`;
     let liveChatOverrides = 0;
     let storageHeadMisses = 0;
     let tombstoneSuppressions = 0;
+    let finalizedBindingSuppressions = 0;
     const storageGroups = new Map();
     for (const record of ensureArray(storageRecords).filter(Boolean)) {
+      if (record?.inheritedSessionHistory !== true && finalizedBindingPolicy.exactHashRejected(record?.hash)) {
+        finalizedBindingSuppressions += 1;
+        continue;
+      }
       const slot = dualLedgerRecordSlot(record);
       const tombstone = tombstonesBySlot.get(slot);
       if (storageRecordSuppressedByTombstone(record, tombstone)) {
@@ -23628,6 +24259,10 @@ ${sourceChatId}`)}`;
       storageAccepted += 1;
     }
     for (const record of ensureArray(liveChatRecords).filter(Boolean)) {
+      if (record?.inheritedSessionHistory !== true && finalizedBindingPolicy.exactHashRejected(record?.hash)) {
+        finalizedBindingSuppressions += 1;
+        continue;
+      }
       const slot = dualLedgerRecordSlot(record);
       const tombstone = tombstonesBySlot.get(slot);
       if (storageRecordSuppressedByTombstone(record, tombstone)) {
@@ -23654,17 +24289,28 @@ ${sourceChatId}`)}`;
         liveChatOverrides,
         storageHeadMisses,
         tombstoneSuppressions,
+        finalizedBindingSuppressions,
         mergedRecords: records.length
       }
     };
   };
-  const importChatPacketsIntoStorageLedger = (ledger, snapshot, scope) => {
-    const fullMigration = ledger?.migration?.complete !== true;
+  const importChatPacketsIntoStorageLedger = (ledger, snapshot, scope, options = {}) => {
+    const updateMigration = options?.updateMigration !== false;
+    const fullMigration = updateMigration && ledger?.migration?.complete !== true;
+    const finalizedBindingPolicy = finalizedBindingRejectionPolicy(ledger?.worldline, snapshot);
     const pairs = ensureArray(snapshot?.conversationPairs);
-    // Packet-bearing chat is the primary ledger, so every visible packet slot is
-    // mirrored on every reconciliation. This prevents an older storage variant
-    // from resurfacing if a packet is later absent from the rendered chat body.
-    const candidates = pairs;
+    // Packet-bearing chat is the primary ledger, so normal reconciliation
+    // mirrors every visible packet slot. Narrow filters are reserved for the
+    // terminal finalized-binding repair, where only the current slot may move.
+    const allowedPairIndexes = new Set(ensureArray(options?.pairIndexes)
+      .map(value => Number(value || 0))
+      .filter(value => value > 0));
+    const allowedPacketTypes = new Set(ensureArray(options?.packetTypes)
+      .map(value => compact(value || '', 48).toLowerCase())
+      .filter(Boolean));
+    const candidates = pairs.filter(pair => (
+      !allowedPairIndexes.size || allowedPairIndexes.has(Number(pair?.pairIndex || 0))
+    ));
     const byId = new Map(ensureArray(ledger?.records).map(record => [record.recordId, record]));
     let imported = 0;
     let updated = 0;
@@ -23672,7 +24318,13 @@ ${sourceChatId}`)}`;
     let normalizedUpdated = 0;
     for (const pair of candidates) {
       const usablePackets = [...ensureArray(pair?.validPackets), ...ensureArray(pair?.repairablePackets)]
-        .filter((packet, index, rows) => packet?.hash && rows.findIndex(candidate => candidate?.hash === packet.hash) === index);
+        .filter((packet, index, rows) => (
+          packet?.hash
+          && !finalizedBindingPolicy.exactHashRejected(packet.hash)
+          && (!allowedPacketTypes.size
+            || allowedPacketTypes.has(compact(packet?.packetType || 'current_snapshot', 48).toLowerCase()))
+          && rows.findIndex(candidate => candidate?.hash === packet.hash) === index
+        ));
       for (const packet of usablePackets) {
         const record = liveChatLedgerRecordFromPacket(packet, pair, scope);
         if (!record) continue;
@@ -24010,6 +24662,7 @@ ${sourceChatId}`)}`;
   };
   const storageRecordNodeMatchEvidence = (record, node) => {
     if (Number(record?.targetPairIndex || 0) !== Number(node?.pairIndex || 0)) return false;
+    if (record?.hash && finalizedBindingRejectedPacketHashesForNode(node).has(record.hash)) return false;
     if (record?.hash && ensureArray(node?.quarantinedPacketHashes).includes(record.hash)) return false;
     if (record?.userHash && node?.userHash && record.userHash !== node.userHash) return false;
     const hasMessageIdentity = Boolean(record?.assistantMessageIdHash && node?.assistantMessageIdHash);
@@ -24067,6 +24720,7 @@ ${sourceChatId}`)}`;
     const nodesById = new Map(nodes.map(node => [node.turnNodeId, node]));
     const nodesByPairIndex = new Map();
     const activeNodesByPairIndex = new Map();
+    const finalizedBindingPolicy = finalizedBindingRejectionPolicy(worldline, snapshot);
     for (const node of nodes) {
       const pairIndex = Number(node?.pairIndex || 0);
       if (!pairIndex) continue;
@@ -24099,6 +24753,37 @@ ${sourceChatId}`)}`;
           record.memoryClass = 'historical';
           changed = true;
         }
+        continue;
+      }
+      if (finalizedBindingPolicy.exactHashRejected(record?.hash)) {
+        if (record.recordState !== 'superseded'
+          || record.ownerTurnNodeId
+          || record.logicalTurnId
+          || record.parentTurnNodeId
+          || record.auditRetained !== true
+          || record.divergenceReason !== 'finalized_packet_request_nonce_mismatch') changed = true;
+        record.ownerTurnNodeId = '';
+        record.logicalTurnId = '';
+        record.parentTurnNodeId = '';
+        record.recordState = 'superseded';
+        record.auditRetained = true;
+        record.divergenceReason = 'finalized_packet_request_nonce_mismatch';
+        record.supersededAt = record.supersededAt || now();
+        record.slotId = storageRecordSlotId(record);
+        continue;
+      }
+      if (finalizedBindingPolicy.expectedGroupBlocked(record)) {
+        if (record.recordState !== 'unbound'
+          || record.ownerTurnNodeId
+          || record.logicalTurnId
+          || record.parentTurnNodeId
+          || record.boundAt) changed = true;
+        record.ownerTurnNodeId = '';
+        record.logicalTurnId = '';
+        record.parentTurnNodeId = '';
+        record.boundAt = 0;
+        record.recordState = 'unbound';
+        record.slotId = storageRecordSlotId(record);
         continue;
       }
       // A packet hash can remain in an older/superseded node's quarantine
@@ -24214,6 +24899,7 @@ ${sourceChatId}`)}`;
       const activeNode = activeWorldlineNodeForPair(worldline, pair, activeNodesByPairIndex);
       const candidates = (recordsByPairIndex.get(pairIndex) || []).filter(record => (
         !['tombstoned', 'quarantined', 'detached', 'orphaned', 'superseded'].includes(record.recordState)
+        && !finalizedBindingPolicy.blocks(record)
         && storageRecordMatchesPairIdentity(record, pair)
         && (!record.ownerTurnNodeId || !activeNode || record.ownerTurnNodeId === activeNode.turnNodeId)
       )).sort((a, b) => Number(b.sourcePriority || 0) - Number(a.sourcePriority || 0)
@@ -25067,8 +25753,10 @@ ${sourceChatId}`)}`;
     'capture:finalized_save_failed': '최종 응답 패킷 저장 실패',
     'capture:monitor_failed': '캡처 모니터 실패',
     'binding:completed': '라이브챗 결속 완료',
+    'binding:recovered': '라이브챗 결속 지연 복구',
     'binding:waiting_finalized_chat': '라이브챗 최종 확정 대기',
     'binding:retry': '라이브챗 결속 재시도',
+    'binding:timeout': '라이브챗 결속 시간 초과',
     'install:settings': '설정 불러오기 완료',
     'install:ledger_viewer': '원장 뷰어 등록 완료',
     'install:bridge_cold_start_adopted': '브릿지 콜드스타트 채택',
@@ -26028,6 +26716,7 @@ ${sourceChatId}`)}`;
         selectPendingCapture,
         expectedCapturePacketTypes,
         validateCapturedPacketGroup,
+        persistCapturedPackets,
         finalizedChatPacketCandidate,
         scheduleFinalizedCaptureMonitor,
         stopFinalizedCaptureMonitor,
@@ -26035,6 +26724,8 @@ ${sourceChatId}`)}`;
         finalizedChatBindingCandidate,
         refreshCapturedRecordIdentitiesForFinalPair,
         bindCapturedPacketGroupToFinalizedChat,
+        attemptFinalizedBindingTimeoutReconcile,
+        resolveExpiredFinalizedBindingMonitor,
         markFinalizedBindingOutputObserved,
         scheduleFinalizedBindingMonitor,
         stopFinalizedBindingMonitor,
