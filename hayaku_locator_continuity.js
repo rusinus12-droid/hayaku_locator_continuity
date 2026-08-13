@@ -1,9 +1,10 @@
 //@name hayaku_locator_continuity
-//@display-name HAYAKU · Locator Continuity v2.3.61
+//@display-name HAYAKU · Locator Continuity v2.3.62
 //@author rusinus12@gmail.com
 //@api 3.0
-//@version 2.3.61
+//@version 2.3.62
 
+/* v2.3.62 gives the response model a typed continuity-evidence contract, resolves latest valid state and chronological transitions, and keeps unresolved constraints, knowledge boundaries, and prohibited inferences from becoming occurred events. */
 /* v2.3.61 keeps response hooks byte-preserving, recovers the innermost valid packet candidate internally, and removes repeated or damaged reserved packet prefixes consistently from display and visible-identity text. */
 /* v2.3.60 restores only complete, semantically valid bare packet markers through the existing afterRequest/editoutput response path while keeping bare-wrapper restoration disabled for streaming output and leaving render-only scrubbing unchanged. */
 /* v2.3.59 completes safely reconciled finalized bindings during the next beforeRequest and preserves runtime ledger availability after durable reconcile writes. */
@@ -115,7 +116,7 @@
   };
 
   const PLUGIN_NAME = 'HAYAKU';
-  const PLUGIN_VERSION = '2.3.61';
+  const PLUGIN_VERSION = '2.3.62';
   const HAYAKU_PACKET_AUTHORING_PROFILE_SCHEMA = 'hayaku-packet-authoring-profile-v1';
   const HAYAKU_PACKET_AUTHORING_ALIAS_LANGUAGES = Object.freeze(['ko', 'en', 'ja', 'zh']);
   const HAYAKU_CANONICAL_ANCHOR_PREFIXES = Object.freeze([
@@ -206,6 +207,8 @@
   const SIDE_WRITE_TAIL_MARKER = '[HAYAKU SIDE-WRITE FINAL REMINDER]';
   const PACKET_CORE_CONTEXT_START = '[HAYAKU PACKET MEMORY]';
   const PACKET_CORE_CONTEXT_END = '[/HAYAKU PACKET MEMORY]';
+  const CONTINUITY_EVIDENCE_USE_START = '[HAYAKU CONTINUITY EVIDENCE USE]';
+  const CONTINUITY_EVIDENCE_USE_END = '[/HAYAKU CONTINUITY EVIDENCE USE]';
   const PACKET_CORE_WRITE_START = '[HAYAKU PACKET WRITE]';
   const PACKET_CORE_WRITE_END = '[/HAYAKU PACKET WRITE]';
   const RUNTIME_CONTEXT_MEMO = 'hayaku-runtime-context-v3';
@@ -16256,7 +16259,11 @@ const MODE_PROFILES = Object.freeze({
       profile: (subject, value) => `${subject ? `${subject}에 관해 ` : ''}${value}`,
       continuityLock: '그 조건은 계속 효력을 유지했다.',
       unresolved: '그 일은 미결로 남아 있었다.',
-      openChoice: '선택은 아직 내려지지 않았다.'
+      openChoice: '제안은 이미 있었지만 선택은 아직 내려지지 않았다.',
+      pendingPayoff: '이는 아직 회수되지 않은 가능성 또는 미해결 효과였다.',
+      continuingConsequence: '이는 이미 성립한 선택이나 행동에서 이어진 결과였다.',
+      prohibitedInference: '이는 성립한 사건이 아니라 피해야 할 해석이었다.',
+      unsupportedInference: value => `기록은 다음 내용을 성립한 사실로 확정하지 않았다: ${value}`
     }),
     en: Object.freeze({
       contextLead: 'What had already been established:',
@@ -16277,7 +16284,11 @@ const MODE_PROFILES = Object.freeze({
       profile: (subject, value) => `${subject ? `About ${subject}, ` : ''}${value}`,
       continuityLock: 'That condition remained in force.',
       unresolved: 'The matter remained unresolved.',
-      openChoice: 'No choice had yet been made.'
+      openChoice: 'The invitation had been made, but no choice had yet been made.',
+      pendingPayoff: 'This remained an unrealized possibility or pending effect.',
+      continuingConsequence: 'This was an ongoing result of an established choice or action.',
+      prohibitedInference: 'This was a prohibited inference, not an event that occurred.',
+      unsupportedInference: value => `The record did not establish the following as fact: ${value}`
     }),
     ja: Object.freeze({
       contextLead: 'これまでに明らかになったこと：',
@@ -16298,7 +16309,11 @@ const MODE_PROFILES = Object.freeze({
       profile: (subject, value) => `${subject ? `${subject}について、` : ''}${value}`,
       continuityLock: 'その条件は引き続き効力を保っていた。',
       unresolved: 'その件は未解決のままだった。',
-      openChoice: '選択はまだ下されていなかった。'
+      openChoice: '誘いはすでにあったが、選択はまだ下されていなかった。',
+      pendingPayoff: 'これはまだ実現していない可能性、または未解決の効果だった。',
+      continuingConsequence: 'これは成立済みの選択や行動から続く結果だった。',
+      prohibitedInference: 'これは起きた出来事ではなく、避けるべき推論だった。',
+      unsupportedInference: value => `記録は次の内容を成立した事実として確定していない：${value}`
     }),
     zh: Object.freeze({
       contextLead: '此前已经发生的事：',
@@ -16319,7 +16334,11 @@ const MODE_PROFILES = Object.freeze({
       profile: (subject, value) => `${subject ? `关于${subject}，` : ''}${value}`,
       continuityLock: '这一条件仍然有效。',
       unresolved: '这件事仍悬而未决。',
-      openChoice: '当时尚未作出选择。'
+      openChoice: '邀请已经提出，但当时尚未作出选择。',
+      pendingPayoff: '这仍是尚未实现的可能性或待定效果。',
+      continuingConsequence: '这是已发生选择或行动所延续的结果。',
+      prohibitedInference: '这不是已发生的事件，而是必须避免的推断。',
+      unsupportedInference: value => `记录并未把以下内容确立为事实：${value}`
     })
   });
   const modelMemoryViewLanguage = (row = {}, body = '') => {
@@ -16425,8 +16444,8 @@ const MODE_PROFILES = Object.freeze({
     const observedAt = text(row?.temporal?.observedAt || row?.temporal?.lastConfirmedAt || '').trim();
     const inactive = /^(?:resolved|completed|closed|ended|expired|superseded|replaced|obsolete|overridden)$/.test(status);
     const lastKnown = /^(?:priorsnapshotcurrentunconfirmed|historicalunspecified|unspecifiednotcurrent|unknown)$/.test(timeScope);
-    const past = /^(?:past|historical|archived|expired|prior)$/.test(timeScope) || inactive;
-    if (eventTime && typeof locale.eventFrame === 'function') return locale.eventFrame(eventTime, sentence);
+    const past = /^(?:past|historical|archived|expired|prior|nolongertrue)$/.test(timeScope) || inactive;
+    if (eventTime && Number.isFinite(continuityEvidenceStrictTimeValue(row)) && typeof locale.eventFrame === 'function') return locale.eventFrame(eventTime, sentence);
     if ((lastKnown || observedAt) && typeof locale.lastKnownFrame === 'function') return locale.lastKnownFrame(sentence);
     if (past && typeof locale.pastFrame === 'function') return locale.pastFrame(sentence);
     return sentence;
@@ -16446,6 +16465,7 @@ const MODE_PROFILES = Object.freeze({
     else if (/^(?:contested|disputed|conflicting|uncertain)$/.test(status) || /^(?:contested|disputed|conflicting)$/.test(truthState)) add(locale.disputed);
     else if (/^(?:superseded|replaced|obsolete|overridden)$/.test(status)) add(locale.superseded);
     else if (/^(?:resolved|completed|closed|ended|expired)$/.test(status)) add(locale.resolved);
+    if (timeScope === 'nolongertrue' && !/^(?:resolved|completed|closed|ended|expired|superseded|replaced|obsolete|overridden)$/.test(status)) add(locale.superseded);
     if (/^(?:future|planned|proposed|possible|pendingfuture)$/.test(timeScope)) add(locale.future);
     if (/^(?:unknown|uncertain|unverified)$/.test(truthState)) add(locale.uncertainTruth);
     const owner = modelMemoryHumanEntityName(row?.visibility?.ownerEntityId || '', language);
@@ -16460,11 +16480,16 @@ const MODE_PROFILES = Object.freeze({
     const revealState = normalizeKey(row?.visibility?.revealState || '');
     if (!owner && !visible.length && !denied.length
       && (/^(?:private|secret|internal|sealed)$/.test(privacy) || /^(?:hidden|hinted|private|sealed)$/.test(revealState))) add(locale.privateFact);
-    if (axis === 'planner') {
-      if (category === 'continuitylock') add(locale.continuityLock);
-      else if (/^(?:donotresolveyet|conflicttrace|offscreenthread)$/.test(category)) add(locale.unresolved);
-      else if (category === 'openinvitation') add(locale.openChoice);
+    const inactive = CONTINUITY_EVIDENCE_INACTIVE_STATUS_RE.test(status);
+    if (category === 'continuitylock' && !inactive) add(locale.continuityLock);
+    else if (/^(?:donotresolveyet|conflicttrace|offscreenthread)$/.test(category) && !inactive) add(locale.unresolved);
+    else if (category === 'openinvitation' && !inactive) add(locale.openChoice);
+    else if (category === 'payoff' && !inactive) add(locale.pendingPayoff);
+    else if (category === 'consequence') {
+      if (inactive || /^(?:past|historical|archived|expired)$/.test(timeScope)) add(locale.continuingConsequence);
+      else add(locale.pendingPayoff);
     }
+    else if (category === 'overpromotionrisk') add(locale.prohibitedInference);
     if (category === 'sourceevidencefallback') add(locale.sourceEvidenceBoundary);
     return qualifiers;
   };
@@ -17492,6 +17517,7 @@ const MODE_PROFILES = Object.freeze({
     return merged;
   };
   const packetCoreRecallEntriesDuplicate = (left = {}, right = {}) => {
+    if (left.continuityLane && right.continuityLane && left.continuityLane !== right.continuityLane) return false;
     if (!left.bodyKey || !right.bodyKey) return false;
     if (left.boundaryKey !== right.boundaryKey) return false;
     const leftCategory = text(left?.row?.category || '');
@@ -17518,46 +17544,463 @@ const MODE_PROFILES = Object.freeze({
     if (entityOverlap > 0 && minCoverage >= 0.62 && tokenStats.overlap >= 3) return true;
     return false;
   };
+
+  const CONTINUITY_EVIDENCE_LANES = Object.freeze({
+    latestState: 'latest_state',
+    confirmedChanges: 'confirmed_changes',
+    derivedSummaries: 'derived_summaries',
+    unresolvedConstraints: 'unresolved_constraints',
+    knowledgeBoundaries: 'knowledge_boundaries',
+    prohibitedInferences: 'prohibited_inferences'
+  });
+  const CONTINUITY_EVIDENCE_LANE_ORDER = Object.freeze([
+    CONTINUITY_EVIDENCE_LANES.latestState,
+    CONTINUITY_EVIDENCE_LANES.confirmedChanges,
+    CONTINUITY_EVIDENCE_LANES.derivedSummaries,
+    CONTINUITY_EVIDENCE_LANES.unresolvedConstraints,
+    CONTINUITY_EVIDENCE_LANES.knowledgeBoundaries,
+    CONTINUITY_EVIDENCE_LANES.prohibitedInferences
+  ]);
+  const CONTINUITY_EVIDENCE_LANE_HEADERS = Object.freeze({
+    [CONTINUITY_EVIDENCE_LANES.latestState]: '[LATEST VALID STATE]',
+    [CONTINUITY_EVIDENCE_LANES.confirmedChanges]: '[CONFIRMED EVENTS / CHANGES — chronological]',
+    [CONTINUITY_EVIDENCE_LANES.derivedSummaries]: '[DERIVED CONTINUITY SUMMARIES — supporting evidence]',
+    [CONTINUITY_EVIDENCE_LANES.unresolvedConstraints]: '[UNRESOLVED CONSTRAINTS]',
+    [CONTINUITY_EVIDENCE_LANES.knowledgeBoundaries]: '[KNOWLEDGE BOUNDARIES]',
+    [CONTINUITY_EVIDENCE_LANES.prohibitedInferences]: '[PROHIBITED INFERENCES]'
+  });
+  const CONTINUITY_EVIDENCE_STATE_CATEGORY_RE = /^(?:character|relation|currentstate|state|worldrule|faction|region|summarymemory|ledgerrev2summarymemory)$/;
+  const CONTINUITY_EVIDENCE_EVENT_CATEGORY_RE = /^(?:activeevent|historicalevent|eventmemory|scenedelta|criticaldialogue|sourceevidencefallback)$/;
+  const CONTINUITY_EVIDENCE_UNRESOLVED_CATEGORY_RE = /^(?:continuitylock|donotresolveyet|openinvitation|payoff|conflicttrace|offscreenthread)$/;
+  const CONTINUITY_EVIDENCE_KNOWLEDGE_CATEGORY_RE = /^(?:povmemory|secret|speakerboundary|consentmemory)$/;
+  const CONTINUITY_EVIDENCE_INACTIVE_STATUS_RE = /^(?:resolved|completed|closed|ended|expired|retired|inactive|cancelled|canceled|dormant|faded|superseded|replaced|obsolete|overridden)$/;
+  const CONTINUITY_EVIDENCE_INVALID_STATUS_RE = /^(?:false|falsesecret|retracted|invalid|invalidated)$/;
+  const CONTINUITY_EVIDENCE_UNCERTAIN_STATUS_RE = /^(?:contested|disputed|conflicting|uncertain)$/;
+  const CONTINUITY_EVIDENCE_FUTURE_SCOPE_RE = /^(?:future|planned|proposed|possible|pendingfuture)$/;
+  const CONTINUITY_EVIDENCE_INACTIVE_SCOPE_RE = /^(?:nolongertrue|inactive|ended|expired|resolved|superseded|replaced|obsolete|overridden)$/;
+
+  const continuityEvidenceStatusOf = row => normalizeKey(row?.lifecycle?.status || row?._memoryLifecycle?.status || '');
+  const continuityEvidenceTruthOf = row => normalizeKey(row?.visibility?.truthState || '');
+  const continuityEvidenceCategoryOf = row => normalizeKey(row?.category || '');
+  const continuityEvidenceTimeScopeOf = row => normalizeKey(effectivePublicTimeScope(row));
+  const continuityEvidenceIsInactive = row => CONTINUITY_EVIDENCE_INACTIVE_STATUS_RE.test(continuityEvidenceStatusOf(row))
+    || CONTINUITY_EVIDENCE_INACTIVE_SCOPE_RE.test(continuityEvidenceTimeScopeOf(row));
+  const continuityEvidenceIsHistoryIntent = query => isPastStateLookupQuery(query)
+    || isExplicitStateHistoryComparisonQuery(query)
+    || isLiveOverlayPastOrComparisonQuery(query);
+  const continuityEvidenceLaneFor = (axis, row = {}, options = {}) => {
+    const override = text(options?.laneOverride || '').trim();
+    if (CONTINUITY_EVIDENCE_LANE_ORDER.includes(override)) return override;
+    const category = continuityEvidenceCategoryOf(row);
+    const status = continuityEvidenceStatusOf(row);
+    const truth = continuityEvidenceTruthOf(row);
+    const timeScope = continuityEvidenceTimeScopeOf(row);
+    const summaryCategory = /^(?:summarymemory|ledgerrev2summarymemory)$/.test(category);
+    if (CONTINUITY_EVIDENCE_KNOWLEDGE_CATEGORY_RE.test(category)) return CONTINUITY_EVIDENCE_LANES.knowledgeBoundaries;
+    if (category === 'overpromotionrisk'
+      || CONTINUITY_EVIDENCE_INVALID_STATUS_RE.test(status)
+      || truth === 'false') return CONTINUITY_EVIDENCE_LANES.prohibitedInferences;
+    if (summaryCategory) {
+      if (CONTINUITY_EVIDENCE_FUTURE_SCOPE_RE.test(timeScope)) return CONTINUITY_EVIDENCE_LANES.unresolvedConstraints;
+      return CONTINUITY_EVIDENCE_LANES.derivedSummaries;
+    }
+    if (CONTINUITY_EVIDENCE_UNRESOLVED_CATEGORY_RE.test(category)) {
+      if (continuityEvidenceIsInactive(row)) return CONTINUITY_EVIDENCE_LANES.confirmedChanges;
+      return CONTINUITY_EVIDENCE_LANES.unresolvedConstraints;
+    }
+    if (category === 'consequence') {
+      return continuityEvidenceIsInactive(row) || /^(?:past|historical|archived|expired)$/.test(timeScope)
+        ? CONTINUITY_EVIDENCE_LANES.confirmedChanges
+        : CONTINUITY_EVIDENCE_LANES.unresolvedConstraints;
+    }
+    if (CONTINUITY_EVIDENCE_EVENT_CATEGORY_RE.test(category)) {
+      if (CONTINUITY_EVIDENCE_FUTURE_SCOPE_RE.test(timeScope)
+        || /^(?:planned|proposed|possible|pending|pendingfuture|contested|disputed|conflicting|uncertain)$/.test(status)
+        || /^(?:contested|disputed|conflicting|unknown|uncertain|unverified)$/.test(truth)) {
+        return CONTINUITY_EVIDENCE_LANES.unresolvedConstraints;
+      }
+      return CONTINUITY_EVIDENCE_LANES.confirmedChanges;
+    }
+    if (CONTINUITY_EVIDENCE_STATE_CATEGORY_RE.test(category)) {
+      if (continuityEvidenceIsInactive(row)
+        || CONTINUITY_EVIDENCE_INVALID_STATUS_RE.test(status)
+        || CONTINUITY_EVIDENCE_UNCERTAIN_STATUS_RE.test(status)
+        || /^(?:contested|disputed|conflicting|unknown|uncertain|unverified)$/.test(truth)
+        || CONTINUITY_EVIDENCE_FUTURE_SCOPE_RE.test(timeScope)
+        || /^(?:past|historical|archived|expired|prior|priorsnapshotcurrentunconfirmed|historicalunspecified)$/.test(timeScope)
+        || /^(?:prior_scene|prior_snapshot)/.test(text(row?.sceneRelation || ''))) return CONTINUITY_EVIDENCE_LANES.confirmedChanges;
+      return CONTINUITY_EVIDENCE_LANES.latestState;
+    }
+    return CONTINUITY_EVIDENCE_LANES.confirmedChanges;
+  };
+
+  const continuityEvidenceStrictTimeInfo = row => {
+    const raw = text(row?.temporal?.eventTime || row?.sourceTime || '').trim();
+    const match = raw.match(/^(\d{4})[-./](\d{1,2})[-./](\d{1,2})(?:[T\s]+(\d{1,2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?(?:\s*(Z|[+-]\d{2}:?\d{2}))?)?$/i);
+    if (!match) return null;
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    const hour = Number(match[4] || 0);
+    const minute = Number(match[5] || 0);
+    const second = Number(match[6] || 0);
+    const millisecond = Number(text(match[7] || '').padEnd(3, '0') || 0);
+    if (year < 1 || month < 1 || month > 12 || day < 1 || day > 31
+      || hour > 23 || minute > 59 || second > 59) return null;
+    const calendar = new Date(0);
+    calendar.setUTCHours(hour, minute, second, millisecond);
+    calendar.setUTCFullYear(year, month - 1, day);
+    if (calendar.getUTCFullYear() !== year || calendar.getUTCMonth() !== month - 1
+      || calendar.getUTCDate() !== day || calendar.getUTCHours() !== hour
+      || calendar.getUTCMinutes() !== minute || calendar.getUTCSeconds() !== second) return null;
+    let value = calendar.getTime();
+    const zone = text(match[8] || '').trim();
+    if (zone && zone.toUpperCase() !== 'Z') {
+      const offset = zone.match(/^([+-])(\d{2}):?(\d{2})$/);
+      if (!offset) return null;
+      const offsetHours = Number(offset[2]);
+      const offsetMinutes = Number(offset[3]);
+      if (offsetHours > 23 || offsetMinutes > 59) return null;
+      const direction = offset[1] === '-' ? -1 : 1;
+      value -= direction * ((offsetHours * 60) + offsetMinutes) * 60_000;
+    }
+    return Number.isFinite(value) ? { value, domain: zone ? 'aware' : 'naive' } : null;
+  };
+  const continuityEvidenceStrictTimeValue = row => continuityEvidenceStrictTimeInfo(row)?.value ?? null;
+  const continuityEvidenceFinite = (...values) => values
+    .filter(value => value !== null && value !== undefined && value !== '')
+    .map(Number).find(Number.isFinite);
+  const continuityEvidenceObservationRank = row => {
+    const locator = row?.locator || {};
+    const retrieval = row?.retrieval || {};
+    return {
+      epoch: text(locator.sessionEpoch || retrieval.sessionEpoch || '').trim(),
+      worldlineOrdinal: continuityEvidenceFinite(locator.worldlineOrdinal, retrieval.worldlineOrdinal),
+      pairIndex: continuityEvidenceFinite(locator.sourcePairIndex, retrieval.sourcePairIndex, row?.targetPairIndex),
+      messageIndex: continuityEvidenceFinite(locator.messageIndex, retrieval.messageIndex),
+      turnId: continuityEvidenceFinite(locator.turnId, retrieval.turnId),
+      chatRecency: continuityEvidenceFinite(locator.chatRecency, retrieval.chatRecency),
+      distanceFromLatest: continuityEvidenceFinite(locator.distanceFromLatest, retrieval.distanceFromLatest),
+      observedAt: continuityEvidenceStrictTimeValue({
+        temporal: { eventTime: row?.temporal?.observedAt || row?.temporal?.lastConfirmedAt || '' }
+      }),
+      createdAt: continuityEvidenceFinite(locator.createdAt, row?.capturedAt, row?.updatedAt),
+      score: Number(row?.score || 0),
+      importance: Number(row?.importance || 0)
+    };
+  };
+  const continuityEvidenceCompareNumber = (left, right) => (
+    Number.isFinite(left) && Number.isFinite(right) && left !== right ? left - right : 0
+  );
+  const compareContinuityEvidenceTemporalObservation = (leftRow, rightRow) => {
+    const left = continuityEvidenceObservationRank(leftRow);
+    const right = continuityEvidenceObservationRank(rightRow);
+    const sameEpoch = !left.epoch || !right.epoch || left.epoch === right.epoch;
+    return continuityEvidenceCompareNumber(left.worldlineOrdinal, right.worldlineOrdinal)
+      || (sameEpoch ? continuityEvidenceCompareNumber(left.pairIndex, right.pairIndex) : 0)
+      || (sameEpoch ? continuityEvidenceCompareNumber(left.messageIndex, right.messageIndex) : 0)
+      || (sameEpoch ? continuityEvidenceCompareNumber(left.turnId, right.turnId) : 0)
+      || continuityEvidenceCompareNumber(left.observedAt, right.observedAt)
+      || continuityEvidenceCompareNumber(left.chatRecency, right.chatRecency)
+      || -continuityEvidenceCompareNumber(left.distanceFromLatest, right.distanceFromLatest)
+      || continuityEvidenceCompareNumber(left.createdAt, right.createdAt);
+  };
+  const compareContinuityEvidenceObservation = (leftRow, rightRow) => {
+    const left = continuityEvidenceObservationRank(leftRow);
+    const right = continuityEvidenceObservationRank(rightRow);
+    return compareContinuityEvidenceTemporalObservation(leftRow, rightRow)
+      || left.score - right.score
+      || left.importance - right.importance;
+  };
+  const continuityEvidenceEntryStableKey = entry => [
+    normalizeKey(entry?.axis || entry?.row?.axis || ''),
+    continuityEvidenceCategoryOf(entry?.row),
+    ...continuityEvidenceEntryRefs(entry).sort(),
+    normalizeKey(entry?.bodyKey || entry?.memory || entry?.row?.publicText || '')
+  ].join('\u0001');
+  const compareContinuityEvidenceEntryObservation = (left, right) => (
+    compareContinuityEvidenceObservation(left?.row, right?.row)
+    || continuityEvidenceEntryStableKey(left).localeCompare(continuityEvidenceEntryStableKey(right))
+  );
+  const compareContinuityEvidenceEvents = (left, right) => {
+    const leftTime = continuityEvidenceStrictTimeInfo(left?.row);
+    const rightTime = continuityEvidenceStrictTimeInfo(right?.row);
+    if (leftTime && rightTime && leftTime.domain === rightTime.domain && leftTime.value !== rightTime.value) {
+      return leftTime.value - rightTime.value;
+    }
+    return compareContinuityEvidenceEntryObservation(left, right);
+  };
+  const continuityEvidenceSortConfirmed = entries => {
+    const values = ensureArray(entries);
+    if (values.length < 2) return values;
+    const edges = values.map(() => new Set());
+    const indegree = values.map(() => 0);
+    for (let leftIndex = 0; leftIndex < values.length; leftIndex += 1) {
+      const leftTime = continuityEvidenceStrictTimeInfo(values[leftIndex]?.row);
+      if (!leftTime) continue;
+      for (let rightIndex = leftIndex + 1; rightIndex < values.length; rightIndex += 1) {
+        const rightTime = continuityEvidenceStrictTimeInfo(values[rightIndex]?.row);
+        if (!rightTime || leftTime.domain !== rightTime.domain || leftTime.value === rightTime.value) continue;
+        const before = leftTime.value < rightTime.value ? leftIndex : rightIndex;
+        const after = before === leftIndex ? rightIndex : leftIndex;
+        if (!edges[before].has(after)) {
+          edges[before].add(after);
+          indegree[after] += 1;
+        }
+      }
+    }
+    const ready = values.map((_, index) => index).filter(index => indegree[index] === 0);
+    const ordered = [];
+    while (ready.length) {
+      ready.sort((leftIndex, rightIndex) => compareContinuityEvidenceEntryObservation(values[leftIndex], values[rightIndex]));
+      const index = ready.shift();
+      ordered.push(values[index]);
+      for (const next of edges[index]) {
+        indegree[next] -= 1;
+        if (indegree[next] === 0) ready.push(next);
+      }
+    }
+    if (ordered.length !== values.length) return values.sort(compareContinuityEvidenceEntryObservation);
+    values.splice(0, values.length, ...ordered);
+    return values;
+  };
+  const continuityEvidenceStateKey = entry => {
+    const row = entry?.row || {};
+    const axis = text(entry?.axis || row?.axis || '').trim();
+    const category = continuityEvidenceCategoryOf(row);
+    const atomic = objectish(row?.retrieval?.atomicRecord) ? row.retrieval.atomicRecord : {};
+    const subjectRefs = uniq([
+      atomic.subjectRefs,
+      row?.retrieval?.subject,
+      row?.retrieval?.entityNames,
+      row?.retrieval?.relationEndpoints,
+      row?.locator?.subject
+    ].flatMap(value => ensureArray(value)).map(normalizeKey).filter(Boolean).sort(), 24);
+    const canonical = uniq([
+      row?.retrieval?.canonicalAnchors,
+      row?.retrieval?.canonicalTokens,
+      row?.retrieval?.conceptTokens
+    ].flatMap(value => ensureArray(value)).map(normalizeKey)
+      .filter(value => /^(?:entity|person|relation|place|object|info|state|event):/.test(text(value))), 16).sort();
+    const relation = ensureArray(row?.retrieval?.relationEndpoints).map(normalizeKey).filter(Boolean).sort();
+    const ref = normalizeKey(row?.publicRef || row?.ref || row?.id || '');
+    const scene = normalizeKey(row?.scene_id || row?.sceneId || row?.locator?.sceneId || '');
+    const predicate = normalizeKey(atomic.predicate || '');
+    const structuredSubject = subjectRefs.join('|');
+    const subject = relation.length
+      ? [relation.join('|'), predicate].filter(Boolean).join('|')
+      : (predicate && structuredSubject
+          ? [structuredSubject, predicate, canonical.join('|')].filter(Boolean).join('|')
+          : (ref || [structuredSubject, canonical.join('|')].filter(Boolean).join('|') || 'global'));
+    return [axis, category, category === 'currentstate' || category === 'state' ? scene : '', subject].join('\u0001');
+  };
+  const continuityEvidenceEntryRefs = entry => uniq([
+    entry?.row?.publicRef,
+    entry?.row?.ref,
+    entry?.row?.id,
+    entry?.row?._sourceRef
+  ].flatMap(value => ensureArray(value)).map(normalizeKey).filter(Boolean), 24);
+  const continuityEvidenceSameStableIdentity = (left, right) => {
+    const leftAxis = normalizeKey(left?.axis || left?.row?.axis || '');
+    const rightAxis = normalizeKey(right?.axis || right?.row?.axis || '');
+    const leftCategory = continuityEvidenceCategoryOf(left?.row);
+    const rightCategory = continuityEvidenceCategoryOf(right?.row);
+    // A reused public ref is not sufficient across schema axes or evidence
+    // classes. Implicit closure is intentionally narrower than an explicit
+    // replacement edge.
+    if (leftAxis !== rightAxis || leftCategory !== rightCategory) return false;
+    const leftRefs = continuityEvidenceEntryRefs(left);
+    const rightRefs = new Set(continuityEvidenceEntryRefs(right));
+    if (leftRefs.some(ref => rightRefs.has(ref))) return true;
+    if (!/^(?:character|relation|currentstate|state|worldrule|faction|region)$/.test(leftCategory)) return false;
+    const leftKey = continuityEvidenceStateKey(left);
+    const rightKey = continuityEvidenceStateKey(right);
+    if (!leftKey || leftKey !== rightKey) return false;
+    return text(leftKey).split('\u0001').pop() !== 'global';
+  };
+  const continuityEvidenceReplacementTargets = entry => uniq([
+    entry?.row?.lifecycle?.replaces,
+    entry?.row?.replaces,
+    entry?.row?.supersedes,
+    entry?.row?.invalidates
+  ].flatMap(value => ensureArray(value)).flatMap(value => text(value).split(/[\s,|]+/))
+    .map(normalizeKey).filter(Boolean), 24);
+  const continuityEvidenceSameObservationEpoch = (leftRow, rightRow) => {
+    const left = continuityEvidenceObservationRank(leftRow);
+    const right = continuityEvidenceObservationRank(rightRow);
+    return !left.epoch || !right.epoch || left.epoch === right.epoch;
+  };
+  const packetCoreRecallEntryFromRow = (axis, row, query = '', viewContext = {}, options = {}) => {
+    const body = modelMemoryBodyForRow(row, query);
+    if (!body) return null;
+    const language = modelMemoryViewLanguage(row, body);
+    const continuityLane = continuityEvidenceLaneFor(axis, row, options);
+    const locale = MODEL_MEMORY_VIEW_LOCALES[language] || MODEL_MEMORY_VIEW_LOCALES.ko;
+    const renderedBody = continuityLane === CONTINUITY_EVIDENCE_LANES.prohibitedInferences
+      ? modelMemorySentence(locale.unsupportedInference(body), language)
+      : modelMemoryDiegeticBody(row, body, language);
+    const memory = continuityLane === CONTINUITY_EVIDENCE_LANES.prohibitedInferences
+      ? (renderedBody ? `- ${renderedBody}` : '')
+      : publicStateView(axis, row, query, viewContext);
+    if (!memory || !renderedBody) return null;
+    const bodyParts = packetCoreRecallBodyParts(renderedBody, language);
+    const sourceKey = packetCoreRecallSourceKey(row);
+    return {
+      axis,
+      row,
+      memory,
+      language,
+      continuityLane,
+      prefix: bodyParts.prefix,
+      clauses: bodyParts.clauses,
+      extras: continuityLane === CONTINUITY_EVIDENCE_LANES.prohibitedInferences
+        ? []
+        : packetCoreRecallExtraStatements(axis, row, query, viewContext, language),
+      bodyKey: normalizeKey(body),
+      lineKey: normalizeKey(memory),
+      boundaryKey: packetCoreRecallBoundaryKey(row),
+      tokens: packetCoreRecallSpecificTokens(row, body),
+      entities: packetCoreRecallEntityKeys(row),
+      semanticKeys: packetCoreRecallSemanticKeys(row, body),
+      sourceKeys: sourceKey ? [sourceKey] : [],
+      sourceRows: [{ axis, row }],
+      mergedDuplicates: 0
+    };
+  };
+  const continuityEvidenceResolveEntries = (entries = [], query = '') => {
+    const historyIntent = continuityEvidenceIsHistoryIntent(query);
+    const latestGroups = new Map();
+    const retained = [];
+    const sourceEntries = ensureArray(entries);
+    const explicitlyReplaced = new Set();
+    for (const replacement of sourceEntries) {
+      const targets = new Set(continuityEvidenceReplacementTargets(replacement));
+      if (!targets.size) continue;
+      for (const candidate of sourceEntries) {
+        if (candidate === replacement || !continuityEvidenceSameObservationEpoch(candidate?.row, replacement?.row)) continue;
+        if (!continuityEvidenceEntryRefs(candidate).some(ref => targets.has(ref))) continue;
+        const candidateAxis = normalizeKey(candidate?.axis || candidate?.row?.axis || '');
+        const replacementAxis = normalizeKey(replacement?.axis || replacement?.row?.axis || '');
+        if (candidateAxis !== replacementAxis
+          || continuityEvidenceCategoryOf(candidate?.row) !== continuityEvidenceCategoryOf(replacement?.row)) continue;
+        const candidateTime = continuityEvidenceStrictTimeInfo(candidate?.row);
+        const replacementTime = continuityEvidenceStrictTimeInfo(replacement?.row);
+        if (candidateTime && replacementTime && candidateTime.domain === replacementTime.domain
+          && replacementTime.value < candidateTime.value) continue;
+        // An exact replacement edge supplies direction when temporal metadata is
+        // tied or absent. Ignore it only when authoritative observation order
+        // positively proves that the purported replacement is older.
+        if (compareContinuityEvidenceTemporalObservation(candidate?.row, replacement?.row) <= 0) explicitlyReplaced.add(candidate);
+      }
+    }
+    for (const terminal of sourceEntries) {
+      if (!continuityEvidenceIsInactive(terminal?.row)) continue;
+      for (const candidate of sourceEntries) {
+        if (candidate === terminal || continuityEvidenceIsInactive(candidate?.row)) continue;
+        if (!continuityEvidenceSameObservationEpoch(candidate?.row, terminal?.row)) continue;
+        if (!continuityEvidenceSameStableIdentity(candidate, terminal)) continue;
+        const candidateTime = continuityEvidenceStrictTimeInfo(candidate?.row);
+        const terminalTime = continuityEvidenceStrictTimeInfo(terminal?.row);
+        if (candidateTime && terminalTime && candidateTime.domain !== terminalTime.domain) continue;
+        if (candidateTime && terminalTime && candidateTime.domain === terminalTime.domain
+          && terminalTime.value < candidateTime.value) continue;
+        // A terminal lifecycle update closes the same stable fact even when an
+        // upstream schema omitted an explicit `replaces` edge. A positively
+        // newer active observation still wins.
+        if (compareContinuityEvidenceTemporalObservation(candidate?.row, terminal?.row) <= 0) explicitlyReplaced.add(candidate);
+      }
+    }
+    const crossLaneWinner = new Map();
+    sourceEntries.forEach(entry => {
+      if (explicitlyReplaced.has(entry)) return;
+      if (!entry?.bodyKey) return;
+      const rank = entry.continuityLane === CONTINUITY_EVIDENCE_LANES.prohibitedInferences
+        ? 3
+        : (entry.continuityLane === CONTINUITY_EVIDENCE_LANES.unresolvedConstraints ? 2 : 0);
+      if (!rank) return;
+      const previous = crossLaneWinner.get(entry.bodyKey);
+      if (!previous || rank > previous.rank) crossLaneWinner.set(entry.bodyKey, { entry, rank });
+    });
+    for (const entry of sourceEntries) {
+      if (explicitlyReplaced.has(entry)) continue;
+      const preferred = crossLaneWinner.get(entry?.bodyKey);
+      if (preferred && preferred.entry !== entry
+        && [
+          CONTINUITY_EVIDENCE_LANES.latestState,
+          CONTINUITY_EVIDENCE_LANES.confirmedChanges,
+          CONTINUITY_EVIDENCE_LANES.derivedSummaries
+        ].includes(entry?.continuityLane)) continue;
+      if (entry?.continuityLane === CONTINUITY_EVIDENCE_LANES.latestState) {
+        const key = continuityEvidenceStateKey(entry);
+        const previous = latestGroups.get(key);
+        if (!previous || compareContinuityEvidenceObservation(previous.row, entry.row) < 0) latestGroups.set(key, entry);
+        continue;
+      }
+      const category = continuityEvidenceCategoryOf(entry?.row);
+      if (!historyIntent && CONTINUITY_EVIDENCE_STATE_CATEGORY_RE.test(category) && continuityEvidenceIsInactive(entry?.row)) continue;
+      retained.push(entry);
+    }
+    const latest = [...latestGroups.values()]
+      .sort((left, right) => compareContinuityEvidenceObservation(right.row, left.row));
+    const buckets = new Map(CONTINUITY_EVIDENCE_LANE_ORDER.map(lane => [lane, []]));
+    [...latest, ...retained].forEach(entry => {
+      if (!buckets.has(entry.continuityLane)) return;
+      buckets.get(entry.continuityLane).push(entry);
+    });
+    continuityEvidenceSortConfirmed(buckets.get(CONTINUITY_EVIDENCE_LANES.confirmedChanges));
+    for (const lane of [
+      CONTINUITY_EVIDENCE_LANES.derivedSummaries,
+      CONTINUITY_EVIDENCE_LANES.unresolvedConstraints,
+      CONTINUITY_EVIDENCE_LANES.knowledgeBoundaries,
+      CONTINUITY_EVIDENCE_LANES.prohibitedInferences
+    ]) buckets.get(lane).sort((left, right) => compareContinuityEvidenceObservation(right.row, left.row));
+
+    // Reserve one row for every present evidence class before filling remaining
+    // slots by semantic priority. This prevents high-scoring history from
+    // starving a knowledge boundary or prohibited-inference guardrail.
+    const selected = new Set();
+    for (const lane of CONTINUITY_EVIDENCE_LANE_ORDER) {
+      const first = buckets.get(lane)?.[0];
+      if (first) selected.add(first);
+    }
+    for (const lane of CONTINUITY_EVIDENCE_LANE_ORDER) {
+      for (const entry of buckets.get(lane) || []) {
+        if (selected.size >= PACKET_CORE_RECALL_ROW_LIMIT) break;
+        selected.add(entry);
+      }
+    }
+    return CONTINUITY_EVIDENCE_LANE_ORDER.flatMap(lane => (
+      (buckets.get(lane) || []).filter(entry => selected.has(entry))
+    )).slice(0, PACKET_CORE_RECALL_ROW_LIMIT);
+  };
   const packetCoreRecallEntries = (selected = {}, query = '') => {
     const rows = packetCoreRecallRows(selected, PACKET_CORE_RECALL_CANDIDATE_LIMIT, query);
+    const temporalRows = ensureArray(selected?.temporalOrder).filter(Boolean).slice(-6);
     const viewContext = {
       selectedCharacterCount: rows.filter(({ axis, row }) => axis === 'entity' && row.category === 'character').length
     };
     const entries = [];
-    for (const { axis, row } of rows) {
-      const memory = publicStateView(axis, row, query, viewContext);
-      const body = modelMemoryBodyForRow(row, query);
-      if (!memory || !body) continue;
-      const language = modelMemoryViewLanguage(row, body);
-      const bodyParts = packetCoreRecallBodyParts(modelMemoryDiegeticBody(row, body, language), language);
-      const sourceKey = packetCoreRecallSourceKey(row);
-      const entry = {
-        axis,
+    const candidates = [
+      ...rows.map(candidate => ({ ...candidate, laneOverride: '' })),
+      ...temporalRows.map((row, index) => ({
+        axis: row?.axis || 'world',
         row,
-        memory,
-        language,
-        prefix: bodyParts.prefix,
-        clauses: bodyParts.clauses,
-        extras: packetCoreRecallExtraStatements(axis, row, query, viewContext, language),
-        bodyKey: normalizeKey(body),
-        lineKey: normalizeKey(memory),
-        boundaryKey: packetCoreRecallBoundaryKey(row),
-        tokens: packetCoreRecallSpecificTokens(row, body),
-        entities: packetCoreRecallEntityKeys(row),
-        semanticKeys: packetCoreRecallSemanticKeys(row, body),
-        sourceKeys: sourceKey ? [sourceKey] : [],
-        sourceRows: [{ axis, row }],
-        mergedDuplicates: 0
-      };
+        laneOverride: index === temporalRows.length - 1
+          ? CONTINUITY_EVIDENCE_LANES.latestState
+          : CONTINUITY_EVIDENCE_LANES.confirmedChanges
+      }))
+    ];
+    for (const { axis, row, laneOverride } of candidates) {
+      const entry = packetCoreRecallEntryFromRow(axis, row, query, viewContext, { laneOverride });
+      if (!entry) continue;
       const duplicateIndex = entries.findIndex(existing => packetCoreRecallEntriesDuplicate(existing, entry));
       if (duplicateIndex < 0) {
         entries.push(entry);
-        if (entries.length >= PACKET_CORE_RECALL_ROW_LIMIT) break;
         continue;
       }
       entries[duplicateIndex] = packetCoreRecallMergeEntries(entries[duplicateIndex], entry);
     }
-    return entries.slice(0, PACKET_CORE_RECALL_ROW_LIMIT);
+    return continuityEvidenceResolveEntries(entries, query);
   };
 
   const packetCoreRecallDeliveryRowKey = (axis, row = {}) => [
@@ -17584,39 +18027,54 @@ const MODE_PROFILES = Object.freeze({
       : configured;
     const locale = MODEL_MEMORY_VIEW_LOCALES[language] || MODEL_MEMORY_VIEW_LOCALES.ko;
     const cap = Math.max(0, Math.min(9000, Math.floor(injectionCapForSettings(settings) * 0.72)));
-    const renderEntries = values => [locale.contextLead, '', ...values.map(entry => entry.memory)]
-      .join('\n').trim();
+    const renderEntries = values => {
+      const grouped = new Map(CONTINUITY_EVIDENCE_LANE_ORDER.map(lane => [lane, []]));
+      ensureArray(values).forEach(entry => {
+        if (grouped.has(entry?.continuityLane) && entry?.memory) grouped.get(entry.continuityLane).push(entry.memory);
+      });
+      const lines = [locale.contextLead];
+      for (const lane of CONTINUITY_EVIDENCE_LANE_ORDER) {
+        const laneRows = grouped.get(lane) || [];
+        if (!laneRows.length) continue;
+        lines.push('', CONTINUITY_EVIDENCE_LANE_HEADERS[lane], ...laneRows);
+      }
+      return lines.join('\n').trim();
+    };
     const source = renderEntries(entries);
     let keptEntries = entries;
     if (source.length > cap) {
       keptEntries = [];
-      const kept = [locale.contextLead, ''];
-      let firstOversizedEntry = null;
-      for (const entry of entries) {
-        const record = entry.memory;
-        if (!record) continue;
-        const candidate = [...kept, record].join('\n');
-        if (candidate.length > cap) {
-          if (!firstOversizedEntry) firstOversizedEntry = entry;
-          // An oversized row must not prevent a later, shorter continuity lock
-          // from being considered.
-          continue;
-        }
-        kept.push(record);
-        keptEntries.push(entry);
+      const laneEntries = lane => entries.filter(entry => entry?.continuityLane === lane);
+      const latestEntries = laneEntries(CONTINUITY_EVIDENCE_LANES.latestState);
+      const unresolvedEntries = laneEntries(CONTINUITY_EVIDENCE_LANES.unresolvedConstraints);
+      const knowledgeEntries = laneEntries(CONTINUITY_EVIDENCE_LANES.knowledgeBoundaries);
+      const prohibitedEntries = laneEntries(CONTINUITY_EVIDENCE_LANES.prohibitedInferences);
+      const confirmedEntries = laneEntries(CONTINUITY_EVIDENCE_LANES.confirmedChanges);
+      const derivedEntries = laneEntries(CONTINUITY_EVIDENCE_LANES.derivedSummaries);
+      const packingOrder = [
+        latestEntries[0],
+        prohibitedEntries[0],
+        knowledgeEntries[0],
+        unresolvedEntries[0],
+        ...latestEntries.slice(1),
+        ...unresolvedEntries.slice(1),
+        ...knowledgeEntries.slice(1),
+        ...prohibitedEntries.slice(1),
+        ...confirmedEntries,
+        ...derivedEntries
+      ].filter(Boolean);
+      for (const entry of packingOrder) {
+        if (!entry?.memory) continue;
+        const candidate = renderEntries([...keptEntries, entry]);
+        if (candidate.length <= cap) keptEntries.push(entry);
       }
-      // Only compact an oversized row when nothing else could be delivered.
-      // Compacting it eagerly would consume the whole budget and starve shorter
-      // locks that appear later in the globally ranked candidate list.
-      if (!keptEntries.length && firstOversizedEntry) {
-        const remaining = Math.max(0, cap - kept.join('\n').length - 1);
-        if (remaining >= 80) {
-          const compactRecord = compact(firstOversizedEntry.memory, remaining);
-          if (compactRecord) {
-            kept.push(compactRecord);
-            keptEntries.push({ ...firstOversizedEntry, memory: compactRecord });
-          }
-        }
+      const selectedLatestState = entries.some(entry => entry?.continuityLane === CONTINUITY_EVIDENCE_LANES.latestState);
+      const deliveredLatestState = keptEntries.some(entry => entry?.continuityLane === CONTINUITY_EVIDENCE_LANES.latestState);
+      if (selectedLatestState && !deliveredLatestState) {
+        // A transition chain without its terminal current projection can regress
+        // the scene. Preserve safety constraints/knowledge guards, but fail closed
+        // on historical event delivery when the latest state cannot fit atomically.
+        keptEntries = keptEntries.filter(entry => entry?.continuityLane !== CONTINUITY_EVIDENCE_LANES.confirmedChanges);
       }
     }
     const selectedRowKeys = uniq(entries.flatMap(entry => ensureArray(entry?.sourceRows)
@@ -17627,7 +18085,7 @@ const MODE_PROFILES = Object.freeze({
       .filter(Boolean)), 128);
     const delivered = new Set(deliveredRowKeys);
     return {
-      text: source.length <= cap ? source : renderEntries(keptEntries),
+      text: source.length <= cap ? source : (keptEntries.length ? renderEntries(keptEntries) : ''),
       selectedEntries: entries.length,
       renderedEntries: keptEntries.length,
       selectedRowKeys,
@@ -17682,10 +18140,103 @@ const MODE_PROFILES = Object.freeze({
     };
     return { ...base, contractHash: stableHash64(JSON.stringify(base)) };
   };
+
+  const CONTINUITY_EVIDENCE_USE_LOCALES = Object.freeze({
+    ko: Object.freeze({
+      full: Object.freeze([
+        '현재 보이는 대화와 ACTIVE SCENE HEAD가 최신 근거다. 최신 사용자 메시지는 완료가 최종 결과로 확정되지 않는 한 진술·요청·의도·시도이지 완료 사건이 아니다.',
+        'CONFIRMED EVENTS는 성립한 증거다. LATEST VALID STATE는 그 증거의 최신 투영이다. LOCK/DO-NOT-RESOLVE는 제약, OPEN INVITATION과 PAYOFF는 미해결, PROHIBITED INFERENCE는 금지 해석이며 사건이 아니다.',
+        '표시 순서는 시간순이 아니다. 명시 사건 시각을 우선하고, 없으면 활성 세계선·대화 쌍·메시지 순서로 변화를 적용한다. 충돌 시 현재 대화·최종 결과, 최신 장면·상태, 오래된 직접 증거, 파생 요약 순이며 불명확성은 유지한다.',
+        '기록되지 않은 과거를 만들거나 재연하지 말고 지식 경계를 넘거나 무관한 기억, HAYAKU, 패킷을 언급하지 않는다.'
+      ]),
+      compact: Object.freeze([
+        '현재 대화와 ACTIVE SCENE HEAD가 최신 근거이며, 최신 사용자 메시지는 완료가 확정되지 않는 한 의도·요청·시도다.',
+        '표시 순서가 아닌 사건 시각과 활성 세계선 순서로 최신 상태를 도출한다. LOCK은 제약, INVITATION·PAYOFF는 미해결, PROHIBITED INFERENCE는 사건이 아니다.',
+        '현재·최종 결과를 우선하고 불확실성과 지식 경계를 지키며, 과거를 발명·재연하거나 HAYAKU를 언급하지 않는다.'
+      ]),
+      critical: Object.freeze([
+        '현재 대화·ACTIVE SCENE HEAD가 최신이며, 사용자 의도·요청·시도를 완료 사건으로 바꾸지 않는다.',
+        '시간·세계선으로 최신 상태를 도출하고 제약·미해결·금지 추론을 사건화하지 않으며, 과거를 만들거나 지식 경계를 넘지 않는다.'
+      ])
+    }),
+    en: Object.freeze({
+      full: Object.freeze([
+        'The active visible conversation and ACTIVE SCENE HEAD are newest. The latest user message is a statement, request, intent, or attempt unless a finalized outcome establishes completion.',
+        'CONFIRMED EVENTS are established evidence; LATEST VALID STATE is its newest projection. LOCK/DO-NOT-RESOLVE is a constraint, INVITATION and PAYOFF are unresolved, and PROHIBITED INFERENCE is never an event.',
+        'Display order is not chronology. Apply explicit event time, then active-worldline, pair, and message order. Prefer current/final outcome, latest scene/state, older direct evidence, then derived summary; preserve uncertainty.',
+        'Do not invent or replay missing history, cross knowledge boundaries, repeat irrelevant memory, or mention HAYAKU or packets.'
+      ]),
+      compact: Object.freeze([
+        'Current conversation and ACTIVE SCENE HEAD are newest; the latest user message is intent/request/attempt unless completion is established.',
+        'Derive latest state by event time and active-worldline order, not display order. LOCK is a constraint, INVITATION/PAYOFF unresolved, and PROHIBITED INFERENCE not an event.',
+        'Prefer current/final evidence, preserve uncertainty and knowledge boundaries, and never invent/replay history or mention HAYAKU.'
+      ]),
+      critical: Object.freeze([
+        'Current conversation/ACTIVE SCENE HEAD is newest; user intent, requests, or attempts are not completed outcomes.',
+        'Use time/worldline for latest state; never make constraints, unresolved rows, or prohibited inferences into events or cross knowledge boundaries.'
+      ])
+    }),
+    ja: Object.freeze({
+      full: Object.freeze([
+        '現在の会話と ACTIVE SCENE HEAD が最新であり、最新ユーザー文は確定結果が完了を示さない限り発言・依頼・意図・試みである。',
+        'CONFIRMED EVENTS は成立した証拠、LATEST VALID STATE はその最新投影である。LOCK は制約、INVITATION と PAYOFF は未解決、PROHIBITED INFERENCE は事件ではない。',
+        '表示順ではなく事件時刻、次にアクティブ世界線・会話ペア・メッセージ順を使う。現在・確定結果、最新状態、古い直接証拠、派生要約の順に優先し、不確実性を保つ。',
+        '記録のない過去を作成・再演せず、知識境界を越えず、無関係な記憶や HAYAKU を語らない。'
+      ]),
+      compact: Object.freeze([
+        '現在の会話と ACTIVE SCENE HEAD が最新で、ユーザー文は確定まで意図・依頼・試みである。',
+        '表示順でなく事件時刻と世界線順で最新状態を導く。LOCK は制約、INVITATION/PAYOFF は未解決、PROHIBITED INFERENCE は事件ではない。',
+        '現在・確定結果を優先し、不確実性と知識境界を守り、過去を作成・再演せず HAYAKU を語らない。'
+      ]),
+      critical: Object.freeze([
+        '現在の会話・ACTIVE SCENE HEAD が最新で、ユーザーの意図・依頼・試みは完了結果ではない。',
+        '時間・世界線で最新状態を導き、制約・未解決・禁止推論を事件化せず知識境界を守る。'
+      ])
+    }),
+    zh: Object.freeze({
+      full: Object.freeze([
+        '当前对话和 ACTIVE SCENE HEAD 最新；除非最终结果确认完成，最新用户消息仍是陈述、请求、意图或尝试。',
+        'CONFIRMED EVENTS 是已成立依据，LATEST VALID STATE 是其最新投影。LOCK 是约束，INVITATION 与 PAYOFF 未解决，PROHIBITED INFERENCE 不是事件。',
+        '不要按显示顺序判断时间；依次使用事件时间、活动世界线、对话对与消息顺序。优先当前或最终结果、最新状态、较早直接证据、派生摘要，并保留不确定性。',
+        '不要虚构或重演缺失历史、越过知识边界、重复无关记忆或提及 HAYAKU。'
+      ]),
+      compact: Object.freeze([
+        '当前对话和 ACTIVE SCENE HEAD 最新；用户消息在确认前仍是意图、请求或尝试。',
+        '按事件时间和世界线而非显示顺序推导最新状态。LOCK 是约束，INVITATION/PAYOFF 未解决，PROHIBITED INFERENCE 不是事件。',
+        '优先当前或最终依据，保留不确定性与知识边界，不虚构或重演历史，也不提及 HAYAKU。'
+      ]),
+      critical: Object.freeze([
+        '当前对话与 ACTIVE SCENE HEAD 最新；用户意图、请求或尝试不是完成结果。',
+        '按时间与世界线得出最新状态，不把约束、未解决项或禁止推论变成事件，并守住知识边界。'
+      ])
+    })
+  });
+  const continuityEvidenceUseLanguage = (settings = Memory.settings || DEFAULT_SETTINGS) => {
+    const configured = normalizeMemoryLanguage(settings?.memoryLanguage || DEFAULT_SETTINGS.memoryLanguage);
+    if (configured !== 'source') return CONTINUITY_EVIDENCE_USE_LOCALES[configured] ? configured : 'en';
+    const sample = [settings?.sceneBaton?.text, settings?.sceneAnchors?.location, settings?.sceneAnchors?.time]
+      .filter(Boolean).join(' ');
+    const inferred = inferMemoryNoteLanguage(sample);
+    return CONTINUITY_EVIDENCE_USE_LOCALES[inferred] ? inferred : 'en';
+  };
+  const buildContinuityEvidenceUseInstruction = (settings = Memory.settings || DEFAULT_SETTINGS, options = {}) => {
+    const profile = options?.critical === true
+      ? 'critical'
+      : (options?.compact === true ? 'compact' : 'full');
+    const language = continuityEvidenceUseLanguage(settings);
+    const locale = CONTINUITY_EVIDENCE_USE_LOCALES[language] || CONTINUITY_EVIDENCE_USE_LOCALES.en;
+    return [
+      CONTINUITY_EVIDENCE_USE_START,
+      ...ensureArray(locale[profile]),
+      CONTINUITY_EVIDENCE_USE_END
+    ].join('\n').trim();
+  };
   const buildPacketCoreStaticWriteInstruction = (settings = Memory.settings || DEFAULT_SETTINGS) => {
     if (packetCoreWriteSuppressed(settings)) return '';
     const staticSettings = packetStaticContractSettings(settings);
     const lines = [
+      buildContinuityEvidenceUseInstruction(staticSettings),
+      '',
       PACKET_CORE_WRITE_START,
       '<hayaku_packet_contract version="p3">',
       '<purpose>',
@@ -17724,7 +18275,12 @@ const MODE_PROFILES = Object.freeze({
     const staticSettings = packetStaticContractSettings(settings);
     const recoveryActive = recoveryRequestActive(staticSettings);
     const critical = options?.critical === true;
-    const lines = [PACKET_CORE_WRITE_START, '<hayaku_packet_contract version="p3-compact">'];
+    const lines = [
+      buildContinuityEvidenceUseInstruction(staticSettings, { compact: !critical, critical }),
+      '',
+      PACKET_CORE_WRITE_START,
+      '<hayaku_packet_contract version="p3-compact">'
+    ];
     lines.push(
       'Do not change the active preset\'s visible format. The completed visible artifact is the current outcome; the latest user message is only intent or attempt unless that artifact or the preset confirms it.',
       'Use only accepted packet memory, objective canon, and the completed visible artifact. Objective canon is not automatically character knowledge. Exclude reasoning, control/style text, proposals, and unrealized futures.',
@@ -18865,7 +19421,10 @@ const MODE_PROFILES = Object.freeze({
       const selectedForModel = selectedWithLiveOverlay;
       const promptMode = normalizedInjectionMode(settings.promptMode || DEFAULT_SETTINGS.promptMode);
       const temporalOrder = stage('temporalOrder', () => {
-        const packetOrder = previousTurnRecallBridge.active ? temporalOrderRowsFromPackets(livePackets, 4) : [];
+        // Chronology belongs to the accepted active-worldline packet set, not to
+        // the optional previous-turn bridge. The bridge remains a structured
+        // retrieval diagnostic and its raw prose is never injected.
+        const packetOrder = temporalOrderRowsFromPackets(livePackets, 4);
         return packetOrder.length >= 2 ? packetOrder : selectTemporalOrderRows(store, selectedForModel, 4);
       });
       const selectedForContext = { ...selectedForModel, temporalOrder };
@@ -27076,8 +27635,12 @@ ${sourceChatId}`)}`;
         packetCoreRecallEntriesDuplicate,
         packetCoreRecallBodyParts,
         packetCoreRecallMergeEntries,
+        continuityEvidenceLaneFor,
+        continuityEvidenceResolveEntries,
+        compareContinuityEvidenceObservation,
         publicStateView,
         buildSceneBaton,
+        buildContinuityEvidenceUseInstruction,
         buildPacketCoreStaticWriteInstruction,
         buildPacketCoreCompactWriteInstruction,
         packetRequestLineageInstruction,
