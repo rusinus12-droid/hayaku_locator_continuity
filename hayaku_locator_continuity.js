@@ -1,9 +1,10 @@
 //@name hayaku_locator_continuity
-//@display-name HAYAKU · Locator Continuity v2.3.64
+//@display-name HAYAKU · Locator Continuity v2.3.65
 //@author rusinus12@gmail.com
 //@api 3.0
-//@version 2.3.64
+//@version 2.3.65
 
+/* v2.3.65 caches fully verified immutable archive hydration snapshots by archive-head identity, preventing deep gzip-chain LRU thrashing while keeping the existing layer cache as a bounded fallback and clearing archive caches on unload. */
 /* v2.3.64 activates provider-native prompt-cache interception in native mode, aligns OpenAI explicit breakpoints and Anthropic model thresholds/multi-breakpoint coexistence, and treats Gemini 2.5+ as provider-managed implicit caching while preserving preconfigured explicit cachedContent. */
 /* v2.3.63 makes a unique persisted user-message id authoritative over request/live text-hash drift, rejects conflicting ids and nonces before append affinity, and immediately rekeys a post-processed finalized packet when the same stable U, target pair, and validated request nonce agree. */
 /* v2.3.62 gives the response model a typed continuity-evidence contract, resolves latest valid state and chronological transitions, and keeps unresolved constraints, knowledge boundaries, and prohibited inferences from becoming occurred events. */
@@ -118,7 +119,7 @@
   };
 
   const PLUGIN_NAME = 'HAYAKU';
-  const PLUGIN_VERSION = '2.3.64';
+  const PLUGIN_VERSION = '2.3.65';
   const HAYAKU_PACKET_AUTHORING_PROFILE_SCHEMA = 'hayaku-packet-authoring-profile-v1';
   const HAYAKU_PACKET_AUTHORING_ALIAS_LANGUAGES = Object.freeze(['ko', 'en', 'ja', 'zh']);
   const HAYAKU_CANONICAL_ANCHOR_PREFIXES = Object.freeze([
@@ -139,9 +140,13 @@
   const HAYAKU_ARCHIVE_GZIP_MIN_CHARS = 16384;
   const HAYAKU_ARCHIVE_GZIP_MIN_SAVINGS = 0.08;
   const HAYAKU_ARCHIVE_BODY_CACHE_MAX = 12;
+  const HAYAKU_ARCHIVE_HYDRATED_CACHE_MAX = 2;
   const HayakuArchiveBodyCache = new Map();
+  const HayakuHydratedArchiveCache = new Map();
   const HayakuArchiveCompressionStats = {
     compressedWrites: 0, plainWrites: 0, decompressions: 0, cacheHits: 0,
+    hydratedCacheHits: 0, hydratedCacheMisses: 0, hydratedCacheWrites: 0,
+    hydratedCacheEvictions: 0, hydratedBodyEntriesReleased: 0,
     compressedBytes: 0, rawChars: 0, failures: 0, lastError: ''
   };
   const HAYAKU_ARCHIVE_KEY_PREFIX = 'hayaku.v2.shared_archive.';
@@ -20837,9 +20842,82 @@ const MODE_PROFILES = Object.freeze({
       && layers.length === Math.max(1, finiteNonNegativeInteger(head.depth, layers.length));
     return { archiveRef: head, memberIds, records: memberIds.length, layers, verified, digest, reason: verified ? 'archive_meta_verified' : 'archive_meta_digest_mismatch', maxHistoricalOrdinal };
   };
+  const hayakuHydratedArchiveCacheKey = archiveRefValue => {
+    const head = normalizeHayakuArchiveRef(archiveRefValue);
+    if (!head) return '';
+    return stableHash64([
+      head.archiveId || '',
+      head.storageKey || '',
+      head.metaKey || '',
+      head.generation || 0,
+      head.depth || 0,
+      head.recordCount || 0,
+      head.digest || ''
+    ].join('\u0001'));
+  };
+  const touchHayakuHydratedArchiveCache = (key, entry) => {
+    if (!key || !entry) return null;
+    HayakuHydratedArchiveCache.delete(key);
+    HayakuHydratedArchiveCache.set(key, entry);
+    return entry;
+  };
+  const cacheHayakuHydratedArchive = (archiveRefValue, archiveResult) => {
+    if (archiveResult?.verified !== true) return archiveResult;
+    const key = hayakuHydratedArchiveCacheKey(archiveRefValue);
+    if (!key) return archiveResult;
+    const entry = {
+      archiveRef: normalizeHayakuArchiveRef(archiveResult.archiveRef || archiveRefValue),
+      // Keep only the merged normalized record set. Retaining parsed layer bodies here
+      // would duplicate the same archive records after we release the per-layer cache.
+      records: ensureArray(archiveResult.records),
+      digest: compact(archiveResult.digest || '', 96),
+      reason: archiveResult.reason || 'archive_verified',
+      cachedAt: now()
+    };
+    touchHayakuHydratedArchiveCache(key, entry);
+    HayakuArchiveCompressionStats.hydratedCacheWrites += 1;
+    while (HayakuHydratedArchiveCache.size > HAYAKU_ARCHIVE_HYDRATED_CACHE_MAX) {
+      const oldest = HayakuHydratedArchiveCache.keys().next().value;
+      if (oldest === undefined) break;
+      HayakuHydratedArchiveCache.delete(oldest);
+      HayakuArchiveCompressionStats.hydratedCacheEvictions += 1;
+    }
+    // A verified merged snapshot already contains every immutable delta record in
+    // this chain. Release the per-layer decoded bodies for this chain so the new
+    // cache replaces, rather than duplicates, their RAM footprint.
+    for (const layer of ensureArray(archiveResult.layers)) {
+      const storageKey = compact(layer?.ref?.storageKey || '', 240);
+      if (storageKey && HayakuArchiveBodyCache.delete(storageKey)) {
+        HayakuArchiveCompressionStats.hydratedBodyEntriesReleased += 1;
+      }
+    }
+    return archiveResult;
+  };
+  const readHayakuHydratedArchiveCache = archiveRefValue => {
+    const key = hayakuHydratedArchiveCacheKey(archiveRefValue);
+    if (!key) return null;
+    const entry = HayakuHydratedArchiveCache.get(key);
+    if (!entry) {
+      HayakuArchiveCompressionStats.hydratedCacheMisses += 1;
+      return null;
+    }
+    HayakuArchiveCompressionStats.hydratedCacheHits += 1;
+    touchHayakuHydratedArchiveCache(key, entry);
+    return {
+      archiveRef: entry.archiveRef,
+      records: entry.records,
+      archive: null,
+      layers: [],
+      verified: true,
+      digest: entry.digest,
+      reason: 'archive_hydrated_cache_hit'
+    };
+  };
   const readHayakuSharedArchive = async archiveRefValue => {
     const head = normalizeHayakuArchiveRef(archiveRefValue);
     if (!head) return { archiveRef: null, records: [], archive: null, layers: [], verified: false, reason: 'archive_ref_absent' };
+    const hydratedCache = readHayakuHydratedArchiveCache(head);
+    if (hydratedCache) return hydratedCache;
     const seen = new Set();
     const layers = [];
     let cursor = head;
@@ -20867,7 +20945,8 @@ const MODE_PROFILES = Object.freeze({
     const records = mergeHayakuArchiveRecords(...layers.slice().reverse().map(layer => layer.records));
     const digest = stableHash64(records.map(hayakuArchiveRecordIdentity).sort().join('\u0001'));
     const verified = records.length === head.recordCount && digest === head.digest;
-    return { archiveRef: head, records, archive: layers[0]?.archive || null, layers, verified, digest, reason: verified ? 'archive_verified' : 'archive_digest_mismatch' };
+    const result = { archiveRef: head, records, archive: layers[0]?.archive || null, layers, verified, digest, reason: verified ? 'archive_verified' : 'archive_digest_mismatch' };
+    return verified ? cacheHayakuHydratedArchive(head, result) : result;
   };
   const hydrateHayakuLedgerArchive = async ledger => {
     const archiveRef = normalizeHayakuArchiveRef(ledger?.archiveRef);
@@ -27715,6 +27794,9 @@ ${sourceChatId}`)}`;
           schema: HAYAKU_ARCHIVE_GZIP_SCHEMA,
           supported: hayakuGzipSupported(),
           cacheEntries: HayakuArchiveBodyCache.size,
+          bodyCacheMax: HAYAKU_ARCHIVE_BODY_CACHE_MAX,
+          hydratedCacheEntries: HayakuHydratedArchiveCache.size,
+          hydratedCacheMax: HAYAKU_ARCHIVE_HYDRATED_CACHE_MAX,
           ...clone(HayakuArchiveCompressionStats, {})
         },
         operationLog: operationLogSnapshot(),
@@ -28061,6 +28143,8 @@ ${sourceChatId}`)}`;
         Memory.packetScanCache.clear();
         Memory.projectionCache.clear();
         Memory.copiedChatSourceCache.clear();
+        HayakuArchiveBodyCache.clear();
+        HayakuHydratedArchiveCache.clear();
         Memory.compatRequestDeadlines.clear();
         for (const key of [...Memory.finalizedCaptureMonitors.keys()]) stopFinalizedCaptureMonitor(key);
         Memory.finalizedCaptureInFlight.clear();
