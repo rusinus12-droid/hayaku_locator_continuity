@@ -1,9 +1,12 @@
 //@name hayaku_locator_continuity
-//@display-name HAYAKU · Locator Continuity v2.4.0
+//@display-name HAYAKU · Locator Continuity v2.4.3
 //@author rusinus12@gmail.com
 //@api 3.0
-//@version 2.4.0
+//@version 2.4.3
 
+/* v2.4.3 avoids the Permissions-Policy-blocked Clipboard API inside RisuAI about:srcdoc containers, prefers a synchronous ownerDocument execCommand copy path with focus/selection restoration, and falls back to the existing visible debug JSON panel when copying is unavailable. */
+/* v2.4.2 replaces unavailable host-native confirm() in orphan cleanup with an in-viewer confirmation dialog, so verified cleanup no longer self-cancels in RisuAI plugin containers. */
+/* v2.4.1 keeps rollback/reroll audit branches out of the default ledger view and makes manual orphan cleanup remove the whole verified discarded branch, including orphan-owned audit/quarantine copies, while creating system tombstones so hidden live-chat mirrors cannot resurrect deleted packets. */
 /* v2.4.0 promotes the mature 2.3 continuity core into a long-form RP memory release: evidence-pressure recall budgeting, slot-level current-state projection, validity-aware temporal decay, cue-driven latent episodic reactivation, hardened structured packet normalization, generation-lineage v2 reroll binding, longer fail-soft recall budgets, archive hydration caching, native prompt-cache support, and verified manual orphan cleanup are retained as the new 2.4 baseline without changing the packet schema revision. */
 /* v2.3.78 adds a fail-closed manual orphan cleanup that physically removes only verified local orphan records, reconciles dangling slot heads and orphan-node packet references, preserves all active, quarantined, inherited, permanent, protected, tombstoned, and audit-retained data, and requires explicit UI confirmation. */
 /* v2.3.77 gives every main generation attempt a unique request_lineage_v2 identity, keeps stable U + parent + pair as the turn owner, and permits finalized response-hash refresh only with exact generation output proof while retaining legacy v1 and all foreign-branch rejection gates. */
@@ -138,7 +141,7 @@
   };
 
   const PLUGIN_NAME = 'HAYAKU';
-  const PLUGIN_VERSION = '2.4.0';
+  const PLUGIN_VERSION = '2.4.3';
   const REQUEST_LINEAGE_IDENTITY_VERSION = 2;
   const REQUEST_LINEAGE_SCHEMA_V2 = 'hayaku_request_lineage_v2';
   const HAYAKU_PACKET_AUTHORING_PROFILE_SCHEMA = 'hayaku-packet-authoring-profile-v1';
@@ -24268,19 +24271,36 @@ ${sourceChatId}`)}`;
   const manualOrphanCleanupPlan = ledger => {
     const records = ensureArray(ledger?.records).map(normalizeStorageRecord).filter(Boolean);
     const worldline = normalizeTurnWorldline(ledger?.worldline);
-    const nodesById = new Map(ensureArray(worldline.nodes)
-      .filter(Boolean).map(node => [compact(node?.turnNodeId || '', 96), node]));
-    const nonOrphanRecordHashes = new Set(records
-      .filter(record => record.recordState !== 'orphaned')
-      .map(record => compact(record.hash || '', 96)).filter(Boolean));
-    const nonOrphanWorldlineHashes = new Set();
-    ensureArray(worldline.nodes).forEach(node => {
-      if (node?.status === 'orphaned') return;
-      ensureArray(node?.packetHashes).forEach(hash => {
-        const normalizedHash = compact(hash || '', 96);
-        if (normalizedHash) nonOrphanWorldlineHashes.add(normalizedHash);
-      });
-    });
+    const nodes = ensureArray(worldline.nodes).filter(Boolean);
+    const nodesById = new Map(nodes.map(node => [compact(node?.turnNodeId || '', 96), node]));
+    const headNode = nodesById.get(compact(worldline?.headTurnNodeId || '', 96)) || null;
+    const activeNodes = nodes.filter(node => node?.status === 'active');
+    const activePairIndices = new Set(activeNodes
+      .map(node => finiteNonNegativeInteger(node?.pairIndex, 0)).filter(Boolean));
+    const headPairIndex = finiteNonNegativeInteger(headNode?.pairIndex, 0)
+      || activeNodes.reduce((max, node) => Math.max(max, finiteNonNegativeInteger(node?.pairIndex, 0)), 0);
+    const pendingRequestNonces = new Set(ensureArray(Memory.pendingCaptures)
+      .map(entry => compact(entry?.lineage?.requestNonce || entry?.requestNonce || '', 128))
+      .filter(Boolean));
+    const ownerNodeFor = record => nodesById.get(compact(record?.ownerTurnNodeId || '', 96)) || null;
+    const isVerifiedDiscardedBranchRecord = record => {
+      const state = normalizeStorageSlotState(record?.recordState || 'unbound');
+      const ownerNode = ownerNodeFor(record);
+      if (state === 'orphaned') return true;
+      if (ownerNode?.status === 'orphaned') return true;
+      const pairIndex = finiteNonNegativeInteger(record?.targetPairIndex, 0);
+      const requestNonce = compact(record?.requestNonce || '', 128);
+      if (
+        pairIndex
+        && headPairIndex
+        && pairIndex > headPairIndex
+        && !activePairIndices.has(pairIndex)
+        && !pendingRequestNonces.has(requestNonce)
+        && ['superseded', 'quarantined', 'detached', 'orphaned'].includes(state)
+      ) return true;
+      return false;
+    };
+    const discardedBranchRecords = records.filter(isVerifiedDiscardedBranchRecord);
     const candidateRecords = [];
     const protectedRecords = [];
     const protectedByReason = {};
@@ -24288,7 +24308,7 @@ ${sourceChatId}`)}`;
       protectedRecords.push(record);
       protectedByReason[reason] = Math.max(0, Number(protectedByReason[reason] || 0)) + 1;
     };
-    records.filter(record => record.recordState === 'orphaned').forEach(record => {
+    discardedBranchRecords.forEach(record => {
       let reason = '';
       if (record.archiveReferenceOnly === true) reason = 'archive_reference';
       else if (record.memoryClass !== 'live') reason = 'non_live_memory';
@@ -24298,27 +24318,32 @@ ${sourceChatId}`)}`;
       else if (record.orphanExempt === true) reason = 'orphan_exempt';
       else if (record.retentionProtected === true) reason = 'retention_protected';
       else if (record.deletionProtected === true) reason = 'deletion_protected';
-      else if (record.auditRetained === true) reason = 'audit_retained';
       const ownerTurnNodeId = compact(record.ownerTurnNodeId || '', 96);
-      if (!reason && ownerTurnNodeId) {
-        const ownerNode = nodesById.get(ownerTurnNodeId);
-        if (!ownerNode) reason = 'owner_node_unverified';
-        else if (ownerNode.status !== 'orphaned') reason = 'owner_node_not_orphaned';
+      const ownerNode = ownerTurnNodeId ? nodesById.get(ownerTurnNodeId) : null;
+      const pairIndex = finiteNonNegativeInteger(record?.targetPairIndex, 0);
+      const futureDiscard = pairIndex && headPairIndex && pairIndex > headPairIndex && !activePairIndices.has(pairIndex);
+      // Audit copies are normally protected, but a user-requested orphan cleanup
+      // must be able to remove audit/quarantine variants that belong exclusively
+      // to a verified rollback-discarded branch. Audit copies on a still-valid
+      // branch remain protected.
+      if (!reason && record.auditRetained === true && ownerNode?.status !== 'orphaned' && !futureDiscard) {
+        reason = 'audit_retained';
       }
-      const recordHash = compact(record.hash || '', 96);
-      if (
-        !reason
-        && recordHash
-        && !nonOrphanRecordHashes.has(recordHash)
-        && nonOrphanWorldlineHashes.has(recordHash)
-      ) reason = 'non_orphan_worldline_reference';
+      if (!reason && ownerTurnNodeId) {
+        if (!ownerNode) reason = 'owner_node_unverified';
+        else if (ownerNode.status !== 'orphaned' && record.recordState === 'orphaned') reason = 'owner_node_not_orphaned';
+      } else if (!reason && !futureDiscard && record.recordState !== 'orphaned') {
+        reason = 'owner_node_unverified';
+      }
       if (reason) protect(record, reason);
       else candidateRecords.push(record);
     });
     return {
       records,
       worldline,
-      orphanedRecords: candidateRecords.length + protectedRecords.length,
+      headPairIndex,
+      discardedBranchRecords: discardedBranchRecords.length,
+      orphanedRecords: discardedBranchRecords.length,
       candidateRecords,
       protectedRecords,
       protectedByReason,
@@ -24460,12 +24485,44 @@ ${sourceChatId}`)}`;
       };
     }
     const removedRecordIds = new Set(plan.candidateRecords.map(record => record.recordId));
-    const removedHashes = new Set(plan.candidateRecords.map(record => record.hash));
+    const removedHashes = new Set(plan.candidateRecords.map(record => record.hash).filter(Boolean));
     const records = plan.records.filter(record => !removedRecordIds.has(record.recordId));
-    const survivingHashes = new Set(records.map(record => record.hash));
+    const survivingHashes = new Set(records.map(record => record.hash).filter(Boolean));
     const fullyRemovedHashes = new Set([...removedHashes].filter(hash => !survivingHashes.has(hash)));
-    const tombstoneSlots = new Set(ensureArray(ledger.tombstones)
-      .map(normalizeStorageTombstone).filter(tombstone => tombstone?.active === true)
+    const survivingSlotIds = new Set(records.map(storageRecordSlotId).filter(Boolean));
+    const removedSlotIds = new Set(plan.candidateRecords.map(storageRecordSlotId).filter(Boolean));
+    const fullyRemovedSlotIds = new Set([...removedSlotIds].filter(slotId => !survivingSlotIds.has(slotId)));
+    const tombstonesBySlot = new Map(ensureArray(ledger.tombstones)
+      .map(normalizeStorageTombstone).filter(Boolean).map(tombstone => [tombstone.slotId, tombstone]));
+    let tombstonesCreated = 0;
+    for (const record of plan.candidateRecords) {
+      const slotId = storageRecordSlotId(record);
+      if (!slotId || !fullyRemovedSlotIds.has(slotId)) continue;
+      const existing = tombstonesBySlot.get(slotId);
+      if (existing?.active === true) continue;
+      const tombstone = normalizeStorageTombstone({
+        slotId,
+        // Blank record/hash intentionally suppresses the whole discarded slot.
+        // A hidden live-chat mirror may otherwise recreate the same packet after
+        // the pluginStorage record has been physically deleted.
+        variantHash: '',
+        recordId: '',
+        reason: 'manual_orphan_cleanup',
+        intent: 'system',
+        targetPairIndex: finiteNonNegativeInteger(record?.targetPairIndex, 0),
+        createdAt: now(),
+        active: true
+      });
+      if (tombstone) {
+        tombstonesBySlot.set(slotId, tombstone);
+        tombstonesCreated += 1;
+      }
+    }
+    const tombstones = [...tombstonesBySlot.values()]
+      .map(normalizeStorageTombstone).filter(Boolean)
+      .sort((a, b) => Number(a.createdAt || 0) - Number(b.createdAt || 0))
+      .slice(-STORAGE_LEDGER_MAX_TOMBSTONES);
+    const tombstoneSlots = new Set(tombstones.filter(tombstone => tombstone?.active === true)
       .map(tombstone => tombstone.slotId));
     const slotHeads = ensureArray(ledger.slotHeads).map(normalizeStorageSlotHead).filter(Boolean).map(head => {
       const pointsAtRemovedRecord = removedRecordIds.has(head.selectedRecordId);
@@ -24488,19 +24545,30 @@ ${sourceChatId}`)}`;
       nodes: ensureArray(plan.worldline.nodes).map(node => {
         if (node?.status !== 'orphaned' || !fullyRemovedHashes.size) return node;
         const packetHashes = ensureArray(node.packetHashes).filter(hash => !fullyRemovedHashes.has(hash));
+        const quarantinedPacketHashes = ensureArray(node.quarantinedPacketHashes).filter(hash => !fullyRemovedHashes.has(hash));
         worldlineReferencesCleared += Math.max(0, ensureArray(node.packetHashes).length - packetHashes.length);
-        return packetHashes.length === ensureArray(node.packetHashes).length ? node : { ...node, packetHashes, updatedAt: now() };
+        worldlineReferencesCleared += Math.max(0, ensureArray(node.quarantinedPacketHashes).length - quarantinedPacketHashes.length);
+        if (
+          packetHashes.length === ensureArray(node.packetHashes).length
+          && quarantinedPacketHashes.length === ensureArray(node.quarantinedPacketHashes).length
+        ) return node;
+        return { ...node, packetHashes, quarantinedPacketHashes, updatedAt: now() };
       })
     });
     const commit = await writeStorageLedgerDirect(scope, {
       ...ledger,
       records,
       slotHeads,
+      tombstones,
       worldline
     }, 'manual_orphan_cleanup', { preserveExactRecords: true });
     const durableRemovedIds = new Set(ensureArray(commit.ledger?.records).map(record => record?.recordId).filter(Boolean));
+    const durableTombstoneSlots = new Set(ensureArray(commit.ledger?.tombstones)
+      .map(normalizeStorageTombstone).filter(tombstone => tombstone?.active === true)
+      .map(tombstone => tombstone.slotId));
     const verified = commit.durable === true
       && [...removedRecordIds].every(recordId => !durableRemovedIds.has(recordId))
+      && [...fullyRemovedSlotIds].every(slotId => durableTombstoneSlots.has(slotId))
       && ensureArray(commit.ledger?.records).length === records.length;
     const resultLedger = commit.ledger ? {
       ...commit.ledger,
@@ -24520,6 +24588,8 @@ ${sourceChatId}`)}`;
       removedChars: verified ? plan.removableChars : 0,
       protectedRecords: plan.protectedRecords.length,
       protectedByReason: clone(plan.protectedByReason, {}),
+      discardedBranchRecords: Math.max(0, Number(plan.discardedBranchRecords || 0) || 0),
+      tombstonesCreated: verified ? tombstonesCreated : 0,
       worldlineReferencesCleared: verified ? worldlineReferencesCleared : 0,
       ledger: resultLedger
     };
@@ -24531,6 +24601,8 @@ ${sourceChatId}`)}`;
         removedRecords: result.removedRecords,
         removedChars: result.removedChars,
         protectedRecords: result.protectedRecords,
+        discardedBranchRecords: result.discardedBranchRecords,
+        tombstonesCreated: result.tombstonesCreated,
         worldlineReferencesCleared: result.worldlineReferencesCleared,
         worldlineNodesPreserved: true,
         tombstonesPreserved: true
@@ -28581,17 +28653,7 @@ ${sourceChatId}`)}`;
       outcome: entry?.outcome || null
     }));
   };
-  const buildHayakuOperationDebugExport = async (options = {}) => {
-    let scope = objectish(options?.scope) ? options.scope : Memory.ledgerViewer.scope;
-    if (!scope) {
-      try { scope = await RisuCompat.currentChatScope(); }
-      catch (error) { scope = { confident: false, reason: compact(error?.message || error, 180) }; }
-    }
-    let ledger = objectish(options?.ledger) ? options.ledger : Memory.ledgerViewer.ledger;
-    if (!ledger && scope?.confident === true) {
-      try { ledger = await loadStorageLedger(scope); }
-      catch (error) { ledger = { enabled: false, reason: compact(error?.message || error, 180), records: [] }; }
-    }
+  const composeHayakuOperationDebugExport = (scope, ledger) => {
     const runtimeEnvironment = (() => {
       let timezone = '';
       try { timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (_) {}
@@ -28699,9 +28761,105 @@ ${sourceChatId}`)}`;
       }
     });
   };
+  const buildHayakuOperationDebugExport = async (options = {}) => {
+    let scope = objectish(options?.scope) ? options.scope : Memory.ledgerViewer.scope;
+    if (!scope) {
+      try { scope = await RisuCompat.currentChatScope(); }
+      catch (error) { scope = { confident: false, reason: compact(error?.message || error, 180) }; }
+    }
+    let ledger = objectish(options?.ledger) ? options.ledger : Memory.ledgerViewer.ledger;
+    if (!ledger && scope?.confident === true) {
+      try { ledger = await loadStorageLedger(scope); }
+      catch (error) { ledger = { enabled: false, reason: compact(error?.message || error, 180), records: [] }; }
+    }
+    return composeHayakuOperationDebugExport(scope, ledger);
+  };
+  const buildHayakuOperationDebugExportCached = () => {
+    const scope = Memory.ledgerViewer.scope;
+    const ledger = Memory.ledgerViewer.ledger;
+    if (!objectish(scope) || !objectish(ledger)) return null;
+    return composeHayakuOperationDebugExport(scope, ledger);
+  };
+  const viewerClipboardEnvironment = () => {
+    let doc = null;
+    let href = '';
+    let srcdoc = false;
+    try { doc = Memory.ledgerViewer.root?.ownerDocument || globalThis.document || null; } catch (_) { doc = null; }
+    try { href = text(doc?.location?.href || globalThis.location?.href || ''); } catch (_) { href = ''; }
+    try { srcdoc = href === 'about:srcdoc' || Boolean(globalThis.frameElement?.hasAttribute?.('srcdoc')); } catch (_) { srcdoc = href === 'about:srcdoc'; }
+    return { doc, href, srcdoc };
+  };
+  const viewerLegacyCopyText = value => {
+    const body = text(value || '');
+    const { doc } = viewerClipboardEnvironment();
+    if (!doc?.body || typeof doc.createElement !== 'function' || typeof doc.execCommand !== 'function') {
+      return { ok: false, method: 'execCommand', error: 'exec_command_unavailable' };
+    }
+    let area = null;
+    let copied = false;
+    let errorText = '';
+    let previousActive = null;
+    let previousSelection = [];
+    try {
+      previousActive = doc.activeElement || null;
+      const selection = doc.getSelection?.();
+      if (selection?.rangeCount) {
+        for (let i = 0; i < selection.rangeCount; i += 1) {
+          try { previousSelection.push(selection.getRangeAt(i).cloneRange()); } catch (_) {}
+        }
+      }
+      area = doc.createElement('textarea');
+      area.value = body;
+      area.setAttribute('readonly', 'readonly');
+      area.setAttribute('aria-hidden', 'true');
+      area.style.position = 'fixed';
+      area.style.left = '0';
+      area.style.top = '0';
+      area.style.width = '2px';
+      area.style.height = '2px';
+      area.style.opacity = '0.01';
+      area.style.pointerEvents = 'none';
+      area.style.zIndex = '2147483647';
+      doc.body.appendChild(area);
+      try { area.focus({ preventScroll: true }); } catch (_) { area.focus?.(); }
+      area.select?.();
+      area.setSelectionRange?.(0, body.length);
+      copied = doc.execCommand('copy') === true;
+    } catch (error) {
+      errorText = compact(error?.message || error, 300);
+    } finally {
+      try { area?.remove?.(); } catch (_) {}
+      try {
+        const selection = doc.getSelection?.();
+        if (selection) {
+          selection.removeAllRanges?.();
+          for (const range of previousSelection) selection.addRange?.(range);
+        }
+      } catch (_) {}
+      try { previousActive?.focus?.({ preventScroll: true }); } catch (_) {
+        try { previousActive?.focus?.(); } catch (_) {}
+      }
+    }
+    return copied
+      ? { ok: true, method: 'execCommand' }
+      : { ok: false, method: 'execCommand', error: errorText || 'exec_command_copy_failed' };
+  };
   const viewerCopyTextWithFallback = async value => {
     const body = text(value || '');
+    const environment = viewerClipboardEnvironment();
     let lastError = '';
+
+    // RisuAI renders plugin HTML inside about:srcdoc. Chromium blocks the
+    // asynchronous Clipboard API there by Permissions Policy even when
+    // navigator.clipboard exists, so do not call it and avoid the console
+    // violation entirely. Legacy execCommand remains tied to the viewer's
+    // ownerDocument and the original button gesture.
+    if (environment.srcdoc) {
+      const legacy = viewerLegacyCopyText(body);
+      if (legacy.ok) return legacy;
+      return { ok: false, method: 'none', error: legacy.error || 'srcdoc_clipboard_unavailable' };
+    }
+
     try {
       if (typeof navigator !== 'undefined' && typeof navigator.clipboard?.writeText === 'function') {
         await navigator.clipboard.writeText(body);
@@ -28710,24 +28868,10 @@ ${sourceChatId}`)}`;
     } catch (error) {
       lastError = compact(error?.message || error, 300);
     }
-    try {
-      if (typeof document !== 'undefined' && typeof document.execCommand === 'function' && document.body) {
-        const area = document.createElement('textarea');
-        area.value = body;
-        area.setAttribute('readonly', 'readonly');
-        area.style.position = 'fixed';
-        area.style.left = '-9999px';
-        area.style.top = '0';
-        document.body.appendChild(area);
-        area.focus?.();
-        area.select?.();
-        const copied = document.execCommand('copy');
-        area.remove();
-        if (copied) return { ok: true, method: 'execCommand' };
-      }
-    } catch (error) {
-      lastError = compact(error?.message || error, 300);
-    }
+
+    const legacy = viewerLegacyCopyText(body);
+    if (legacy.ok) return legacy;
+    if (!lastError) lastError = legacy.error || '';
     return { ok: false, method: 'none', error: lastError || 'clipboard_unavailable' };
   };
   const viewerSetStatusMessage = (message, isError = false) => {
@@ -28807,21 +28951,51 @@ ${sourceChatId}`)}`;
     if (!pairIndex || !requestNonce || !packetType) return '';
     return [pairIndex, requestNonce, packetType].join('\u0001');
   };
-  const viewerAuditCopyVisibility = records => {
+  const viewerAuditCopyVisibility = (records, ledger = Memory.ledgerViewer.ledger) => {
     const list = ensureArray(records);
+    const worldline = normalizeTurnWorldline(ledger?.worldline);
+    const nodes = ensureArray(worldline.nodes).filter(Boolean);
+    const nodesById = new Map(nodes.map(node => [compact(node?.turnNodeId || '', 96), node]));
+    const headNode = nodesById.get(compact(worldline?.headTurnNodeId || '', 96)) || null;
+    const headPairIndex = finiteNonNegativeInteger(headNode?.pairIndex, 0)
+      || nodes.filter(node => node?.status === 'active')
+        .reduce((max, node) => Math.max(max, finiteNonNegativeInteger(node?.pairIndex, 0)), 0);
     const activeKeys = new Set(list
       .filter(record => text(record?.recordState || '').toLowerCase() === 'active')
       .map(viewerAuditVariantKey)
       .filter(Boolean));
+    const pendingRequestNonces = new Set(ensureArray(Memory.pendingCaptures)
+      .map(entry => compact(entry?.lineage?.requestNonce || entry?.requestNonce || '', 128))
+      .filter(Boolean));
     const hiddenIds = new Set();
     for (const record of list) {
-      if (record?.auditRetained !== true) continue;
-      if (text(record?.recordState || '').toLowerCase() !== 'superseded') continue;
-      const key = viewerAuditVariantKey(record);
-      if (!key || !activeKeys.has(key)) continue;
-      hiddenIds.add(text(record?.recordId || record?.hash || key));
+      if (record?.inheritedSessionHistory === true || isPermanentHistoricalStorageRecord(record)) continue;
+      const recordId = text(record?.recordId || record?.hash || viewerAuditVariantKey(record));
+      if (!recordId) continue;
+      const state = text(record?.recordState || 'unbound').toLowerCase();
+      const ownerNode = nodesById.get(compact(record?.ownerTurnNodeId || '', 96)) || null;
+      const pairIndex = finiteNonNegativeInteger(record?.targetPairIndex, 0);
+      const futureDiscard = !!(
+        pairIndex
+        && headPairIndex
+        && pairIndex > headPairIndex
+        && ownerNode?.status !== 'active'
+      );
+      const retiredBranch = ['superseded', 'orphaned', 'detached', 'tombstoned'].includes(state)
+        || ownerNode?.status === 'orphaned'
+        || ownerNode?.status === 'superseded'
+        || futureDiscard;
+      const staleUnbound = state === 'unbound'
+        && !pendingRequestNonces.has(compact(record?.requestNonce || '', 128));
+      // Quarantined packets are non-authoritative by definition. Keep them
+      // inspectable, but only in the explicit audit/inactive view.
+      const nonAuthoritative = record?.auditRetained === true
+        || retiredBranch
+        || state === 'quarantined'
+        || staleUnbound;
+      if (nonAuthoritative) hiddenIds.add(recordId);
     }
-    return { activeKeys, hiddenIds };
+    return { activeKeys, hiddenIds, headPairIndex };
   };
   const viewerStateClass = state => (
     ['active', 'historical'].includes(text(state).toLowerCase())
@@ -28960,7 +29134,7 @@ ${sourceChatId}`)}`;
     const typeFilter = text(Memory.ledgerViewer.typeFilter || 'all');
     const search = text(Memory.ledgerViewer.search || '').trim().toLowerCase();
     const allRecords = ensureArray(ledger.records);
-    const auditVisibility = viewerAuditCopyVisibility(allRecords);
+    const auditVisibility = viewerAuditCopyVisibility(allRecords, ledger);
     const showAuditCopies = Memory.ledgerViewer.showAuditCopies === true;
     const records = allRecords.filter(record => {
       const recordId = text(record?.recordId || record?.hash || viewerAuditVariantKey(record));
@@ -28982,7 +29156,7 @@ ${sourceChatId}`)}`;
     const count = root.querySelector?.('#hayakuViewerVisibleCount');
     if (count) {
       const hiddenAuditCount = showAuditCopies ? 0 : auditVisibility.hiddenIds.size;
-      count.textContent = `${records.length} / ${allRecords.length}${hiddenAuditCount ? ` · 감사 사본 ${hiddenAuditCount} 숨김` : ''}`;
+      count.textContent = `${records.length} / ${allRecords.length}${hiddenAuditCount ? ` · 감사·비활성 ${hiddenAuditCount} 숨김` : ''}`;
     }
     if (!records.length) {
       body.innerHTML = '<div class="hv-empty"><strong>표시할 패킷이 없습니다.</strong><span>필터를 바꾸거나 현재 채팅에서 패킷이 저장되었는지 확인하세요.</span></div>';
@@ -29166,6 +29340,29 @@ ${sourceChatId}`)}`;
     return payload;
   };
   const copyHayakuOperationDebugJson = async () => {
+    const environment = viewerClipboardEnvironment();
+
+    // In RisuAI's about:srcdoc viewer, build from the already-loaded ledger
+    // synchronously so execCommand runs inside the original button gesture.
+    // This avoids both Permissions Policy violations and transient-activation loss.
+    if (environment.srcdoc) {
+      const cachedPayload = buildHayakuOperationDebugExportCached();
+      if (cachedPayload) {
+        const body = viewerPrettyJson(cachedPayload);
+        const result = viewerLegacyCopyText(body);
+        if (result.ok) {
+          Memory.ledgerViewer.debugExportText = '';
+          viewerRenderDebugExportText();
+          viewerSetStatusMessage('디버그 JSON을 복사했습니다.');
+        } else {
+          Memory.ledgerViewer.debugExportText = body;
+          viewerRenderDebugExportText();
+          viewerSetStatusMessage(`자동 복사를 사용할 수 없어 아래 영역에 표시했습니다. ${result.error}`, true);
+        }
+        return result;
+      }
+    }
+
     const payload = await buildHayakuOperationDebugExport();
     const body = viewerPrettyJson(payload);
     const result = await viewerCopyTextWithFallback(body);
@@ -29196,6 +29393,71 @@ ${sourceChatId}`)}`;
     }
     return ok;
   };
+  const viewerConfirmOrphanCleanup = (preview = {}) => new Promise(resolve => {
+    const root = Memory.ledgerViewer.root;
+    let doc = null;
+    try { doc = root?.ownerDocument || globalThis.document || null; } catch (_) { doc = null; }
+    const host = root?.querySelector?.('.hayaku-viewer') || root;
+    if (!root || !host || typeof doc?.createElement !== 'function') {
+      resolve(false);
+      return;
+    }
+    try { root.querySelector?.('#hayakuCleanupConfirmOverlay')?.remove?.(); } catch (_) {}
+    let settled = false;
+    const overlay = doc.createElement('div');
+    overlay.id = 'hayakuCleanupConfirmOverlay';
+    overlay.className = 'hv-confirm-overlay';
+    overlay.setAttribute('role', 'presentation');
+    const dialog = doc.createElement('section');
+    dialog.className = 'hv-confirm-dialog';
+    dialog.setAttribute('role', 'dialog');
+    dialog.setAttribute('aria-modal', 'true');
+    dialog.setAttribute('aria-labelledby', 'hayakuCleanupConfirmTitle');
+    const eyebrow = doc.createElement('small');
+    eyebrow.className = 'hv-confirm-eyebrow';
+    eyebrow.textContent = 'PERMANENT CLEANUP';
+    const title = doc.createElement('h2');
+    title.id = 'hayakuCleanupConfirmTitle';
+    title.textContent = '고아 데이터를 영구 삭제할까요?';
+    const summary = doc.createElement('p');
+    const removableRecords = Math.max(0, Number(preview?.removableRecords || 0) || 0);
+    const removableChars = Math.max(0, Number(preview?.removableChars || 0) || 0);
+    summary.textContent = `검증된 롤백 고아·비활성 레코드 ${removableRecords}개 (${removableChars.toLocaleString()}자)를 삭제합니다.`;
+    const note = doc.createElement('div');
+    note.className = 'hv-confirm-note';
+    note.textContent = '현재 활성 세계선·상속·영구·보호 데이터는 유지됩니다. 삭제된 분기 슬롯에는 system tombstone을 남겨 숨은 라이브챗 사본이 다시 유입되지 않게 합니다. 월드라인 고아 노드의 골격은 감사 흔적으로 남지만 패킷 본문은 제거됩니다.';
+    const actions = doc.createElement('div');
+    actions.className = 'hv-confirm-actions';
+    const cancelButton = doc.createElement('button');
+    cancelButton.type = 'button';
+    cancelButton.className = 'hv-btn';
+    cancelButton.textContent = '취소';
+    const deleteButton = doc.createElement('button');
+    deleteButton.type = 'button';
+    deleteButton.className = 'hv-btn danger';
+    deleteButton.textContent = `영구 삭제 (${removableRecords})`;
+    actions.append(cancelButton, deleteButton);
+    dialog.append(eyebrow, title, summary, note, actions);
+    overlay.appendChild(dialog);
+    const onKeydown = event => {
+      if (event?.key === 'Escape') finish(false);
+    };
+    const finish = value => {
+      if (settled) return;
+      settled = true;
+      try { doc.removeEventListener?.('keydown', onKeydown, true); } catch (_) {}
+      try { overlay.remove?.(); } catch (_) {}
+      resolve(value === true);
+    };
+    cancelButton.addEventListener('click', () => finish(false));
+    deleteButton.addEventListener('click', () => finish(true));
+    overlay.addEventListener('click', event => {
+      if (event?.target === overlay) finish(false);
+    });
+    doc.addEventListener?.('keydown', onKeydown, true);
+    host.appendChild(overlay);
+    try { deleteButton.focus?.(); } catch (_) {}
+  });
   const cleanupLedgerViewerOrphans = async () => {
     const root = Memory.ledgerViewer.root;
     if (!root || Memory.ledgerViewer.busy) return null;
@@ -29214,23 +29476,23 @@ ${sourceChatId}`)}`;
         viewerSetStatusMessage('정리할 수 있는 고아 데이터가 없습니다.');
         return preview;
       }
-      const confirmation = [
-        `확인된 고아 레코드 ${preview.removableRecords}개(${preview.removableChars.toLocaleString()}자)를 영구 삭제합니다.`,
-        '',
-        '활성·격리·상속·영구·보호 데이터와 tombstone은 유지되며, 월드라인 고아 노드는 감사 흔적으로 남습니다.',
-        '삭제한 패킷 본문은 복구할 수 없습니다. 계속할까요?'
-      ].join('\n');
-      if (typeof globalThis.confirm !== 'function' || globalThis.confirm(confirmation) !== true) {
+      // The viewer's generic busy state blocks pointer events. Release the visual
+      // block while the in-viewer confirmation dialog is waiting for input,
+      // then restore it only for the destructive storage commit.
+      root.querySelector?.('.hayaku-viewer')?.classList?.remove('is-busy');
+      const confirmed = await viewerConfirmOrphanCleanup(preview);
+      if (confirmed !== true) {
         viewerSetStatusMessage('고아 데이터 정리를 취소했습니다.');
         return { ...preview, removed: false, reason: 'user_cancelled' };
       }
+      root.querySelector?.('.hayaku-viewer')?.classList?.add('is-busy');
       viewerSetStatusMessage('검증된 고아 데이터를 정리하고 내구 저장을 확인하는 중입니다.');
       const result = await removeOrphanedStorageRecords();
       if (result?.ledger) Memory.ledgerViewer.ledger = result.ledger;
       viewerRenderData();
       viewerRenderOperationLog();
       if (result?.ok && result?.removed) {
-        viewerSetStatusMessage(`고아 데이터 ${result.removedRecords}개를 영구 삭제했습니다.`);
+        viewerSetStatusMessage(`롤백 고아/비활성 데이터 ${result.removedRecords}개를 영구 삭제했습니다.`);
       } else if (result?.ok && result?.reason === 'no_removable_orphans') {
         viewerSetStatusMessage('재검증 중 대상이 사라져 삭제하지 않았습니다.');
       } else {
@@ -29302,10 +29564,10 @@ ${sourceChatId}`)}`;
     root.innerHTML = `<style>
       #${LEDGER_VIEWER_ROOT_ID}{--hv-bg:#f4f7fb;--hv-card:#fff;--hv-soft:#f7f9fc;--hv-line:#dce3ee;--hv-text:#172033;--hv-muted:#738099;--hv-primary:#5568e8;--hv-primary-soft:#eef0ff;--hv-green:#14966f;--hv-green-soft:#e9f8f3;--hv-red:#c64f5a;--hv-red-soft:#fff0f1;--hv-warn:#b7791f;font:13px Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--hv-text)}
       #${LEDGER_VIEWER_ROOT_ID} *{box-sizing:border-box}
-      .hayaku-viewer{width:min(1180px,100%);height:min(920px,100vh);display:grid;grid-template-rows:72px minmax(0,1fr);overflow:hidden;background:var(--hv-bg);border:1px solid var(--hv-line);border-radius:24px;box-shadow:0 25px 80px rgba(12,24,55,.28)}
+      .hayaku-viewer{position:relative;width:min(1180px,100%);height:min(920px,100vh);display:grid;grid-template-rows:72px minmax(0,1fr);overflow:hidden;background:var(--hv-bg);border:1px solid var(--hv-line);border-radius:24px;box-shadow:0 25px 80px rgba(12,24,55,.28)}
       .hv-top{display:flex;align-items:center;gap:13px;padding:0 22px;border-bottom:1px solid var(--hv-line);background:var(--hv-card)}.hv-mark{width:40px;height:40px;display:grid;place-items:center;border-radius:13px;background:linear-gradient(145deg,var(--hv-primary),#7d68e8);color:#fff;box-shadow:0 8px 20px rgba(85,104,232,.24)}.hv-brand{display:grid;gap:2px}.hv-brand strong{font-size:18px}.hv-brand span{font-size:11px;color:var(--hv-muted)}.hv-top-actions{margin-left:auto;display:flex;align-items:center;gap:8px}.hv-status{color:var(--hv-muted);font-size:11px}
       .hv-workspace{display:grid;grid-template-columns:116px minmax(0,1fr);min-height:0}.hv-sidebar{padding:16px 10px;border-right:1px solid var(--hv-line);background:var(--hv-card);display:flex;flex-direction:column;gap:8px}.hv-nav{min-height:68px;padding:9px 6px;border:1px solid transparent;border-radius:14px;background:transparent;color:var(--hv-muted);font:700 11px inherit;cursor:pointer;display:grid;place-items:center;gap:5px}.hv-nav span:first-child{width:32px;height:32px;border-radius:10px;display:grid;place-items:center;background:var(--hv-soft);color:var(--hv-primary);font-size:15px}.hv-nav.active{border-color:var(--hv-line);background:var(--hv-primary-soft);color:var(--hv-primary)}.hv-nav-count{min-width:18px;padding:1px 5px;border-radius:999px;background:var(--hv-card);font-size:9px}
-      .hv-content{min-width:0;min-height:0}.hv-panel{display:none;height:100%;overflow-y:auto;padding:22px}.hv-panel.active{display:block}.hv-heading{display:flex;align-items:flex-end;justify-content:space-between;gap:16px}.hv-heading h1{margin:2px 0 0;font-size:24px}.hv-heading p{margin:5px 0 0;color:var(--hv-muted)}.hv-eyebrow{display:block;color:var(--hv-muted);font-size:10px;letter-spacing:.02em}.hv-actions{display:flex;gap:8px;flex-wrap:wrap}.hv-btn{min-height:36px;padding:7px 13px;border:1px solid var(--hv-line);border-radius:11px;background:var(--hv-card);color:var(--hv-text);font:650 12px inherit;cursor:pointer}.hv-btn:hover{background:var(--hv-soft)}.hv-btn.primary{border-color:var(--hv-primary);background:var(--hv-primary);color:#fff}.hv-btn.danger{border-color:var(--hv-red);color:var(--hv-red);background:var(--hv-red-soft)}.hv-btn:disabled{cursor:not-allowed;opacity:.48}
+      .hv-content{min-width:0;min-height:0}.hv-panel{display:none;height:100%;overflow-y:auto;padding:22px}.hv-panel.active{display:block}.hv-heading{display:flex;align-items:flex-end;justify-content:space-between;gap:16px}.hv-heading h1{margin:2px 0 0;font-size:24px}.hv-heading p{margin:5px 0 0;color:var(--hv-muted)}.hv-eyebrow{display:block;color:var(--hv-muted);font-size:10px;letter-spacing:.02em}.hv-actions{display:flex;gap:8px;flex-wrap:wrap}.hv-btn{min-height:36px;padding:7px 13px;border:1px solid var(--hv-line);border-radius:11px;background:var(--hv-card);color:var(--hv-text);font:650 12px inherit;cursor:pointer}.hv-btn:hover{background:var(--hv-soft)}.hv-btn.primary{border-color:var(--hv-primary);background:var(--hv-primary);color:#fff}.hv-btn.danger{border-color:var(--hv-red);color:var(--hv-red);background:var(--hv-red-soft)}.hv-btn:disabled{cursor:not-allowed;opacity:.48}.hv-confirm-overlay{position:absolute;inset:0;z-index:1000;display:grid;place-items:center;padding:20px;background:rgba(12,20,36,.46);backdrop-filter:blur(2px)}.hv-confirm-dialog{width:min(520px,100%);padding:20px;border:1px solid var(--hv-line);border-radius:18px;background:var(--hv-card);box-shadow:0 24px 70px rgba(12,24,55,.34)}.hv-confirm-eyebrow{display:block;color:var(--hv-red);font-size:9px;font-weight:800;letter-spacing:.08em}.hv-confirm-dialog h2{margin:5px 0 8px;font-size:20px}.hv-confirm-dialog p{margin:0;color:var(--hv-text);line-height:1.55}.hv-confirm-note{margin-top:12px;padding:11px 12px;border:1px solid var(--hv-line);border-radius:12px;background:var(--hv-soft);color:var(--hv-muted);font-size:11px;line-height:1.55}.hv-confirm-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
       .hv-recall{margin:15px 0;padding:15px;border:1px solid var(--hv-line);border-radius:17px;background:var(--hv-card);box-shadow:0 4px 14px rgba(29,43,75,.04)}.hv-recall-head{display:grid;grid-template-columns:minmax(180px,.65fr) minmax(260px,1.35fr);gap:14px;align-items:start}.hv-recall-title{display:grid;gap:4px}.hv-recall-title strong{font-size:15px}.hv-recall-title small{color:var(--hv-muted)}.hv-current-input{padding:10px 12px;border:1px solid var(--hv-line);border-radius:12px;background:var(--hv-soft)}.hv-current-input span{display:block;color:var(--hv-primary);font-size:9px;font-weight:800;text-transform:uppercase}.hv-current-input p{margin:4px 0 0;max-height:84px;overflow:auto;color:var(--hv-text);white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px;line-height:1.5}.hv-recall-rows{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:8px;margin-top:12px}.hv-recall-item{min-width:0;padding:11px;border:1px solid var(--hv-line);border-radius:12px;background:var(--hv-soft)}.hv-recall-item-head{display:flex;justify-content:space-between;gap:8px;color:var(--hv-primary);font-size:9px}.hv-recall-item-head em{font-style:normal;color:var(--hv-muted)}.hv-recall-item>strong{display:block;margin-top:6px;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.hv-recall-item>p{margin:4px 0;color:var(--hv-muted);font-size:11px;line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere}.hv-recall-item>small{color:var(--hv-muted);font-size:9px}.hv-recall-empty{grid-column:1/-1;padding:14px;border:1px dashed var(--hv-line);border-radius:11px;color:var(--hv-muted);text-align:center}
       .hv-scope{display:grid;gap:5px;margin:15px 0;padding:12px 14px;border:1px solid var(--hv-line);border-radius:14px;background:var(--hv-card)}.hv-scope>div{display:flex;gap:8px;min-width:0}.hv-scope b{min-width:62px}.hv-scope code,.hv-scope span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--hv-muted)}
       .hv-metrics{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:9px;margin-bottom:14px}.hv-metric{padding:12px;border:1px solid var(--hv-line);border-radius:14px;background:var(--hv-card)}.hv-metric span{display:block;color:var(--hv-muted);font-size:10px}.hv-metric strong{display:block;margin-top:3px;font-size:16px}
@@ -29345,7 +29607,7 @@ ${sourceChatId}`)}`;
               <div class="hv-metric"><span>활성 tombstone</span><strong id="hayakuMetricTombstones">0</strong></div>
               <div class="hv-metric"><span>정리 가능 고아</span><strong id="hayakuMetricOrphans">0</strong></div>
             </div>
-            <div class="hv-tools"><select id="hayakuViewerState"><option value="all">모든 상태</option></select><select id="hayakuViewerType"><option value="all">모든 패킷 타입</option></select><input id="hayakuViewerSearch" type="search" placeholder="본문·hash·nonce 검색"><label class="hv-audit-toggle"><input id="hayakuViewerShowAuditCopies" type="checkbox">감사 사본 표시</label><small>표시 <b id="hayakuViewerVisibleCount">0 / 0</b></small></div>
+            <div class="hv-tools"><select id="hayakuViewerState"><option value="all">모든 상태</option></select><select id="hayakuViewerType"><option value="all">모든 패킷 타입</option></select><input id="hayakuViewerSearch" type="search" placeholder="본문·hash·nonce 검색"><label class="hv-audit-toggle"><input id="hayakuViewerShowAuditCopies" type="checkbox">감사·비활성 사본 표시</label><small>표시 <b id="hayakuViewerVisibleCount">0 / 0</b></small></div>
             <div id="hayakuViewerRecords" class="hv-records"><div class="hv-empty"><strong>조회 대기</strong><span>새로고침하여 플러그인 원장을 읽습니다.</span></div></div>
             <div class="hv-diagnostics">
               <strong>원장 진단 데이터</strong>
