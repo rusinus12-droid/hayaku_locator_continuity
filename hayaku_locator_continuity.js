@@ -1,9 +1,10 @@
 //@name hayaku_locator_continuity
-//@display-name HAYAKU · Locator Continuity v2.3.78
+//@display-name HAYAKU · Locator Continuity v2.4.0
 //@author rusinus12@gmail.com
 //@api 3.0
-//@version 2.3.78
+//@version 2.4.0
 
+/* v2.4.0 promotes the mature 2.3 continuity core into a long-form RP memory release: evidence-pressure recall budgeting, slot-level current-state projection, validity-aware temporal decay, cue-driven latent episodic reactivation, hardened structured packet normalization, generation-lineage v2 reroll binding, longer fail-soft recall budgets, archive hydration caching, native prompt-cache support, and verified manual orphan cleanup are retained as the new 2.4 baseline without changing the packet schema revision. */
 /* v2.3.78 adds a fail-closed manual orphan cleanup that physically removes only verified local orphan records, reconciles dangling slot heads and orphan-node packet references, preserves all active, quarantined, inherited, permanent, protected, tombstoned, and audit-retained data, and requires explicit UI confirmation. */
 /* v2.3.77 gives every main generation attempt a unique request_lineage_v2 identity, keeps stable U + parent + pair as the turn owner, and permits finalized response-hash refresh only with exact generation output proof while retaining legacy v1 and all foreign-branch rejection gates. */
 /* v2.3.76 preserves a divergent current reroll capture as an unbound same-nonce variant when an older higher-priority live-chat mirror occupies the canonical record id, allowing finalized U+A identity to bind the new sidecar without overwriting or recalling the old variant. */
@@ -137,7 +138,7 @@
   };
 
   const PLUGIN_NAME = 'HAYAKU';
-  const PLUGIN_VERSION = '2.3.78';
+  const PLUGIN_VERSION = '2.4.0';
   const REQUEST_LINEAGE_IDENTITY_VERSION = 2;
   const REQUEST_LINEAGE_SCHEMA_V2 = 'hayaku_request_lineage_v2';
   const HAYAKU_PACKET_AUTHORING_PROFILE_SCHEMA = 'hayaku-packet-authoring-profile-v1';
