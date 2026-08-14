@@ -1,9 +1,22 @@
 //@name hayaku_locator_continuity
-//@display-name HAYAKU · Locator Continuity v2.3.65
+//@display-name HAYAKU · Locator Continuity v2.3.78
 //@author rusinus12@gmail.com
 //@api 3.0
-//@version 2.3.65
+//@version 2.3.78
 
+/* v2.3.78 adds a fail-closed manual orphan cleanup that physically removes only verified local orphan records, reconciles dangling slot heads and orphan-node packet references, preserves all active, quarantined, inherited, permanent, protected, tombstoned, and audit-retained data, and requires explicit UI confirmation. */
+/* v2.3.77 gives every main generation attempt a unique request_lineage_v2 identity, keeps stable U + parent + pair as the turn owner, and permits finalized response-hash refresh only with exact generation output proof while retaining legacy v1 and all foreign-branch rejection gates. */
+/* v2.3.76 preserves a divergent current reroll capture as an unbound same-nonce variant when an older higher-priority live-chat mirror occupies the canonical record id, allowing finalized U+A identity to bind the new sidecar without overwriting or recalling the old variant. */
+/* v2.3.75 accepts a successfully normalized, semantic-valid current_snapshot as validated evidence for the narrow finalized logical-id rebase while preserving nonce, parent, stable-user, reroll, rollback, and quarantine gates. */
+/* v2.3.74 raises the fast recall budget from 2.5 to 10 seconds while preserving the 20/30-second balanced/deep budgets, the 30-second host request deadline, and the bounded 1.5-second individual host-call timeout. */
+/* v2.3.73 raises balanced/deep recall budgets to 20/30 seconds with a matching 30-second host deadline, keeps individual host calls bounded, and guarantees one query-relevant or latest lightweight packet projection when the normal ingest budget expires before any packet is indexed. */
+/* v2.3.72 normalizes structured recall values across every packet axis, recovers legacy world/narrative state wrappers and planner/narrative record shapes, sanitizes knowledge-boundary identifiers, and rejects any final rendered object-stringification artifact without modifying the durable raw ledger. */
+/* v2.3.71 safely flattens object-valued character state into readable recall text, forbids object/array state in the packet-authoring contract, and fail-closes any legacy [object Object] row before indexing or model delivery while preserving the durable raw ledger. */
+/* v2.3.70 adds cue-driven latent episodic reactivation: strongly matching present-scene place/entity cues can revive one old episodic memory despite temporal decay, with a short repeat cooldown, while decay remains a prior rather than deletion and packet-authoring prompts stay unchanged. */
+/* v2.3.69 adds validity-aware temporal decay: obsolete historical snapshots lose retrieval weight progressively by memory class, explicit past lookups relax that decay, unresolved continuity/canonical knowledge remain protected, and carried character slots now age by their own source turn so stale attire/carrying/physical details eventually retire without deleting ledger history. */
+/* v2.3.68 projects repeated character snapshots into slot-level current state: durable attire/carrying/physical state persist until updated, scene-bound location/emotion/status persist only within the same scene, and instant action/expression/posture do not survive an omitted newer observation; historical snapshots stay in the ledger while ordinary current-scene recall prefers the projection. */
+/* v2.3.67 makes recall expansion evidence-pressure driven for narrative/full-persona inputs: every turn first packs into 3,000 chars, expands to 4,500 only when important selected evidence is actually dropped, and reaches 6,000 only when hard required evidence still does not fit or broad timeline/recovery evidence remains under pressure; packet-authoring prompt budgeting stays separate and unchanged. */
+/* v2.3.66 separates recall-data budgeting from packet-authoring prompt budgeting: ordinary recall targets 3,000 chars, precision recall expands to 4,500, and timeline/recovery/complex multi-topic recall expands to 6,000 only when needed, while the packet-writing contract text remains unchanged. */
 /* v2.3.65 caches fully verified immutable archive hydration snapshots by archive-head identity, preventing deep gzip-chain LRU thrashing while keeping the existing layer cache as a bounded fallback and clearing archive caches on unload. */
 /* v2.3.64 activates provider-native prompt-cache interception in native mode, aligns OpenAI explicit breakpoints and Anthropic model thresholds/multi-breakpoint coexistence, and treats Gemini 2.5+ as provider-managed implicit caching while preserving preconfigured explicit cachedContent. */
 /* v2.3.63 makes a unique persisted user-message id authoritative over request/live text-hash drift, rejects conflicting ids and nonces before append affinity, and immediately rekeys a post-processed finalized packet when the same stable U, target pair, and validated request nonce agree. */
@@ -105,6 +118,11 @@
   const LEDGER_VIEWER_UI_RUNTIME_KEY = '__HAYAKU_LEDGER_VIEWER_UI_V1__';
   const COPIED_CHAT_SOURCE_LEDGER_RUNTIME_KEY = '__HAYAKU_COPY_SOURCE_LEDGER_REVISION_V1__';
   const RUNTIME_INSTANCE_TOKEN = Object.freeze({});
+  const RUNTIME_GENERATION_EPOCH = (() => {
+    let randomPart = '';
+    try { randomPart = Math.random().toString(36).slice(2); } catch (_) {}
+    return `${Date.now().toString(36)}:${randomPart || 'runtime'}`;
+  })();
   const claimRuntimeOwnership = () => {
     try {
       globalThis[RUNTIME_OWNER_KEY] = RUNTIME_INSTANCE_TOKEN;
@@ -119,7 +137,9 @@
   };
 
   const PLUGIN_NAME = 'HAYAKU';
-  const PLUGIN_VERSION = '2.3.65';
+  const PLUGIN_VERSION = '2.3.78';
+  const REQUEST_LINEAGE_IDENTITY_VERSION = 2;
+  const REQUEST_LINEAGE_SCHEMA_V2 = 'hayaku_request_lineage_v2';
   const HAYAKU_PACKET_AUTHORING_PROFILE_SCHEMA = 'hayaku-packet-authoring-profile-v1';
   const HAYAKU_PACKET_AUTHORING_ALIAS_LANGUAGES = Object.freeze(['ko', 'en', 'ja', 'zh']);
   const HAYAKU_CANONICAL_ANCHOR_PREFIXES = Object.freeze([
@@ -337,6 +357,8 @@
       related_ref: 0.28,
       same_canonical: 0.26,
       same_entity: 0.18,
+      same_place: 0.24,
+      same_object: 0.12,
       same_scene: 0.16
     }),
     contextualFieldTransfer: Object.freeze({
@@ -350,9 +372,30 @@
       summary: 0.30
     })
   });
+  const LATENT_EPISODIC_REACTIVATION_VERSION = 'latent_episodic_reactivation_v1';
+  const LATENT_EPISODIC_REACTIVATION_TUNING = Object.freeze({
+    maxActivated: 1,
+    minAgeTurns: 6,
+    minCueSignal: 0.42,
+    strongCueSignal: 0.64,
+    recentRepeatCooldownTurns: 3,
+    recentRepeatMultiplier: 0.42,
+    decayFloor: 0.55,
+    evidenceBlend: 0.66
+  });
+
   const MODE_INJECTION_CAPS = Object.freeze({
     balanced: 22000,
     full: 30000
+  });
+  // Recall evidence has its own semantic budget. This is intentionally separate
+  // from the packet-authoring contract/runtime/terminal prompt budget. The combined
+  // payload still obeys the context-safety injection cap, but spare context never
+  // causes HAYAKU to pad recall up to that cap.
+  const RECALL_DATA_BUDGETS = Object.freeze({
+    standard: 3000,
+    precision: 4500,
+    extended: 6000
   });
   const MODE_STATE_VIEW_RATIOS = Object.freeze({
     balanced: 0.48,
@@ -440,15 +483,15 @@
   ].join('|'), 'i');
   const HIGH_IMPORTANCE_PACKET_RE = /"overall"\s*:\s*(?:0\.[89]\d*|1(?:\.0+)?)|"importance"\s*:\s*(?:0\.[89]\d*|1(?:\.0+)?)/i;
   const BEFORE_REQUEST_BUDGET_MS = Object.freeze({
-    fast: 2500,
-    balanced: 5000,
-    deep: 12000
+    fast: 10000,
+    balanced: 20000,
+    deep: 30000
   });
   // RisuAI awaits replacers sequentially and does not impose a hook timeout.
   // Bound every non-interactive host/storage call so a stalled adapter cannot
   // hold the main model request open indefinitely.
   const HOST_API_CALL_TIMEOUT_MS = 1500;
-  const HOST_REQUEST_DEADLINE_MS = 15000;
+  const HOST_REQUEST_DEADLINE_MS = 30000;
   const COPIED_CHAT_SOURCE_CACHE_POSITIVE_TTL_MS = 60000;
   const COPIED_CHAT_SOURCE_CACHE_NEGATIVE_TTL_MS = 5000;
   const COPIED_CHAT_SOURCE_CACHE_MAX_ENTRIES = 32;
@@ -700,13 +743,28 @@
   };
   const ledgerRev2IsCurrentLookup = query => LEDGER_REV2_CURRENT_LOOKUP_RE.test(ledgerRev2Text(query));
   const ledgerRev2IsPastLookup = query => LEDGER_REV2_PAST_LOOKUP_RE.test(ledgerRev2Text(query));
-  const PACKET_MEMORY_LIFECYCLE_VERSION = 'packet_memory_lifecycle_v1';
+  const PACKET_MEMORY_LIFECYCLE_VERSION = 'packet_memory_lifecycle_v2';
   const PACKET_MEMORY_TIERS = Object.freeze(['hot', 'warm', 'cold', 'archived', 'disputed']);
   const PACKET_MEMORY_DISPUTE_QUERY_RE = /(?:conflict|contradict|dispute|uncertain|which\s+(?:is|was)\s+true|what\s+really\s+happened|충돌|모순|상충|엇갈|불확실|어느\s*쪽|진짜|사실|矛盾|食い違|不確|どちら|本当)/i;
   const PACKET_MEMORY_INACTIVE_STATUS_RE = /^(?:resolved|retired|closed|inactive|cancelled|canceled|dormant|faded|obsolete|superseded)$/i;
   const PACKET_MEMORY_DISPUTED_STATUS_RE = /^(?:contested|disputed|contradicted|conflict|uncertain)$/i;
   const PACKET_MEMORY_DURABLE_EVENT_CATEGORY_RE = /^(?:active_event|historical_event|scene_delta|consequence|payoff)$/i;
   const PACKET_MEMORY_DURABLE_EVENT_TEXT_RE = /(?:promise|vow|debt|contract|injur|scar|death|died|lost|stolen|transfer|gave|handed|revealed|discovered|learned|decid|completed|resolved|relationship|trust|betray|married|separated|약속|맹세|빚|계약|부상|상처|죽|사망|잃|도난|양도|건넸|공개|발견|알게|결정|완료|해결|관계|신뢰|배신|결혼|이별|約束|誓|契約|負傷|死亡|失|盗|渡|公開|発見|決定|完了|解決|関係|信頼|裏切)/i;
+  const PACKET_MEMORY_VALIDITY_DECAY_VERSION = 'packet_memory_validity_decay_v1';
+  const PACKET_MEMORY_SUPERSEDED_STATUS_RE = /^(?:superseded|replaced|obsolete|overridden|retired)$/i;
+  const PACKET_MEMORY_SUPERSEDED_SCOPE_RE = /^(?:no_longer_true|superseded|replaced|obsolete|overridden|expired)$/i;
+  const PACKET_MEMORY_DECAY_PROFILES = Object.freeze({
+    protected: Object.freeze({ halfLife: Number.POSITIVE_INFINITY, floor: 1, maxPenalty: 0 }),
+    canonical: Object.freeze({ halfLife: 180, floor: 0.58, maxPenalty: 0.05 }),
+    knowledge: Object.freeze({ halfLife: 96, floor: 0.38, maxPenalty: 0.08 }),
+    open_commitment: Object.freeze({ halfLife: 120, floor: 0.52, maxPenalty: 0.07 }),
+    durable_event: Object.freeze({ halfLife: 72, floor: 0.20, maxPenalty: 0.10 }),
+    episodic: Object.freeze({ halfLife: 42, floor: 0.12, maxPenalty: 0.14 }),
+    relation_state: Object.freeze({ halfLife: 28, floor: 0.08, maxPenalty: 0.20 }),
+    transient_state: Object.freeze({ halfLife: 10, floor: 0, maxPenalty: 0.30 }),
+    superseded: Object.freeze({ halfLife: 4, floor: 0, maxPenalty: 0.42 }),
+    default: Object.freeze({ halfLife: 24, floor: 0.04, maxPenalty: 0.18 })
+  });
   const packetMemoryStatusOf = row => ledgerRev2Status(row);
   const packetMemoryTruthStateOf = row => ledgerRev2Lower([
     row?.visibility?.truthState,
@@ -734,6 +792,22 @@
     if (candidates.length) return Math.max(0, ...candidates);
     const distance = Number(row?.locator?.distanceFromLatest ?? row?.retrieval?.distanceFromLatest);
     return Number.isFinite(distance) ? Math.max(0, Number(currentTurn || 0) - Math.max(0, distance)) : Math.max(0, Number(currentTurn || 0));
+  };
+  const packetMemoryDecayClassFor = ({ row = {}, item = {}, category = '', inactive = false, disputed = false, anchor = false, durableEvent = false } = {}) => {
+    const status = packetMemoryStatusOf(row);
+    const timeScope = ledgerRev2TimeScope(row);
+    const superseded = PACKET_MEMORY_SUPERSEDED_STATUS_RE.test(status) || PACKET_MEMORY_SUPERSEDED_SCOPE_RE.test(timeScope);
+    if (anchor) return 'protected';
+    if (superseded) return 'superseded';
+    if (/^(?:world_rule|faction|region)$/i.test(category)) return 'canonical';
+    if (/^(?:secret|pov_memory|speaker_boundary|consent_memory|overpromotion_risk)$/i.test(category)) return 'knowledge';
+    if (/^(?:continuity_lock|do_not_resolve_yet)$/i.test(category) && !inactive && !disputed) return 'protected';
+    if (/^(?:open_invitation|payoff|consequence)$/i.test(category) && !inactive && !disputed) return 'open_commitment';
+    if (/^(?:character|current_state|state|active_event)$/i.test(category)) return 'transient_state';
+    if (/^(?:relation)$/i.test(category)) return 'relation_state';
+    if (durableEvent) return 'durable_event';
+    if (/^(?:historical_event|event_memory|scene_delta|critical_dialogue|summary_memory|conflict_trace|offscreen_thread|theme_motif)$/i.test(category)) return 'episodic';
+    return 'default';
   };
   const packetMemoryLifecycleFor = (row = {}, store = {}) => {
     const item = ledgerRev2RowItem(row);
@@ -780,8 +854,27 @@
       && (importance >= 0.82 || inactive || directEvidence || canonicalAnchor || PACKET_MEMORY_DURABLE_EVENT_TEXT_RE.test(eventText));
     const anchor = explicitAnchor || continuityAnchor || sceneAnchor || (durableEvent && importance >= 0.9);
     const emotionalProxy = Math.max(salience, impression, pressure);
-    const halfLife = 4 + importance * 18 + emotionalProxy * 12 + confidence * 4;
-    const decay = anchor ? 1 : ledgerRev2Clamp(Math.exp(-ageTurns / Math.max(2, halfLife)), 0, 1, 0);
+    const genericHalfLife = 4 + importance * 18 + emotionalProxy * 12 + confidence * 4;
+    const genericDecay = anchor ? 1 : ledgerRev2Clamp(Math.exp(-ageTurns / Math.max(2, genericHalfLife)), 0, 1, 0);
+    const decayClass = packetMemoryDecayClassFor({ row, item, category, inactive, disputed, anchor, durableEvent });
+    const decayProfile = PACKET_MEMORY_DECAY_PROFILES[decayClass] || PACKET_MEMORY_DECAY_PROFILES.default;
+    const historicalObservation = item?._historicalObservation === true || row?._historicalObservation === true;
+    const halfLifeScale = decayClass === 'superseded'
+      ? 1
+      : (0.76 + importance * 0.42 + emotionalProxy * 0.16 + confidence * 0.10);
+    const historicalScale = historicalObservation && /^(?:transient_state|relation_state)$/.test(decayClass) ? 0.82 : 1;
+    const validityHalfLife = Number.isFinite(decayProfile.halfLife)
+      ? Math.max(2, decayProfile.halfLife * halfLifeScale * historicalScale)
+      : Number.POSITIVE_INFINITY;
+    const validityDecay = anchor || decayProfile.floor >= 1
+      ? 1
+      : ledgerRev2Clamp(
+          decayProfile.floor + (1 - decayProfile.floor) * Math.exp(-ageTurns / Math.max(2, validityHalfLife)),
+          decayProfile.floor,
+          1,
+          decayProfile.floor
+        );
+    const decay = validityDecay;
     let heatScore = importance * 38
       + confidence * 16
       + recency * 18
@@ -805,15 +898,22 @@
       : (sceneAnchor ? 'scene' : (durableEvent && tier === 'hot' ? 'durable_event' : ''));
     return {
       version: PACKET_MEMORY_LIFECYCLE_VERSION,
+      decayVersion: PACKET_MEMORY_VALIDITY_DECAY_VERSION,
       tier: PACKET_MEMORY_TIERS.includes(tier) ? tier : 'cold',
       heatScore: Number(heatScore.toFixed(2)),
       decay: Number(decay.toFixed(4)),
+      genericDecay: Number(genericDecay.toFixed(4)),
+      decayClass,
+      decayHalfLife: Number.isFinite(validityHalfLife) ? Number(validityHalfLife.toFixed(2)) : null,
+      decayFloor: Number(decayProfile.floor.toFixed(4)),
+      decayPenaltyMax: Number(decayProfile.maxPenalty.toFixed(4)),
       ageTurns,
       sourceTurn,
       anchor,
       durableEvent,
       disputed,
       inactive,
+      historicalObservation,
       mustCarryClass,
       status,
       timeScope
@@ -837,24 +937,40 @@
               ? (pastLookup ? -0.012 : -0.06)
               : (lifecycle.tier === 'disputed' ? (disputeIntent ? 0.025 : -0.16) : 0)));
     const anchorDelta = lifecycle.mustCarryClass ? 0.045 * (0.3 + gate * 0.7) : 0;
+    const decayGap = Math.max(0, 1 - Number(lifecycle.decay ?? 1));
+    const directRelief = Math.max(0.32, 1 - gate * 0.68);
+    const historicalRelief = pastLookup ? 0.10 : 1;
+    const decayPenalty = lifecycle.mustCarryClass
+      ? 0
+      : Math.max(0, Number(lifecycle.decayPenaltyMax || 0)) * decayGap * directRelief * historicalRelief;
     const baseScore = Number(row?.score || 0) || 0;
-    const score = ledgerRev2Clamp(baseScore + tierDelta + anchorDelta, 0, 1.35, baseScore);
+    const score = ledgerRev2Clamp(baseScore + tierDelta + anchorDelta - decayPenalty, 0, 1.35, baseScore);
     return {
       ...row,
       score,
-      _memoryLifecycle: lifecycle,
+      _memoryLifecycle: { ...lifecycle, pastLookup, disputeIntent, decayPenalty: Number(decayPenalty.toFixed(4)) },
       scoreBreakdown: {
         ...(row?.scoreBreakdown || {}),
         packetMemoryLifecycle: {
           version: lifecycle.version,
+          decayVersion: lifecycle.decayVersion,
           tier: lifecycle.tier,
           heatScore: lifecycle.heatScore,
           decay: lifecycle.decay,
+          genericDecay: lifecycle.genericDecay,
+          decayClass: lifecycle.decayClass,
+          decayHalfLife: lifecycle.decayHalfLife,
+          decayFloor: lifecycle.decayFloor,
+          decayPenaltyMax: lifecycle.decayPenaltyMax,
+          decayPenalty: Number(decayPenalty.toFixed(4)),
+          directRelief: Number(directRelief.toFixed(4)),
+          historicalRelief: Number(historicalRelief.toFixed(4)),
           ageTurns: lifecycle.ageTurns,
           anchor: lifecycle.anchor,
           durableEvent: lifecycle.durableEvent,
           disputed: lifecycle.disputed,
           inactive: lifecycle.inactive,
+          historicalObservation: lifecycle.historicalObservation,
           mustCarryClass: lifecycle.mustCarryClass,
           tierDelta: Number(tierDelta.toFixed(4)),
           anchorDelta: Number(anchorDelta.toFixed(4)),
@@ -1102,16 +1218,28 @@
     });
     const consentRaw = meta.consent_memory || meta.consentMemory || (parsed && parsed.planner ? (parsed.planner.consent_memory || parsed.planner.consentMemory) : null) || null;
     if (objectish(consentRaw)) {
-      const prefs = ensureArray(consentRaw.preferences || consentRaw.preferences_list || consentRaw.likes).map(v => ledgerRev2Compact(v, 80)).filter(Boolean).slice(0, 12);
-      const limits = ensureArray(consentRaw.limits || consentRaw.hard_limits || consentRaw.hardLimits || consentRaw.no_go || consentRaw.noGo).map(v => ledgerRev2Compact(v, 80)).filter(Boolean).slice(0, 12);
-      const safeword = ledgerRev2Compact(consentRaw.safeword || consentRaw.safe_signal || consentRaw.safeSignal || '', 60);
+      const prefs = ensureArray(consentRaw.preferences || consentRaw.preferences_list || consentRaw.likes).map(v => compact(structuredFieldText(v), 80)).filter(Boolean).slice(0, 12);
+      const limits = ensureArray(consentRaw.limits || consentRaw.hard_limits || consentRaw.hardLimits || consentRaw.no_go || consentRaw.noGo).map(v => compact(structuredFieldText(v), 80)).filter(Boolean).slice(0, 12);
+      const safeword = compact(structuredFieldText(consentRaw.safeword || consentRaw.safe_signal || consentRaw.safeSignal || ''), 60);
       const comfortRaw = consentRaw.comfort != null ? consentRaw.comfort : consentRaw.comfort_level;
       const comfort = Number.isFinite(Number(comfortRaw)) ? ledgerRev2Clamp(comfortRaw, 0, 1, 0.7) : '';
+      const knownConsentKeys = new Set([
+        'preferences', 'preferences_list', 'likes', 'limits', 'hard_limits', 'hardLimits',
+        'no_go', 'noGo', 'safeword', 'safe_signal', 'safeSignal', 'comfort', 'comfort_level'
+      ]);
+      const structuredConsent = Object.entries(consentRaw)
+        .filter(([key]) => !knownConsentKeys.has(key) && !/^[_$]/.test(key))
+        .map(([key, value]) => {
+          const body = structuredFieldText(value);
+          return body ? `${key}:${body}` : '';
+        })
+        .filter(Boolean);
       const consentSummary = [
         prefs.length ? `preferences(선호):${prefs.join(',')}` : '',
         limits.length ? `limits(한계/선):${limits.join(',')}` : '',
         safeword ? `safeword(안전어):${safeword}` : '',
-        comfort !== '' ? `comfort:${Number(comfort).toFixed(2)}` : ''
+        comfort !== '' ? `comfort:${Number(comfort).toFixed(2)}` : '',
+        ...structuredConsent
       ].filter(Boolean).join(' / ');
       if (consentSummary) {
         pushPlannerMeta({ summary: consentSummary, text: consentSummary, preferences: prefs, limits, safeword, comfort }, 'consent_memory', 0, { importance: 0.8, salience: 0.82 });
@@ -1609,6 +1737,7 @@ const MODE_PROFILES = Object.freeze({
     store: null,
     lastBeforeRequest: null,
     lastViewerRecall: null,
+    lastLatentEpisodicRecall: null,
     lastWarnings: [],
     packetScanCache: new Map(),
     packetScanScopeKey: '',
@@ -1619,10 +1748,12 @@ const MODE_PROFILES = Object.freeze({
     authoritativeLedgerCache: null,
     pendingCaptures: [],
     captureSequence: 0,
+    generationAttemptSequence: 0,
     finalizedCaptureMonitors: new Map(),
     finalizedCaptureInFlight: new Set(),
     finalizedBindingMonitors: new Map(),
     finalizedBindingInFlight: new Set(),
+    generationOutputObservations: new Map(),
     worldlineObserver: {
       timer: null,
       inFlight: false,
@@ -4480,6 +4611,157 @@ const MODE_PROFILES = Object.freeze({
     }
     return text(value).trim();
   };
+  const OBJECT_STRINGIFICATION_ARTIFACT_RE = /\[\s*object\s+Object\s*\]/i;
+  const hasObjectStringificationArtifact = value => OBJECT_STRINGIFICATION_ARTIFACT_RE.test(text(value));
+  const structuredFieldText = value => {
+    const body = profileFieldText(value).trim();
+    return body && !hasObjectStringificationArtifact(body) ? body : '';
+  };
+  const firstStructuredFieldText = (...values) => {
+    for (const value of values) {
+      const body = structuredFieldText(value);
+      if (body) return body;
+    }
+    return '';
+  };
+  const semanticIdentifierText = value => {
+    if (value == null) return '';
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+      return structuredFieldText(value);
+    }
+    if (Array.isArray(value)) {
+      return value.map(semanticIdentifierText).filter(Boolean).join(', ');
+    }
+    if (typeof value === 'object') {
+      return firstStructuredFieldText(
+        value.name, value.title, value.label, value.publicRef, value.ref, value.id,
+        value.value, value.ownerEntityId, value.owner, value.entity
+      );
+    }
+    return '';
+  };
+  const normalizedIdentifierValues = (value, limit = 32) => uniq(
+    ensureArray(value).flat(Infinity).map(semanticIdentifierText).filter(Boolean),
+    limit
+  );
+  const normalizeStructuredScalarFields = (value, fields = []) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+    const item = { ...value };
+    ensureArray(fields).forEach(field => {
+      if (!Object.prototype.hasOwnProperty.call(item, field) || item[field] == null) return;
+      const body = structuredFieldText(item[field]);
+      if (body) item[field] = body;
+      else delete item[field];
+    });
+    return item;
+  };
+  const normalizeBoundaryIdentifierFields = value => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+    const item = { ...value };
+    const singletonFields = ['ownerEntityId', 'ownerEntity', 'owner', 'entity', 'speaker', 'from', 'to'];
+    const listFields = [
+      'holderEntityIds', 'holders', 'visibleToEntityIds', 'visibleTo', 'sharedWith',
+      'deniedToEntityIds', 'deniedTo', 'hidden_from', 'hiddenFrom', 'unknownTo',
+      'known_to', 'knownTo', 'known_by', 'knownBy', 'relatedEntityIds', 'relatedEntities',
+      'targetEntityIds', 'targetEntities', 'targets', 'entities'
+    ];
+    singletonFields.forEach(field => {
+      if (!Object.prototype.hasOwnProperty.call(item, field)) return;
+      const body = semanticIdentifierText(item[field]);
+      if (body) item[field] = body;
+      else delete item[field];
+    });
+    listFields.forEach(field => {
+      if (!Object.prototype.hasOwnProperty.call(item, field)) return;
+      item[field] = normalizedIdentifierValues(item[field], 32);
+    });
+    return item;
+  };
+  const CHARACTER_STRUCTURED_STATE_FIELD_MAP = Object.freeze([
+    Object.freeze({ target: 'current_location', aliases: Object.freeze(['current_location', 'currentLocation', 'location']) }),
+    Object.freeze({ target: 'last_known_location', aliases: Object.freeze(['last_known_location', 'lastKnownLocation']) }),
+    Object.freeze({ target: 'current_action', aliases: Object.freeze(['current_action', 'currentAction', 'current_activity', 'currentActivity', 'activity', 'action', 'last_known_action', 'lastKnownAction', 'last_known_activity', 'lastKnownActivity', 'last_significant_action', 'lastSignificantAction']) }),
+    Object.freeze({ target: 'current_emotion', aliases: Object.freeze(['current_emotion', 'currentEmotion', 'emotional_state', 'emotionalState', 'emotion', 'mood', 'affect']) }),
+    Object.freeze({ target: 'current_goal', aliases: Object.freeze(['current_goal', 'currentGoal', 'goal', 'objective']) }),
+    Object.freeze({ target: 'current_psychology', aliases: Object.freeze(['current_psychology', 'currentPsychology', 'mental_state', 'mentalState', 'inner_state', 'innerState']) }),
+    Object.freeze({ target: 'expression', aliases: Object.freeze(['expression', 'facial_expression', 'facialExpression']) }),
+    Object.freeze({ target: 'posture', aliases: Object.freeze(['posture', 'pose']) }),
+    Object.freeze({ target: 'presence', aliases: Object.freeze(['presence', 'presence_state', 'presenceState']) }),
+    Object.freeze({ target: 'condition', aliases: Object.freeze(['condition', 'physical_state', 'physicalState', 'health', 'injury', 'injuries']) }),
+    Object.freeze({ target: 'attire', aliases: Object.freeze(['attire', 'outfit', 'clothing', 'clothes', 'current_attire', 'currentAttire']) }),
+    Object.freeze({ target: 'carrying', aliases: Object.freeze(['carrying', 'carried', 'inventory', 'possessions', 'equipment']) })
+  ]);
+  const normalizeCharacterStructuredStateFields = value => {
+    if (!objectish(value)) return value;
+    const item = { ...value };
+    const stateKeys = ['current_state', 'currentState', 'state'];
+    const hasLiteralArtifactState = stateKeys.some(key => {
+      if (!Object.prototype.hasOwnProperty.call(item, key)) return false;
+      const raw = item[key];
+      return (raw == null || typeof raw !== 'object') && hasObjectStringificationArtifact(raw);
+    });
+    if (hasLiteralArtifactState) {
+      item.recallSuppressed = true;
+      item.recallSuppressedReason = 'object_stringification_artifact';
+      return item;
+    }
+    const hasStructuredState = stateKeys.some(key => {
+      if (!Object.prototype.hasOwnProperty.call(item, key)) return false;
+      const raw = item[key];
+      return raw != null && typeof raw === 'object';
+    });
+    if (!hasStructuredState) return item;
+    const mergeTarget = (target, entries = []) => {
+      const values = [];
+      const seen = new Set();
+      const push = raw => {
+        const body = structuredFieldText(raw);
+        const key = normalizeKey(body);
+        if (!body || !key || seen.has(key)) return;
+        seen.add(key);
+        values.push(body);
+      };
+      push(item[target]);
+      const readable = ensureArray(entries).map(entry => ({
+        key: entry.key,
+        body: structuredFieldText(entry.value)
+      })).filter(entry => entry.body);
+      readable.forEach(entry => push(readable.length > 1 ? `${entry.key}: ${entry.body}` : entry.body));
+      if (values.length) item[target] = values.join(' / ');
+    };
+    const residualStateParts = [];
+    const residualSeen = new Set();
+    const pushResidual = raw => {
+      const body = structuredFieldText(raw);
+      const key = normalizeKey(body);
+      if (!body || !key || residualSeen.has(key)) return;
+      residualSeen.add(key);
+      residualStateParts.push(body);
+    };
+    stateKeys.forEach(key => {
+      if (!Object.prototype.hasOwnProperty.call(item, key)) return;
+      const raw = item[key];
+      if (objectish(raw)) {
+        const consumed = new Set();
+        CHARACTER_STRUCTURED_STATE_FIELD_MAP.forEach(({ target, aliases }) => {
+          const entries = aliases
+            .filter(alias => Object.prototype.hasOwnProperty.call(raw, alias))
+            .map(alias => ({ key: alias, value: raw[alias] }));
+          if (!entries.length) return;
+          entries.forEach(entry => consumed.add(entry.key));
+          mergeTarget(target, entries);
+        });
+        const residual = Object.fromEntries(Object.entries(raw)
+          .filter(([nestedKey]) => !consumed.has(nestedKey) && !/^[_$]/.test(nestedKey)));
+        pushResidual(residual);
+      } else {
+        pushResidual(raw);
+      }
+      delete item[key];
+    });
+    if (residualStateParts.length) item.current_state = residualStateParts.join(' / ');
+    return item;
+  };
   const legacyPacketExtraTextValues = value => {
     if (!objectish(value)) return [];
     return Object.entries(value)
@@ -4892,6 +5174,9 @@ const MODE_PROFILES = Object.freeze({
       return [
         item.name, item.title, item.label, item.subject, item.secret, item.summary, item.text, item.rawText, item.content, item.memory,
         item.event, item.description, item.detail, item.details, item.rule, item.item,
+        item.delta, item.change, item.trace, item.trigger, item.action, item.result, item.outcome,
+        item.consequence, item.expected_consequence, item.expectedConsequence,
+        item.setup, item.payoff, item.expected_payoff, item.expectedPayoff,
         item.state, item.status, item.role,
         item.time_scope, item.timeScope, item.lifecycle, item.confidence, item.evidence,
         item.resolved_reason, item.resolvedReason,
@@ -4903,7 +5188,8 @@ const MODE_PROFILES = Object.freeze({
         profileFieldText(item.personality), profileFieldText(item.personality_traits), profileFieldText(item.personalityTraits),
         profileFieldText(item.speech_style), profileFieldText(item.speechStyle), profileFieldText(item.dialogue_style), profileFieldText(item.dialogueStyle), profileFieldText(item.voice),
         profileFieldText(item.psychology), profileFieldText(item.current_psychology), profileFieldText(item.currentPsychology), profileFieldText(item.mental_state), profileFieldText(item.mentalState),
-        item.location, item.time, item.scene_phase, item.current_arc, item.motif,
+        item.location, item.time, item.timestamp, item.deadline, item.state_summary, item.stateSummary,
+        item.scene_phase, item.current_arc, item.motif,
         item.atmosphere, item.danger_level, item.dangerLevel, item.scene_type, item.sceneType,
         item.from, item.to, item.entityA, item.entityB, item.sourceRef, item.targetRef, item.sourceEntityRef, item.targetEntityRef, item.trust, item.tension, item.evidence,
         item.ownerEntityId, item.owner, item.memoryType, item.knowledgeState, item.privacy, item.truthState,
@@ -4933,6 +5219,12 @@ const MODE_PROFILES = Object.freeze({
         ...(ensureArray(item.next_direction || item.next_response_direction || item.nextResponseDirection || []).map(itemText)),
         ...(ensureArray(item.avoid || []).map(itemText)),
         ...(ensureArray(item.open_invitations || item.openInvitations || []).map(itemText)),
+        ...(ensureArray(item.changed_relations || item.changedRelations || []).map(itemText)),
+        ...(ensureArray(item.progressed_goals || item.progressedGoals || []).map(itemText)),
+        ...(ensureArray(item.introduced_secrets || item.introducedSecrets || []).map(itemText)),
+        ...(ensureArray(item.revealed_secrets || item.revealedSecrets || []).map(itemText)),
+        ...(ensureArray(item.added_entities || item.addedEntities || []).map(itemText)),
+        ...(ensureArray(item.removed_entities || item.removedEntities || []).map(itemText)),
         item.condition, item.physical_state, item.physicalState, item.attire, item.outfit, item.clothing,
         ...(ensureArray(item.carrying || item.carried || item.inventory || []).map(itemText)),
         item.intimacy, item.power_balance, item.powerBalance, item.power_dynamic, item.powerDynamic, item.dynamic,
@@ -4940,10 +5232,31 @@ const MODE_PROFILES = Object.freeze({
         item.sensory, item.lighting, item.weather, item.scent,
         item.preferences, item.limits, item.safeword, item.safe_signal, item.comfort,
         ...legacyPacketExtraTextValues(item)
-      ].filter(Boolean).join(' | ');
+      ].map(structuredFieldText).filter(Boolean).join(' | ');
     }
     return text(item);
   };
+  const packetWorldStateSummary = (world = {}) => uniq([
+    structuredFieldText(world.location) ? `location: ${structuredFieldText(world.location)}` : '',
+    structuredFieldText(world.time) ? `time: ${structuredFieldText(world.time)}` : '',
+    structuredFieldText(world.atmosphere) ? `atmosphere: ${structuredFieldText(world.atmosphere)}` : '',
+    structuredFieldText(world.sensory) ? `sensory: ${structuredFieldText(world.sensory)}` : '',
+    structuredFieldText(world.lighting) ? `lighting: ${structuredFieldText(world.lighting)}` : '',
+    structuredFieldText(world.weather) ? `weather: ${structuredFieldText(world.weather)}` : '',
+    structuredFieldText(world.scent) ? `scent: ${structuredFieldText(world.scent)}` : '',
+    firstStructuredFieldText(world.scene_type, world.sceneType) ? `scene type: ${firstStructuredFieldText(world.scene_type, world.sceneType)}` : '',
+    firstStructuredFieldText(world.danger_level, world.dangerLevel) ? `danger: ${firstStructuredFieldText(world.danger_level, world.dangerLevel)}` : '',
+    firstStructuredFieldText(world.state_summary, world.stateSummary)
+  ].filter(Boolean), 24).join(' / ');
+  const packetNarrativeStateSummary = (narrative = {}) => uniq([
+    firstStructuredFieldText(narrative.scene_phase, narrative.scenePhase) ? `scene phase: ${firstStructuredFieldText(narrative.scene_phase, narrative.scenePhase)}` : '',
+    firstStructuredFieldText(narrative.current_arc, narrative.currentArc) ? `current arc: ${firstStructuredFieldText(narrative.current_arc, narrative.currentArc)}` : '',
+    firstStructuredFieldText(narrative.tension_level, narrative.tensionLevel) ? `tension: ${firstStructuredFieldText(narrative.tension_level, narrative.tensionLevel)}` : '',
+    firstStructuredFieldText(narrative.dominant_mood, narrative.dominantMood) ? `mood: ${firstStructuredFieldText(narrative.dominant_mood, narrative.dominantMood)}` : '',
+    structuredFieldText(narrative.pacing) ? `pacing: ${structuredFieldText(narrative.pacing)}` : '',
+    firstStructuredFieldText(narrative.time_elapsed, narrative.timeElapsed) ? `elapsed: ${firstStructuredFieldText(narrative.time_elapsed, narrative.timeElapsed)}` : '',
+    firstStructuredFieldText(narrative.state_summary, narrative.stateSummary)
+  ].filter(Boolean), 24).join(' / ');
   const enumValue = (value, allowed = [], fallback = '') => {
     const raw = text(value).trim();
     return allowed.includes(raw) ? raw : fallback;
@@ -5557,6 +5870,148 @@ const MODE_PROFILES = Object.freeze({
     }
     ensureArray(aliases).forEach(key => delete target[key]);
   };
+  const PACKET_STRUCTURED_SCALAR_FIELDS = Object.freeze([
+    'name', 'title', 'label', 'subject', 'summary', 'text', 'rawText', 'content', 'memory',
+    'description', 'detail', 'details', 'event', 'rule', 'item', 'state', 'status', 'role',
+    'location', 'time', 'timestamp', 'deadline', 'scene_phase', 'scenePhase', 'current_arc', 'currentArc',
+    'motif', 'atmosphere', 'sensory', 'lighting', 'weather', 'scent', 'scene_type', 'sceneType',
+    'danger_level', 'dangerLevel', 'delta', 'change', 'trace', 'trigger', 'action', 'result', 'outcome',
+    'consequence', 'expected_consequence', 'expectedConsequence', 'setup', 'payoff',
+    'expected_payoff', 'expectedPayoff', 'decision', 'immediate_result', 'immediateResult',
+    'delayed_effect', 'delayedEffect', 'condition', 'physical_state', 'physicalState',
+    'current_state', 'currentState', 'current_location', 'currentLocation', 'last_known_location', 'lastKnownLocation',
+    'current_action', 'currentAction', 'current_activity', 'currentActivity', 'last_action', 'lastAction',
+    'last_known_action', 'lastKnownAction', 'last_known_activity', 'lastKnownActivity',
+    'current_emotion', 'currentEmotion', 'emotional_state', 'emotionalState',
+    'current_goal', 'currentGoal', 'current_psychology', 'currentPsychology', 'mental_state', 'mentalState',
+    'attire', 'outfit', 'clothing', 'carrying', 'carried', 'inventory',
+    'emotion', 'mood', 'expression', 'posture', 'presence',
+    'time_scope', 'timeScope', 'evidence', 'resolved_reason', 'resolvedReason'
+  ]);
+  const normalizeCanonicalPacketItem = (raw, category = '') => {
+    let item = objectish(raw) ? { ...raw } : { summary: text(raw), text: text(raw) };
+    item = normalizeStructuredScalarFields(item, PACKET_STRUCTURED_SCALAR_FIELDS);
+    item = normalizeBoundaryIdentifierFields(item);
+    [
+      'related_refs', 'relatedRefs', 'source_refs', 'sourceRefs',
+      'canonicalAnchors', 'canonical_anchors', 'canonicalTokens', 'canonical_tokens',
+      'recallAnchors', 'recall_anchors', 'aliases', 'alias', 'keywords', 'keyword'
+    ].forEach(field => {
+      if (!Object.prototype.hasOwnProperty.call(item, field)) return;
+      item[field] = ensureArray(item[field]).flat(Infinity).map(structuredFieldText).filter(Boolean).slice(0, 64);
+    });
+    const setSummary = value => {
+      const body = structuredFieldText(value);
+      if (body) item.summary = body;
+    };
+    const labeled = (label, value) => {
+      const body = structuredFieldText(value);
+      return body ? `${label}: ${body}` : '';
+    };
+    if (category === 'conflict_trace' && !item.summary) {
+      const traceBody = firstStructuredFieldText(item.trace, item.conflict, item.description, item.text);
+      if (traceBody) setSummary(item.trace ? `trace: ${traceBody}` : traceBody);
+    }
+    if (category === 'scene_delta' && !item.summary) {
+      const primary = firstStructuredFieldText(item.text, item.description, item.delta, item.change);
+      const details = [
+        labeled('changed relations', item.changed_relations || item.changedRelations),
+        labeled('progressed goals', item.progressed_goals || item.progressedGoals),
+        labeled('introduced secrets', item.introduced_secrets || item.introducedSecrets),
+        labeled('revealed secrets', item.revealed_secrets || item.revealedSecrets),
+        labeled('added entities', item.added_entities || item.addedEntities),
+        labeled('removed entities', item.removed_entities || item.removedEntities)
+      ].filter(Boolean);
+      setSummary([primary, ...details].filter(Boolean).join(' / '));
+    }
+    if (category === 'consequence' && !item.summary) {
+      const cause = item.action != null
+        ? labeled('action', item.action)
+        : (item.trigger != null ? labeled('trigger', item.trigger) : labeled('event', item.event || item.decision));
+      const effect = item.expected_consequence != null || item.expectedConsequence != null
+        ? labeled('expected consequence', item.expected_consequence || item.expectedConsequence)
+        : labeled('consequence', item.consequence || item.result || item.outcome || item.immediate_result || item.immediateResult || item.delayed_effect || item.delayedEffect);
+      setSummary([cause, effect].filter(Boolean).join(' / '));
+    }
+    if (category === 'payoff' && !item.summary) {
+      const setup = labeled('setup', item.setup || item.trigger || item.event);
+      const result = item.expected_payoff != null || item.expectedPayoff != null
+        ? labeled('expected payoff', item.expected_payoff || item.expectedPayoff)
+        : labeled('payoff', item.payoff || item.result || item.outcome);
+      setSummary([setup, result].filter(Boolean).join(' / '));
+    }
+    if (category === 'open_invitation' && !item.summary) {
+      const endpoints = [semanticIdentifierText(item.from), semanticIdentifierText(item.to)].filter(Boolean).join(' → ');
+      const invitation = [
+        endpoints,
+        firstStructuredFieldText(item.type, item.label, item.title),
+        firstStructuredFieldText(item.detail, item.description, item.text),
+        item.deadline ? `deadline: ${structuredFieldText(item.deadline)}` : ''
+      ].filter(Boolean).join(' / ');
+      setSummary(invitation);
+    }
+    return item;
+  };
+  const packetStateScalarEntries = value => {
+    const entries = [];
+    const visit = input => {
+      if (input == null) return;
+      if (Array.isArray(input)) {
+        input.forEach(visit);
+        return;
+      }
+      if (!objectish(input)) {
+        const body = structuredFieldText(input);
+        if (body) entries.push({ key: '', value: body, trend: '' });
+        return;
+      }
+      if (Object.prototype.hasOwnProperty.call(input, 'key') && Object.prototype.hasOwnProperty.call(input, 'value')) {
+        entries.push({ key: text(input.key), value: input.value, trend: input.trend });
+        return;
+      }
+      Object.entries(input).forEach(([key, nested]) => entries.push({ key, value: nested, trend: '' }));
+    };
+    visit(value);
+    return entries;
+  };
+  const recoverPacketAxisStateScalars = (target, axis = 'world') => {
+    if (!objectish(target)) return target;
+    const sourceKeys = ['state_scalars', 'stateScalars', 'state scalars'];
+    const sources = sourceKeys.filter(key => Object.prototype.hasOwnProperty.call(target, key)).map(key => target[key]);
+    if (!sources.length) return target;
+    const fieldMap = axis === 'narrative'
+      ? {
+          scenephase: 'scene_phase', currentarc: 'current_arc', tensionlevel: 'tension_level',
+          scenetension: 'tension_level', dominantmood: 'dominant_mood', pacing: 'pacing', timeelapsed: 'time_elapsed'
+        }
+      : {
+          location: 'location', currentlocation: 'location', place: 'location', region: 'location',
+          time: 'time', timestamp: 'time', datetime: 'time', date: 'time', weather: 'weather',
+          atmosphere: 'atmosphere', sensory: 'sensory', lighting: 'lighting', scent: 'scent',
+          scenetype: 'scene_type', dangerlevel: 'danger_level'
+        };
+    const residual = [];
+    sources.flatMap(packetStateScalarEntries).forEach(entry => {
+      const key = text(entry.key || '').trim();
+      const body = structuredFieldText(entry.value);
+      const trend = structuredFieldText(entry.trend);
+      if (!body) return;
+      const withTrend = trend ? `${body} (trend: ${trend})` : body;
+      const canonical = fieldMap[normalizeKey(key)] || '';
+      if (canonical && !structuredFieldText(target[canonical])) {
+        target[canonical] = withTrend;
+        return;
+      }
+      residual.push(key ? `${key}: ${withTrend}` : withTrend);
+    });
+    const stateSummary = uniq([
+      structuredFieldText(target.state_summary || target.stateSummary),
+      ...residual
+    ].filter(Boolean), 32).join(' / ');
+    if (stateSummary) target.state_summary = stateSummary;
+    sourceKeys.forEach(key => delete target[key]);
+    return target;
+  };
   const canonicalizePacketSchemaV2 = value => {
     if (!objectish(value)) return value;
     const packet = value;
@@ -5571,6 +6026,16 @@ const MODE_PROFILES = Object.freeze({
     packet.narrative = objectish(packet.narrative) ? packet.narrative : {};
     packet.planner = objectish(packet.planner) ? packet.planner : {};
     packet.importance = objectish(packet.importance) ? packet.importance : {};
+    recoverPacketAxisStateScalars(packet.world, 'world');
+    recoverPacketAxisStateScalars(packet.narrative, 'narrative');
+    packet.world = normalizeStructuredScalarFields(packet.world, [
+      'location', 'time', 'atmosphere', 'sensory', 'lighting', 'weather', 'scent',
+      'scene_type', 'sceneType', 'danger_level', 'dangerLevel', 'state_summary', 'stateSummary'
+    ]);
+    packet.narrative = normalizeStructuredScalarFields(packet.narrative, [
+      'scene_phase', 'scenePhase', 'current_arc', 'currentArc', 'tension_level', 'tensionLevel',
+      'dominant_mood', 'dominantMood', 'pacing', 'time_elapsed', 'timeElapsed', 'state_summary', 'stateSummary'
+    ]);
 
     packetSchemaV2Rename(packet.meta, 'packet_type', ['packetType']);
     packetSchemaV2Rename(packet.meta, 'packet_schema_rev', ['packetSchemaRev']);
@@ -5581,6 +6046,10 @@ const MODE_PROFILES = Object.freeze({
     packetSchemaV2Rename(packet.meta, 'pov_entity', ['povEntity']);
     packetSchemaV2Rename(packet.meta, 'visible_participants', ['visibleParticipants']);
     packetSchemaV2Rename(packet.meta, 'consent_memory', ['consentMemory']);
+    packet.meta = normalizeStructuredScalarFields(packet.meta, [
+      'schema', 'packet_type', 'scene_id', 'turn_anchor', 'event_time', 'eventTime',
+      'source_time', 'sourceTime', 'observed_at', 'observedAt', 'known_at', 'knownAt'
+    ]);
     packetSchemaV2MergeCollection(packet.meta, 'speaker_boundaries', PACKET_SCHEMA_V2_COLLECTION_ALIASES.speaker_boundaries);
     packetSchemaV2MergeCollection(packet.meta, 'overpromotion_risks', PACKET_SCHEMA_V2_COLLECTION_ALIASES.overpromotion_risks);
 
@@ -5596,32 +6065,30 @@ const MODE_PROFILES = Object.freeze({
     packet.entity.characters = packetItems(packet.entity.characters).map(raw => {
       if (!objectish(raw)) return { name: text(raw), summary: text(raw) };
       const item = { ...raw };
-      if (!text(item.name).trim()) item.name = item.title || item.label || '';
-      return item;
+      item.name = semanticIdentifierText(item.name || item.title || item.label || '');
+      return normalizeCanonicalPacketItem(normalizeCharacterStructuredStateFields(item), 'character');
     });
     packet.entity.relations = packetItems(packet.entity.relations).map(raw => {
       if (!objectish(raw)) return { summary: text(raw) };
-      const item = { ...raw };
-      if (!text(item.from).trim()) item.from = item.source || item.entityA || item.a || item.subject || '';
-      if (!text(item.to).trim()) item.to = item.target || item.entityB || item.b || item.object || '';
+      const item = normalizeCanonicalPacketItem(raw, 'relation');
+      item.from = semanticIdentifierText(item.from || item.source || item.entityA || item.a || item.subject || '');
+      item.to = semanticIdentifierText(item.to || item.target || item.entityB || item.b || item.object || '');
       ['source', 'entityA', 'a', 'subject', 'target', 'entityB', 'b', 'object'].forEach(key => delete item[key]);
       return item;
     });
     packet.entity.pov_memories = packetItems(packet.entity.pov_memories).map(raw => {
       if (!objectish(raw)) return { summary: text(raw), text: text(raw) };
-      const item = { ...raw };
-      if (!text(item.ownerEntityId).trim()) {
-        item.ownerEntityId = item.ownerEntity || item.owner || item.entity || item.name || item.subject || item.character || item.characterName || '';
-      }
-      if (!text(item.summary).trim()) item.summary = item.text || item.rawText || item.memory || item.content || item.description || '';
+      const item = normalizeCanonicalPacketItem(raw, 'pov_memory');
+      item.ownerEntityId = semanticIdentifierText(item.ownerEntityId || item.ownerEntity || item.owner || item.entity || item.name || item.subject || item.character || item.characterName || '');
+      if (!structuredFieldText(item.summary)) item.summary = firstStructuredFieldText(item.text, item.rawText, item.memory, item.content, item.description);
       delete item.ownerEntity;
       delete item.characterName;
       return item;
     });
     packet.entity.secrets = packetItems(packet.entity.secrets).map(raw => {
       if (!objectish(raw)) return { summary: text(raw), text: text(raw) };
-      const item = { ...raw };
-      if (!text(item.summary).trim()) item.summary = item.text || item.rawText || item.content || item.description || item.title || item.secret || item.fact || item.detail || '';
+      const item = normalizeCanonicalPacketItem(raw, 'secret');
+      if (!structuredFieldText(item.summary)) item.summary = firstStructuredFieldText(item.text, item.rawText, item.content, item.description, item.title, item.secret, item.fact, item.detail);
       return item;
     });
 
@@ -5631,18 +6098,27 @@ const MODE_PROFILES = Object.freeze({
     packetSchemaV2MergeCollection(packet.world, 'offscreen_threads', PACKET_SCHEMA_V2_COLLECTION_ALIASES.offscreen_threads);
     packetSchemaV2MergeCollection(packet.world, 'factions', []);
     packetSchemaV2MergeCollection(packet.world, 'regions', []);
+    packet.world.active_events = packetItems(packet.world.active_events).map(item => normalizeCanonicalPacketItem(item, 'active_event'));
+    packet.world.historical_events = packetItems(packet.world.historical_events).map(item => normalizeCanonicalPacketItem(item, 'historical_event'));
+    packet.world.world_rules = packetItems(packet.world.world_rules).map(item => normalizeCanonicalPacketItem(item, 'world_rule'));
+    packet.world.offscreen_threads = packetItems(packet.world.offscreen_threads).map(item => normalizeCanonicalPacketItem(item, 'offscreen_thread'));
+    packet.world.factions = packetItems(packet.world.factions).map(item => normalizeCanonicalPacketItem(item, 'faction'));
+    packet.world.regions = packetItems(packet.world.regions).map(item => normalizeCanonicalPacketItem(item, 'region'));
 
     const metaCriticalDialogue = packetCollection(packet.meta.critical_dialogue, packet.meta.criticalDialogue);
     packetSchemaV2MergeCollection(packet.narrative, 'conflict_traces', PACKET_SCHEMA_V2_COLLECTION_ALIASES.conflict_traces);
     packetSchemaV2MergeCollection(packet.narrative, 'scene_deltas', PACKET_SCHEMA_V2_COLLECTION_ALIASES.scene_deltas);
     packetSchemaV2MergeCollection(packet.narrative, 'theme_motifs', PACKET_SCHEMA_V2_COLLECTION_ALIASES.theme_motifs);
     packetSchemaV2MergeCollection(packet.narrative, 'critical_dialogue', PACKET_SCHEMA_V2_COLLECTION_ALIASES.critical_dialogue);
+    packet.narrative.conflict_traces = packetItems(packet.narrative.conflict_traces).map(item => normalizeCanonicalPacketItem(item, 'conflict_trace'));
+    packet.narrative.scene_deltas = packetItems(packet.narrative.scene_deltas).map(item => normalizeCanonicalPacketItem(item, 'scene_delta'));
+    packet.narrative.theme_motifs = packetItems(packet.narrative.theme_motifs).map(item => normalizeCanonicalPacketItem(item, 'theme_motif'));
     if (metaCriticalDialogue.length) packet.narrative.critical_dialogue = [...packetItems(packet.narrative.critical_dialogue), ...metaCriticalDialogue];
     packet.narrative.critical_dialogue = packetItems(packet.narrative.critical_dialogue).map(raw => {
       if (!objectish(raw)) return { text: text(raw), summary: text(raw) };
-      const item = { ...raw };
-      if (!text(item.text).trim()) item.text = item.quote || item.dialogue || item.line || item.content || item.summary || item.detail || '';
-      if (!text(item.summary).trim()) item.summary = item.text;
+      const item = normalizeCanonicalPacketItem(raw, 'critical_dialogue');
+      if (!structuredFieldText(item.text)) item.text = firstStructuredFieldText(item.quote, item.dialogue, item.line, item.content, item.summary, item.detail);
+      if (!structuredFieldText(item.summary)) item.summary = structuredFieldText(item.text);
       return item;
     });
     delete packet.meta.critical_dialogue;
@@ -5667,14 +6143,54 @@ const MODE_PROFILES = Object.freeze({
     }
     delete packet.planner.consent_memory;
     delete packet.planner.consentMemory;
+    packet.meta.speaker_boundaries = packetItems(packet.meta.speaker_boundaries)
+      .map(item => normalizeCanonicalPacketItem(item, 'speaker_boundary'));
+    packet.meta.overpromotion_risks = packetItems(packet.meta.overpromotion_risks)
+      .map(item => normalizeCanonicalPacketItem(item, 'overpromotion_risk'));
+    packet.meta.active_speaker = semanticIdentifierText(packet.meta.active_speaker);
+    packet.meta.pov_entity = semanticIdentifierText(packet.meta.pov_entity);
+    if (Object.prototype.hasOwnProperty.call(packet.meta, 'visible_participants')) {
+      packet.meta.visible_participants = normalizedIdentifierValues(packet.meta.visible_participants, 32);
+    }
+    if (objectish(packet.meta.consent_memory)) {
+      const consent = { ...packet.meta.consent_memory };
+      const consentListFields = [
+        'preferences', 'preferences_list', 'likes', 'limits', 'hard_limits', 'hardLimits', 'no_go', 'noGo'
+      ];
+      const consentScalarFields = ['safeword', 'safe_signal', 'safeSignal'];
+      consentListFields.forEach(field => {
+        if (!Object.prototype.hasOwnProperty.call(consent, field)) return;
+        consent[field] = ensureArray(consent[field]).map(structuredFieldText).filter(Boolean).slice(0, 32);
+      });
+      consentScalarFields.forEach(field => {
+        if (!Object.prototype.hasOwnProperty.call(consent, field)) return;
+        const body = structuredFieldText(consent[field]);
+        if (body) consent[field] = body;
+        else delete consent[field];
+      });
+      const reserved = new Set([...consentListFields, ...consentScalarFields, 'comfort', 'comfort_level']);
+      Object.keys(consent).forEach(field => {
+        if (reserved.has(field) || /^[_$]/.test(field)) return;
+        const body = structuredFieldText(consent[field]);
+        if (body) consent[field] = body;
+        else delete consent[field];
+      });
+      packet.meta.consent_memory = consent;
+    }
     packetSchemaV2MergeCollection(packet.planner, 'continuity_locks', PACKET_SCHEMA_V2_COLLECTION_ALIASES.continuity_locks);
     packetSchemaV2MergeCollection(packet.planner, 'do_not_resolve_yet', PACKET_SCHEMA_V2_COLLECTION_ALIASES.do_not_resolve_yet);
     packetSchemaV2MergeCollection(packet.planner, 'consequence_ledger', PACKET_SCHEMA_V2_COLLECTION_ALIASES.consequence_ledger);
     packetSchemaV2MergeCollection(packet.planner, 'payoff_tracker', PACKET_SCHEMA_V2_COLLECTION_ALIASES.payoff_tracker);
     packetSchemaV2MergeCollection(packet.planner, 'open_invitations', PACKET_SCHEMA_V2_COLLECTION_ALIASES.open_invitations);
+    packet.planner.continuity_locks = packetItems(packet.planner.continuity_locks).map(item => normalizeCanonicalPacketItem(item, 'continuity_lock'));
+    packet.planner.do_not_resolve_yet = packetItems(packet.planner.do_not_resolve_yet).map(item => normalizeCanonicalPacketItem(item, 'do_not_resolve_yet'));
+    packet.planner.consequence_ledger = packetItems(packet.planner.consequence_ledger).map(item => normalizeCanonicalPacketItem(item, 'consequence'));
+    packet.planner.payoff_tracker = packetItems(packet.planner.payoff_tracker).map(item => normalizeCanonicalPacketItem(item, 'payoff'));
+    packet.planner.open_invitations = packetItems(packet.planner.open_invitations).map(item => normalizeCanonicalPacketItem(item, 'open_invitation'));
 
     const summary = objectish(packet.meta.summary_memory) ? packet.meta.summary_memory : null;
     if (summary) {
+      Object.assign(summary, normalizeStructuredScalarFields(summary, ['summary', 'compression_seed', 'compressionSeed', 'status', 'time_scope', 'timeScope']));
       const summaryRisks = packetCollection(
         summary.overpromotion_risks,
         summary.overpromotionRisks,
@@ -5696,10 +6212,25 @@ const MODE_PROFILES = Object.freeze({
       packetSchemaV2Rename(summary, 'related_refs', ['relatedRefs', 'source_refs', 'sourceRefs']);
       packetSchemaV2Rename(summary, 'compression_seed', ['compressionSeed']);
       packetSchemaV2Rename(summary, 'time_scope', ['timeScope']);
+      ['recallAnchors', 'canonicalAnchors', 'directEvidenceSnippets', 'related_refs'].forEach(field => {
+        if (!Object.prototype.hasOwnProperty.call(summary, field)) return;
+        summary[field] = ensureArray(summary[field]).flat(Infinity).map(structuredFieldText).filter(Boolean).slice(0, 64);
+      });
+      if (Object.prototype.hasOwnProperty.call(summary, 'mentionedEntityNames')) {
+        summary.mentionedEntityNames = normalizedIdentifierValues(summary.mentionedEntityNames, 64);
+      }
+      if (objectish(summary.recallAliases)) {
+        summary.recallAliases = Object.fromEntries(Object.entries(summary.recallAliases)
+          .map(([language, values]) => [language, ensureArray(values).flat(Infinity).map(structuredFieldText).filter(Boolean).slice(0, 32)])
+          .filter(([, values]) => values.length));
+      }
     }
     packetSchemaV2Rename(packet.importance, 'overall', ['score']);
     if (Object.prototype.hasOwnProperty.call(packet.importance, 'reason') && !Array.isArray(packet.importance.reason)) {
       packet.importance.reason = packet.importance.reason == null ? [] : packetItems(packet.importance.reason);
+    }
+    if (Array.isArray(packet.importance.reason)) {
+      packet.importance.reason = packet.importance.reason.map(structuredFieldText).filter(Boolean).slice(0, 32);
     }
     packet.meta.schema = HAYAKU_PACKET_SCHEMA_V2.schema;
     packet.meta.packet_schema_rev = HAYAKU_PACKET_SCHEMA_V2.revision;
@@ -5744,14 +6275,19 @@ const MODE_PROFILES = Object.freeze({
     checkCollections(parsed.narrative, 'narrative');
     checkCollections(parsed.planner, 'planner');
     const canonical = canonicalizePacketSchemaV2(clone(parsed, {}));
+    const hasReadableScalar = value => (
+      (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean')
+      && Boolean(text(value).trim())
+      && !hasObjectStringificationArtifact(value)
+    );
     const requiredText = (item, fields = []) => ensureArray(fields).some(field => {
-      if (field === 'name') return Boolean(text(item?.name || item?.title || item?.label).trim());
-      if (field === 'from') return Boolean(text(item?.from || item?.source || item?.entityA || item?.a || item?.subject).trim());
-      if (field === 'to') return Boolean(text(item?.to || item?.target || item?.entityB || item?.b || item?.object).trim());
-      if (field === 'ownerEntityId') return Boolean(text(item?.ownerEntityId || item?.ownerEntity || item?.owner || item?.entity || item?.name || item?.subject || item?.character || item?.characterName).trim());
-      if (field === 'summary') return Boolean(text(item?.summary || item?.text || item?.rawText || item?.content || item?.description || item?.title || item?.detail).trim());
-      if (field === 'text') return Boolean(text(item?.text || item?.summary || item?.quote || item?.dialogue || item?.line || item?.content || item?.detail).trim());
-      return Boolean(text(item?.[field]).trim());
+      if (field === 'name') return [item?.name, item?.title, item?.label].some(hasReadableScalar);
+      if (field === 'from') return [item?.from, item?.source, item?.entityA, item?.a, item?.subject].some(hasReadableScalar);
+      if (field === 'to') return [item?.to, item?.target, item?.entityB, item?.b, item?.object].some(hasReadableScalar);
+      if (field === 'ownerEntityId') return [item?.ownerEntityId, item?.ownerEntity, item?.owner, item?.entity, item?.name, item?.subject, item?.character, item?.characterName].some(hasReadableScalar);
+      if (field === 'summary') return [item?.summary, item?.text, item?.rawText, item?.content, item?.description, item?.title, item?.detail].some(hasReadableScalar);
+      if (field === 'text') return [item?.text, item?.summary, item?.quote, item?.dialogue, item?.line, item?.content, item?.detail].some(hasReadableScalar);
+      return hasReadableScalar(item?.[field]);
     });
     const checkRequired = (values, path, groups = []) => packetItems(values).forEach((item, index) => {
       if (!objectish(item)) return;
@@ -8501,6 +9037,10 @@ const MODE_PROFILES = Object.freeze({
       // authoritative, so rebase only that logical-id-only drift.
       const validatedCurrentSnapshot = ensureArray(pair?.validPacketTypes).some(packetType => (
         text(packetType).trim().toLowerCase() === 'current_snapshot'
+      )) || ensureArray(pair?.repairablePackets).some(packet => (
+        packet?.normalizationRepairable === true
+        && packet?.semanticValid === true
+        && text(packet?.packetType || '').trim().toLowerCase() === 'current_snapshot'
       ));
       const finalizedPairIdentity = Boolean(pair?.requestNonce)
         && Boolean(pair?.userHash)
@@ -9236,6 +9776,10 @@ const MODE_PROFILES = Object.freeze({
         parentTurnNodeId: compact(lineage.parent_turn_node_id || lineage.parentTurnNodeId || '', 96),
         logicalTurnId: compact(lineage.logical_turn_id || lineage.logicalTurnId || '', 96),
         requestNonce: compact(lineage.request_nonce || lineage.requestNonce || '', 96),
+        identityVersion: finiteNonNegativeInteger(lineage.identity_version || lineage.identityVersion, 0),
+        lineageSchema: compact(lineage.lineage_schema || lineage.lineageSchema || '', 64),
+        turnOwnerKey: compact(lineage.turn_owner_key || lineage.turnOwnerKey || '', 96),
+        generationAttemptId: compact(lineage.generation_attempt_id || lineage.generationAttemptId || '', 96),
         errors: ensureArray(originalValidation.errors),
         warnings: ensureArray(originalValidation.warnings),
         normalizedErrors: ensureArray(normalizedValidation.errors),
@@ -9259,7 +9803,11 @@ const MODE_PROFILES = Object.freeze({
         packetType: compact(meta.packet_type || meta.packetType || '', 48),
         declaredParentTurnNodeId: compact(lineage.parent_turn_node_id || lineage.parentTurnNodeId || '', 96),
         declaredLogicalTurnId: compact(lineage.logical_turn_id || lineage.logicalTurnId || '', 96),
-        requestNonce: compact(lineage.request_nonce || lineage.requestNonce || '', 96)
+        requestNonce: compact(lineage.request_nonce || lineage.requestNonce || '', 96),
+        identityVersion: finiteNonNegativeInteger(lineage.identity_version || lineage.identityVersion, 0),
+        lineageSchema: compact(lineage.lineage_schema || lineage.lineageSchema || '', 64),
+        turnOwnerKey: compact(lineage.turn_owner_key || lineage.turnOwnerKey || '', 96),
+        generationAttemptId: compact(lineage.generation_attempt_id || lineage.generationAttemptId || '', 96)
       });
     };
     scanPacketMarkersInBody(body, PACKET_START, PACKET_END, 'history_html_lineage', push);
@@ -9273,6 +9821,7 @@ const MODE_PROFILES = Object.freeze({
     const pairs = [];
     let pendingUserHash = '';
     let pendingUserMessageIdHash = '';
+    let pendingUserMessageIdentityStable = false;
     let pendingUserMessageIndex = -1;
     let pendingUserMessageTime = 0;
     ensureArray(chatMessages).forEach((message, index) => {
@@ -9284,6 +9833,7 @@ const MODE_PROFILES = Object.freeze({
         const visible = canonicalHistoryText(body, role);
         pendingUserHash = visible ? stableHash64(visible) : '';
         pendingUserMessageIdHash = stableHash64(messageSourceId(message, index));
+        pendingUserMessageIdentityStable = Boolean(stableMessageSourceId(message));
         pendingUserMessageIndex = index;
         pendingUserMessageTime = Math.max(0, Number(message?.time || 0) || 0);
         return;
@@ -9305,7 +9855,11 @@ const MODE_PROFILES = Object.freeze({
       ) ? {
           declaredParentTurnNodeId: lineageRecord.parentTurnNodeId || '',
           declaredLogicalTurnId: lineageRecord.logicalTurnId || '',
-          requestNonce: lineageRecord.requestNonce || ''
+          requestNonce: lineageRecord.requestNonce || '',
+          identityVersion: finiteNonNegativeInteger(lineageRecord.identityVersion, 0),
+          lineageSchema: lineageRecord.lineageSchema || '',
+          turnOwnerKey: lineageRecord.turnOwnerKey || '',
+          generationAttemptId: lineageRecord.generationAttemptId || ''
         } : null;
       if (!visible && !packetHashes.length) return;
       // Only a completed U+A exchange consumes a worldline ordinal. Persisted
@@ -9313,6 +9867,7 @@ const MODE_PROFILES = Object.freeze({
       // for RAM recall, but must not create a gap before the next real turn.
       if (!pendingUserHash) {
         pendingUserMessageIdHash = '';
+        pendingUserMessageIdentityStable = false;
         pendingUserMessageIndex = -1;
         pendingUserMessageTime = 0;
         return;
@@ -9321,6 +9876,7 @@ const MODE_PROFILES = Object.freeze({
         pairIndex: pairs.length + 1,
         userHash: pendingUserHash,
         userMessageIdHash: pendingUserMessageIdHash,
+        userMessageIdentityStable: pendingUserMessageIdentityStable,
         userMessageIndex: pendingUserMessageIndex,
         userMessageTime: pendingUserMessageTime,
         assistantVisibleHash: visible ? stableHash64(visible) : '',
@@ -9357,10 +9913,15 @@ const MODE_PROFILES = Object.freeze({
         lineageDeclared: Boolean(lineage),
         declaredParentTurnNodeId: lineage?.declaredParentTurnNodeId || '',
         declaredLogicalTurnId: lineage?.declaredLogicalTurnId || '',
-        requestNonce: lineage?.requestNonce || ''
+        requestNonce: lineage?.requestNonce || '',
+        identityVersion: finiteNonNegativeInteger(lineage?.identityVersion, 0),
+        lineageSchema: lineage?.lineageSchema || '',
+        turnOwnerKey: lineage?.turnOwnerKey || '',
+        generationAttemptId: lineage?.generationAttemptId || ''
       });
       pendingUserHash = '';
       pendingUserMessageIdHash = '';
+      pendingUserMessageIdentityStable = false;
       pendingUserMessageIndex = -1;
       pendingUserMessageTime = 0;
     });
@@ -9522,10 +10083,68 @@ const MODE_PROFILES = Object.freeze({
       targetPairIndex,
       userHash,
       userMessageIdHash,
+      userMessageIdentityStable: Boolean(stableUserSourceId),
       parentTurnNodeId,
       logicalTurnId,
       requestNonce: stableHash64(['request_lineage_v1', scope.key, snapshot?.chatSnapshotHash || '', parentTurnNodeId, logicalTurnId].join('\u0001'))
     };
+  };
+  const requestTurnOwnerKeyFor = (scope, lineage) => {
+    if (!scope?.key || !objectish(lineage)) return '';
+    const stableUserMessageIdHash = compact(lineage.userMessageIdHash || '', 96);
+    const fallbackUserHash = compact(lineage.userHash || '', 96);
+    const stableUserOwner = lineage.userMessageIdentityStable === true
+      ? stableUserMessageIdHash
+      : (fallbackUserHash ? `content:${fallbackUserHash}` : '');
+    if (!stableUserOwner) return '';
+    return stableHash64([
+      'request_turn_owner_v2',
+      scope.key,
+      stableUserOwner,
+      compact(lineage.parentTurnNodeId || '', 96),
+      Math.max(1, Number(lineage.targetPairIndex || 1) || 1)
+    ].join('\u0001'));
+  };
+  const issueRequestGenerationIdentity = (scope, lineage) => {
+    if (!scope?.confident || !scope?.key || !objectish(lineage)) return lineage || null;
+    const turnOwnerKey = requestTurnOwnerKeyFor(scope, lineage);
+    if (!turnOwnerKey) return lineage;
+    Memory.generationAttemptSequence = Math.max(0, Number(Memory.generationAttemptSequence || 0)) + 1;
+    const generationAttemptId = stableHash64([
+      'request_generation_attempt_v2',
+      RUNTIME_GENERATION_EPOCH,
+      Memory.generationAttemptSequence,
+      now(),
+      scope.key,
+      turnOwnerKey
+    ].join('\u0001'));
+    return {
+      ...lineage,
+      identityVersion: REQUEST_LINEAGE_IDENTITY_VERSION,
+      lineageSchema: REQUEST_LINEAGE_SCHEMA_V2,
+      turnOwnerKey,
+      generationAttemptId,
+      generationIdentityQuality: lineage.userMessageIdentityStable === true
+        ? 'stable_user_message'
+        : 'content_fallback',
+      // recordId is requestNonce + packetType. Making the nonce generation-local
+      // prevents two rerolls of the same saved U from competing for one durable id.
+      requestNonce: generationAttemptId
+    };
+  };
+  const requestGenerationIdentityIsCoherent = (scope, lineage) => {
+    if (Number(lineage?.identityVersion || 0) < REQUEST_LINEAGE_IDENTITY_VERSION) return false;
+    const generationAttemptId = compact(lineage?.generationAttemptId || '', 96);
+    const requestNonce = compact(lineage?.requestNonce || '', 96);
+    const turnOwnerKey = compact(lineage?.turnOwnerKey || '', 96);
+    return Boolean(
+      scope?.key
+      && lineage?.lineageSchema === REQUEST_LINEAGE_SCHEMA_V2
+      && generationAttemptId
+      && generationAttemptId === requestNonce
+      && turnOwnerKey
+      && turnOwnerKey === requestTurnOwnerKeyFor(scope, lineage)
+    );
   };
   const authoritativeAppendPlan = (snapshot, scope, previousLedger) => {
     const baseline = previousLedger?.chatSnapshotHash && Number(previousLedger?.packetMessageCount || 0) > 0
@@ -9817,7 +10436,7 @@ const MODE_PROFILES = Object.freeze({
     }
     return normalizeKey([axis, category, subject, value.id, value.label, value.title, value.summary].filter(Boolean).join('|'));
   };
-  const modelForbiddenField = key => /^(?:_locator|_retrieval|_stableKey|_packetRecallQuality|locator|storeKey|store_key|internalId|internal_id)$/i.test(text(key));
+  const modelForbiddenField = key => /^(?:_locator|_retrieval|_stableKey|_packetRecallQuality|_characterStateProjection|locator|storeKey|store_key|internalId|internal_id)$/i.test(text(key));
   const stripModelForbiddenFields = value => {
     if (Array.isArray(value)) return value.map(stripModelForbiddenFields);
     if (typeof value === 'string') return value.replace(/\bhayaku:\/\/\S+/gi, '').trim();
@@ -10110,6 +10729,181 @@ const MODE_PROFILES = Object.freeze({
     }
     return out
       .sort((a, b) => Number(b?._retrieval?.importance || 0) - Number(a?._retrieval?.importance || 0) || Number(b?._retrieval?.updatedAt || 0) - Number(a?._retrieval?.updatedAt || 0))
+      .slice(0, limit);
+  };
+  const CHARACTER_STATE_PROJECTION_VERSION = 1;
+  const CHARACTER_STATE_SLOT_GROUPS = Object.freeze({
+    current_state: Object.freeze({ persistence: 'scene', keys: Object.freeze(['current_state', 'currentState', 'state', 'status']) }),
+    location: Object.freeze({ persistence: 'scene', keys: Object.freeze(['current_location', 'currentLocation', 'location']) }),
+    last_known_location: Object.freeze({ persistence: 'durable', keys: Object.freeze(['last_known_location', 'lastKnownLocation']) }),
+    action: Object.freeze({ persistence: 'instant', keys: Object.freeze(['current_action', 'currentAction', 'current_activity', 'currentActivity', 'last_action', 'lastAction', 'last_known_action', 'lastKnownAction', 'last_known_activity', 'lastKnownActivity', 'last_significant_action', 'lastSignificantAction', 'action', 'activity']) }),
+    emotion: Object.freeze({ persistence: 'scene', keys: Object.freeze(['emotion', 'current_emotion', 'currentEmotion', 'emotional_state', 'emotionalState', 'mood', 'affect']) }),
+    goal: Object.freeze({ persistence: 'scene', keys: Object.freeze(['current_goal', 'currentGoal', 'goal', 'objective']) }),
+    psychology: Object.freeze({ persistence: 'scene', keys: Object.freeze(['current_psychology', 'currentPsychology', 'mental_state', 'mentalState', 'inner_state', 'innerState']) }),
+    expression: Object.freeze({ persistence: 'instant', keys: Object.freeze(['expression', 'facial_expression', 'facialExpression']) }),
+    posture: Object.freeze({ persistence: 'instant', keys: Object.freeze(['posture', 'pose']) }),
+    presence: Object.freeze({ persistence: 'scene', keys: Object.freeze(['presence', 'presence_state', 'presenceState']) }),
+    physical: Object.freeze({ persistence: 'durable', keys: Object.freeze(['condition', 'physical_state', 'physicalState', 'health', 'injury', 'injuries']) }),
+    attire: Object.freeze({ persistence: 'durable', keys: Object.freeze(['attire', 'outfit', 'clothing', 'clothes']) }),
+    carrying: Object.freeze({ persistence: 'durable', keys: Object.freeze(['carrying', 'carried', 'inventory', 'possessions', 'equipment']) })
+  });
+  const CHARACTER_STATE_SLOT_DECAY_VERSION = 'character_state_slot_decay_v1';
+  const CHARACTER_STATE_SLOT_DECAY_PROFILES = Object.freeze({
+    last_known_location: Object.freeze({ halfLife: 80, minRetention: 0.08 }),
+    physical: Object.freeze({ halfLife: 64, minRetention: 0.12 }),
+    attire: Object.freeze({ halfLife: 24, minRetention: 0.18 }),
+    carrying: Object.freeze({ halfLife: 32, minRetention: 0.16 })
+  });
+  const characterStateProjectionSourceTurn = source => {
+    const values = [source?.worldlineOrdinal, source?.pairIndex, source?.turnId, source?.messageIndex]
+      .map(Number).filter(Number.isFinite).filter(value => value >= 0);
+    return values.length ? Math.max(...values) : null;
+  };
+  const decayCharacterStateProjectionItem = (item, currentTurn = 0) => {
+    if (!objectish(item) || item?._characterStateProjection?.active !== true) return item;
+    const out = { ...item };
+    const projection = clone(item._characterStateProjection, {});
+    const slotSources = { ...(projection.slotSources || {}) };
+    const slotDecay = {};
+    const expiredSlots = [];
+    Object.entries(CHARACTER_STATE_SLOT_DECAY_PROFILES).forEach(([slot, profile]) => {
+      const group = CHARACTER_STATE_SLOT_GROUPS[slot];
+      if (!group || !characterStateSlotHasKey(out, group)) return;
+      const sourceTurn = characterStateProjectionSourceTurn(slotSources[slot]);
+      if (!Number.isFinite(sourceTurn)) {
+        slotDecay[slot] = { retention: 1, ageTurns: 0, sourceTurn: null };
+        return;
+      }
+      const ageTurns = Math.max(0, Number(currentTurn || 0) - sourceTurn);
+      const retention = ledgerRev2Clamp(Math.exp(-ageTurns / Math.max(2, profile.halfLife)), 0, 1, 0);
+      slotDecay[slot] = {
+        retention: Number(retention.toFixed(4)),
+        ageTurns,
+        sourceTurn,
+        halfLife: profile.halfLife,
+        minRetention: profile.minRetention
+      };
+      if (retention < profile.minRetention) {
+        characterStateSlotClear(out, group);
+        delete slotSources[slot];
+        expiredSlots.push(slot);
+      }
+    });
+    out._characterStateProjection = {
+      ...projection,
+      decayVersion: CHARACTER_STATE_SLOT_DECAY_VERSION,
+      slotSources,
+      slotDecay,
+      expiredSlots
+    };
+    return out;
+  };
+  const decayCharacterStateProjectionsForRecall = store => {
+    if (!objectish(store?.entity)) return store;
+    const currentTurn = Math.max(0, Number(store?.worldlineHeadOrdinal || store?.turn || 0));
+    store.entity.characters = ensureArray(store.entity.characters).map(item => decayCharacterStateProjectionItem(item, currentTurn));
+    return store;
+  };
+  const characterStateProjectionSource = item => ({
+    packetHash: text(item?._locator?.sourceHash || item?._packetHash || '').trim(),
+    worldlineOrdinal: Number(item?._locator?.worldlineOrdinal || 0) || 0,
+    pairIndex: Number(item?._locator?.sourcePairIndex ?? item?._retrieval?.sourcePairIndex ?? 0) || 0,
+    messageIndex: Number(item?._locator?.messageIndex ?? 0) || 0,
+    turnId: Number(item?._locator?.turnId ?? item?._retrieval?.turnId ?? 0) || 0,
+    sceneId: text(item?.scene_id || item?.sceneId || item?._locator?.sceneId || '').trim(),
+    observedAt: text(item?._locator?.temporal?.observedAt || item?.observed_at || item?.observedAt || '').trim()
+  });
+  const characterStateSlotHasKey = (item, group) => ensureArray(group?.keys).some(key => Object.prototype.hasOwnProperty.call(item || {}, key));
+  const characterStateSlotClear = (target, group) => {
+    ensureArray(group?.keys).forEach(key => { delete target[key]; });
+  };
+  const characterStateSlotApplyIncoming = (target, incoming, group) => {
+    characterStateSlotClear(target, group);
+    ensureArray(group?.keys).forEach(key => {
+      if (Object.prototype.hasOwnProperty.call(incoming || {}, key)) target[key] = clone(incoming[key], incoming[key]);
+    });
+  };
+  const characterStateSameScene = (left, right) => {
+    const a = text(left?.scene_id || left?.sceneId || left?._locator?.sceneId || left?._characterStateProjection?.latestSource?.sceneId || '').trim();
+    const b = text(right?.scene_id || right?.sceneId || right?._locator?.sceneId || '').trim();
+    return !a || !b || normalizeKey(a) === normalizeKey(b);
+  };
+  const characterStateProjectionIdentity = item => normalizeKey(
+    item?.name || item?.title || item?.label || item?._retrieval?.subject || item?._locator?.subject || publicRefOf(item) || item?.id || ''
+  );
+  const initializeCharacterStateProjection = item => {
+    if (!objectish(item)) return item;
+    const out = { ...item };
+    const source = characterStateProjectionSource(item);
+    const slotSources = {};
+    Object.entries(CHARACTER_STATE_SLOT_GROUPS).forEach(([slot, group]) => {
+      if (characterStateSlotHasKey(item, group)) slotSources[slot] = source;
+    });
+    out._characterStateProjection = {
+      active: true,
+      version: CHARACTER_STATE_PROJECTION_VERSION,
+      identity: characterStateProjectionIdentity(item),
+      latestSource: source,
+      slotSources
+    };
+    return out;
+  };
+  const mergeCharacterStateProjectionItem = (previous, incoming) => {
+    if (!objectish(incoming)) return incoming;
+    if (!objectish(previous)) return initializeCharacterStateProjection(incoming);
+    const previousIdentity = characterStateProjectionIdentity(previous);
+    const incomingIdentity = characterStateProjectionIdentity(incoming);
+    if (previousIdentity && incomingIdentity && previousIdentity !== incomingIdentity) return initializeCharacterStateProjection(incoming);
+    const sameScene = characterStateSameScene(previous, incoming);
+    const merged = { ...previous, ...incoming, _stableKey: incoming._stableKey || previous._stableKey, _locator: incoming._locator, _retrieval: incoming._retrieval };
+    const source = characterStateProjectionSource(incoming);
+    const priorProjection = objectish(previous._characterStateProjection) ? previous._characterStateProjection : {};
+    const slotSources = { ...(priorProjection.slotSources || {}) };
+    Object.entries(CHARACTER_STATE_SLOT_GROUPS).forEach(([slot, group]) => {
+      const hasIncoming = characterStateSlotHasKey(incoming, group);
+      if (hasIncoming) {
+        characterStateSlotApplyIncoming(merged, incoming, group);
+        slotSources[slot] = source;
+        return;
+      }
+      if (group.persistence === 'instant' || (group.persistence === 'scene' && !sameScene)) {
+        characterStateSlotClear(merged, group);
+        delete slotSources[slot];
+      }
+    });
+    const aliases = mergeValues([previous?.aliases, previous?.alias, incoming?.aliases, incoming?.alias], 48);
+    const identityAliases = mergeValues([previous?.identityAliases, incoming?.identityAliases], 48);
+    if (aliases.length) merged.aliases = aliases;
+    if (identityAliases.length) merged.identityAliases = identityAliases;
+    merged._characterStateProjection = {
+      active: true,
+      version: CHARACTER_STATE_PROJECTION_VERSION,
+      identity: incomingIdentity || previousIdentity,
+      latestSource: source,
+      slotSources
+    };
+    return merged;
+  };
+  const upsertCharacterStateList = (list, items, limit = 120) => {
+    const out = Array.isArray(list) ? list.slice() : [];
+    for (const raw of ensureArray(items).filter(Boolean)) {
+      const item = raw;
+      const stableKey = text(item._stableKey || '').trim();
+      const identity = characterStateProjectionIdentity(item);
+      const idx = out.findIndex(existing => {
+        const existingStableKey = text(existing?._stableKey || '').trim();
+        if (stableKey && existingStableKey && stableKey === existingStableKey) return true;
+        const existingIdentity = characterStateProjectionIdentity(existing);
+        if (identity && existingIdentity && identity === existingIdentity) return true;
+        const existingRef = publicRefOf(existing);
+        return Boolean(existingRef && publicRefOf(item) && normalizeKey(existingRef) === normalizeKey(publicRefOf(item)));
+      });
+      if (idx >= 0) out[idx] = mergeCharacterStateProjectionItem(out[idx], item);
+      else out.unshift(initializeCharacterStateProjection(item));
+    }
+    return out
+      .sort((a, b) => Number(b?._retrieval?.updatedAt || b?._locator?.createdAt || 0) - Number(a?._retrieval?.updatedAt || a?._locator?.createdAt || 0)
+        || Number(b?._retrieval?.importance || 0) - Number(a?._retrieval?.importance || 0))
       .slice(0, limit);
   };
   const appendPacketObservations = (store, groups = []) => {
@@ -12472,13 +13266,13 @@ const MODE_PROFILES = Object.freeze({
       { lightweightIngest: true }
     );
 
-    store.entity.characters = merge(store.entity.characters, makeRows('entity', 'character', entity.characters, 4), item => normalizeKey(item.name || item.id || item.summary || ''), 120);
+    store.entity.characters = upsertCharacterStateList(store.entity.characters, makeRows('entity', 'character', entity.characters, 4), 120);
     store.entity.relations = merge(store.entity.relations, makeRows('entity', 'relation', entity.relations, 3), item => normalizeKey([item.from, item.to, item.id].filter(Boolean).join('|')), 160);
     store.entity.povMemories = merge(store.entity.povMemories, makeRows('entity', 'pov_memory', entity.pov_memories, 3), item => normalizeKey([item.ownerEntityId, item.id, item.summary].filter(Boolean).join('|')), 180);
     store.entity.secrets = merge(store.entity.secrets, makeRows('entity', 'secret', entity.secrets, 3), item => normalizeKey([item.title, item.id, item.summary].filter(Boolean).join('|')), 120);
 
-    const worldState = (world.location || world.time || world.atmosphere || world.sensory || world.lighting || world.weather || world.scent || world.scene_type || world.danger_level != null)
-      ? makeRows('world', 'current_state', [{ title: '현재 세계 상태', ...world, active_events: undefined, historical_events: undefined, world_rules: undefined, offscreen_threads: undefined }], 1)
+    const worldState = (world.location || world.time || world.atmosphere || world.sensory || world.lighting || world.weather || world.scent || world.scene_type || world.danger_level != null || world.state_summary || world.stateSummary)
+      ? makeRows('world', 'current_state', [{ title: '현재 세계 상태', ...world, summary: packetWorldStateSummary(world), active_events: undefined, historical_events: undefined, world_rules: undefined, offscreen_threads: undefined }], 1)
       : [];
     const worldRows = [
       ...worldState,
@@ -12495,8 +13289,8 @@ const MODE_PROFILES = Object.freeze({
     store.narrative.sceneDeltas = merge(store.narrative.sceneDeltas, makeRows('narrative', 'scene_delta', narrative.scene_deltas, 3), item => normalizeKey(item.id || item.summary || ''), 120);
     store.narrative.themeMotifs = merge(store.narrative.themeMotifs, makeRows('narrative', 'theme_motif', narrative.theme_motifs, 2), item => normalizeKey(item.id || item.motif || item.summary || ''), 80);
     store.narrative.criticalDialogue = merge(store.narrative.criticalDialogue, makeRows('narrative', 'critical_dialogue', narrative.critical_dialogue, 4), item => normalizeKey(item.id || item.speaker || item.summary || ''), 80);
-    const lightNarrativeState = (narrative.scene_phase || narrative.current_arc || narrative.tension_level != null || narrative.dominant_mood || narrative.pacing || narrative.time_elapsed)
-      ? makeRows('narrative', 'state', [{ title: '내러티브 상태', ...narrative, conflict_traces: undefined, scene_deltas: undefined, theme_motifs: undefined, critical_dialogue: undefined }], 1)
+    const lightNarrativeState = (narrative.scene_phase || narrative.current_arc || narrative.tension_level != null || narrative.dominant_mood || narrative.pacing || narrative.time_elapsed || narrative.state_summary || narrative.stateSummary)
+      ? makeRows('narrative', 'state', [{ title: '내러티브 상태', ...narrative, summary: packetNarrativeStateSummary(narrative), conflict_traces: undefined, scene_deltas: undefined, theme_motifs: undefined, critical_dialogue: undefined }], 1)
       : [];
     store.narrative.items = merge(store.narrative.items, lightNarrativeState, item => normalizeKey(item.id || item.title || item.summary || ''), 40);
 
@@ -12710,13 +13504,13 @@ const MODE_PROFILES = Object.freeze({
     ingestSignal.lastPacketHadUnsupportedReveal = Boolean(ingestSignal.lastPacketHadUnsupportedReveal || hasPacketQualityRisk(secrets));
     ingestSignal.lastPacketSecretRevealRisk = Boolean(ingestSignal.lastPacketSecretRevealRisk || hasPacketQualityRisk(secrets));
     ingestSignal.lowQualityItems = countLowQualityItems([...characters, ...relations, ...povMemories, ...secrets]);
-    store.entity.characters = upsertList(store.entity.characters, characters, item => normalizeKey(item.name || item.title || item.id), 120);
+    store.entity.characters = upsertCharacterStateList(store.entity.characters, characters, 120);
     store.entity.relations = upsertList(store.entity.relations, relations, item => normalizeKey([item.from, item.to, item.label, item.id].filter(Boolean).join('_')), 160);
     store.entity.povMemories = upsertList(store.entity.povMemories, povMemories, item => normalizeKey([item.ownerEntityId, item.memoryType, item.summary, item.id].filter(Boolean).join('_')), 180);
     store.entity.secrets = upsertList(store.entity.secrets, secrets, item => normalizeKey([item.title, item.summary, item.id].filter(Boolean).join('_')), 120);
 
     const worldItems = [];
-    if (world.location || world.time || world.atmosphere || world.sensory || world.lighting || world.weather || world.scent || world.scene_type || world.sceneType || world.danger_level || world.dangerLevel) {
+    if (world.location || world.time || world.atmosphere || world.sensory || world.lighting || world.weather || world.scent || world.scene_type || world.sceneType || world.danger_level || world.dangerLevel || world.state_summary || world.stateSummary) {
       // Preserve active event anchors in the aggregate current-state row, but do
       // not flatten retired/resolved/superseded event text into present state.
       const currentWorldEvents = packetItems(world.active_events || world.activeEvents || world.events || []).filter(value => {
@@ -12732,7 +13526,7 @@ const MODE_PROFILES = Object.freeze({
         activeEvents: undefined,
         events: undefined
       };
-      worldItems.push(collectionTypedItem('current_state', { title: '현재 세계 상태', ...currentWorldState, summary: itemText(currentWorldState) }));
+      worldItems.push(collectionTypedItem('current_state', { title: '현재 세계 상태', ...currentWorldState, summary: packetWorldStateSummary(currentWorldState) }));
     }
     packetItems(world.active_events || world.activeEvents || world.events || []).forEach(event => worldItems.push(collectionTypedItem('active_event', { ...itemObject(event), label: objectish(event) ? (event.label || event.title || event.name || compact(itemText(event), 120)) : text(event), summary: itemText(event) })));
     packetItems(world.historical_events || world.historicalEvents || []).forEach(event => worldItems.push(collectionTypedItem('historical_event', { ...itemObject(event), label: objectish(event) ? (event.label || event.title || event.name || compact(itemText(event), 120)) : text(event), summary: itemText(event) })));
@@ -12770,8 +13564,8 @@ const MODE_PROFILES = Object.freeze({
       .map(item => applyPacketQualityToItem('narrative', 'critical_dialogue', packetDefault(item), packetQuality))
       .map(item => decorateItem('narrative', 'critical_dialogue', item, turn, packetHash, item?.speaker || item?.summary || 'dialogue', 'critical_dialogue', sourceMeta));
     const narrativeItems = [];
-    if (narrative.scene_phase || narrative.scenePhase || narrative.current_arc || narrative.currentArc || narrative.tension_level || narrative.tensionLevel || narrative.dominant_mood || narrative.dominantMood || narrative.pacing || narrative.time_elapsed || narrative.timeElapsed) {
-      const narrativeState = applyPacketQualityToItem('narrative', 'state', packetDefault({ title: '내러티브 상태', ...narrative, summary: itemText(narrative) }), packetQuality);
+    if (narrative.scene_phase || narrative.scenePhase || narrative.current_arc || narrative.currentArc || narrative.tension_level || narrative.tensionLevel || narrative.dominant_mood || narrative.dominantMood || narrative.pacing || narrative.time_elapsed || narrative.timeElapsed || narrative.state_summary || narrative.stateSummary) {
+      const narrativeState = applyPacketQualityToItem('narrative', 'state', packetDefault({ title: '내러티브 상태', ...narrative, summary: packetNarrativeStateSummary(narrative) }), packetQuality);
       narrativeItems.push(decorateItem('narrative', 'state', narrativeState, turn, packetHash, narrative.current_arc || narrative.currentArc || 'narrative', 'state', sourceMeta));
     }
     store.narrative.conflictTraces = upsertList(store.narrative.conflictTraces, conflictTraces, item => normalizeKey(item.label || item.title || item.id), 120);
@@ -12843,6 +13637,63 @@ const MODE_PROFILES = Object.freeze({
 
     store.ingestedPacketHashes = uniq([packetHash, ...store.ingestedPacketHashes], 300);
     return { ok: true, skipped: false, packetRecordSemanticAudit: sourceMeta.packetRecordSemanticAudit || null };
+  };
+
+  const emergencyRecallPacketForBudget = (packets = [], query = '') => {
+    const rows = ensureArray(packets).map((packet, index, source) => ({
+      packet,
+      index,
+      relevance: packetCheapRelevanceScore(packet, query),
+      protection: packetProtectionScore(packet),
+      distanceFromLatest: Math.max(0, Number.isFinite(Number(packet?.packetDistanceFromLatest))
+        ? Number(packet.packetDistanceFromLatest)
+        : source.length - 1 - index)
+    }));
+    rows.sort((left, right) => (
+      Number(right.relevance > 0) - Number(left.relevance > 0)
+      || right.relevance - left.relevance
+      || left.distanceFromLatest - right.distanceFromLatest
+      || right.protection - left.protection
+      || right.index - left.index
+    ));
+    return rows[0]?.packet || null;
+  };
+
+  const ingestEmergencyRecallPacket = (store, selectedPacket, context = {}) => {
+    const packet = materializeExtractedPacket(selectedPacket || {});
+    if (!packet.raw) return { ok: false, reason: 'empty_emergency_packet', skipped: true, emergencyBudgetFallback: true };
+    const packetHash = packet.hash || stableHash64(packet.raw);
+    const ingestRaw = lightweightPacketRaw(packet.raw);
+    const selectionReason = [packet.selectionReason, 'emergency_budget_light']
+      .filter(Boolean).join('+');
+    const sourceMeta = {
+      ...packet,
+      payloadBody: undefined,
+      cheapText: undefined,
+      raw: ingestRaw,
+      sourceEvidence: null,
+      originalRawLength: text(packet.raw).length,
+      lightweightIngest: true,
+      compactFullIngest: false,
+      boundedRecentQualityCheck: false,
+      emergencyBudgetFallback: true,
+      selectionReason,
+      liveMessageDistance: Number.isFinite(Number(packet.messageIndex))
+        ? Math.max(0, Number(context.messageCount || 0) - 1 - Number(packet.messageIndex))
+        : Number.POSITIVE_INFINITY
+    };
+    const result = ingestLightPacketToStore(store, ingestRaw, packetHash, sourceMeta);
+    return {
+      ...result,
+      hash: packetHash,
+      messageIndex: packet.messageIndex,
+      historicalPacket: packet.authoritativeChat === true && Number(packet.distanceFromLatest || 0) > 0,
+      lightweightIngest: true,
+      compactFullIngest: false,
+      boundedRecentQualityCheck: false,
+      emergencyBudgetFallback: true,
+      selectionReason
+    };
   };
 
   const allAxisItems = store => {
@@ -13281,6 +14132,17 @@ const MODE_PROFILES = Object.freeze({
         retrieval.canonicalAnchors,
         row.links?.canonicalAnchors
       ], 64).filter(packetCoverageSpecificCanonical).map(unifiedMemorySpecificNode).filter(Boolean), 32),
+      places: uniq(mergeValues([
+        retrieval.canonicalAnchors,
+        retrieval.crossLingualTokens,
+        row.links?.canonicalAnchors,
+        canonicalRecallTokensForText(row.memoryNote?.location || '')
+      ], 80).filter(latentEpisodicSpecificPlaceCanonical).map(unifiedMemorySpecificNode).filter(Boolean), 20),
+      objects: uniq(mergeValues([
+        retrieval.canonicalAnchors,
+        retrieval.crossLingualTokens,
+        row.links?.canonicalAnchors
+      ], 80).filter(value => /^object:/i.test(text(value)) && packetCoverageSpecificCanonical(value)).map(unifiedMemorySpecificNode).filter(Boolean), 24),
       refs: uniq(mergeValues([
         row.publicRef,
         row.id,
@@ -13338,6 +14200,8 @@ const MODE_PROFILES = Object.freeze({
     connectBuckets('related_ref', feature => feature.refs, UNIFIED_MEMORY_TUNING.relationWeights.related_ref);
     connectBuckets('same_canonical', feature => feature.canonical, UNIFIED_MEMORY_TUNING.relationWeights.same_canonical);
     connectBuckets('same_entity', feature => feature.entities, UNIFIED_MEMORY_TUNING.relationWeights.same_entity);
+    connectBuckets('same_place', feature => feature.places, UNIFIED_MEMORY_TUNING.relationWeights.same_place);
+    connectBuckets('same_object', feature => feature.objects, UNIFIED_MEMORY_TUNING.relationWeights.same_object);
     connectBuckets('same_scene', feature => feature.scene ? [feature.scene] : [], UNIFIED_MEMORY_TUNING.relationWeights.same_scene);
     return input.map((row, index) => {
       const associations = [...adjacency[index].values()]
@@ -13359,6 +14223,7 @@ const MODE_PROFILES = Object.freeze({
     });
   };
   const rebuildIndex = store => {
+    decayCharacterStateProjectionsForRecall(store);
     const memoryNotesByPacket = new Map(ensureArray(store?.memory?.notes)
       .filter(note => note?.sourcePacket)
       .map(note => [text(note.sourcePacket), note]));
@@ -13387,8 +14252,8 @@ const MODE_PROFILES = Object.freeze({
         publicRef: publicRefOf(item) || makePublicRef(axis, category, item.id || stableHash64(itemText(item)), item),
         sourceType: item._locator?.sourceType || 'chat_packet',
         sourceScope: item._locator?.sourceScope || 'current_chat',
-        scene_id: item.scene_id || item.sceneId || locator?.sceneId || '',
-        sourceTime: compact(temporal.eventTime || item.time || locator?.sourceTime || '', 100),
+        scene_id: semanticIdentifierText(item.scene_id || item.sceneId || locator?.sceneId || ''),
+        sourceTime: compact(structuredFieldText(temporal.eventTime || item.time || locator?.sourceTime || ''), 100),
         temporal,
         sceneRelation: (() => {
           const activeSceneId = text(store.context?.sceneAnchors?.sceneId || '').trim();
@@ -13401,25 +14266,25 @@ const MODE_PROFILES = Object.freeze({
         publicText: publicSummary(axis, item),
         publicProfile: axis === 'entity' && category === 'character' ? characterProfileSummary(item) : '',
         lifecycle: {
-          status: item.status || '',
-          timeScope: item.time_scope || item.timeScope || '',
+          status: structuredFieldText(item.status || ''),
+          timeScope: structuredFieldText(item.time_scope || item.timeScope || ''),
           confidence: item.confidence ?? '',
-          evidence: item.evidence || '',
-          replaces: item.replaces || item.supersedes || item.invalidates || ''
+          evidence: structuredFieldText(item.evidence || ''),
+          replaces: structuredFieldText(item.replaces || item.supersedes || item.invalidates || '')
         },
         links: {
           relatedRefs: mergeValues([item.related_refs, item.relatedRefs, item.source_refs, item.sourceRefs, item._sourceRef], 48),
           canonicalAnchors: mergeValues([item.canonicalAnchors, item.canonical_anchors, item.canonicalTokens, item.canonical_tokens, retrieval.canonicalAnchors], 48)
         },
         visibility: {
-          ownerEntityId: item.ownerEntityId || '',
-          holderEntityIds: mergeValues([item.holderEntityIds, item.holders], 32),
-          visibleToEntityIds: mergeValues([item.visibleToEntityIds, item.visibleTo, item.sharedWith, item.known_to, item.knownTo, item.knownBy], 32),
-          deniedToEntityIds: mergeValues([item.deniedToEntityIds, item.deniedTo, item.hidden_from, item.hiddenFrom, item.unknownTo], 32),
-          privacy: item.privacy || item.visibility || '',
-          secrecyLevel: item.secrecyLevel || '',
-          revealState: item.revealState || '',
-          truthState: item.truthState || ''
+          ownerEntityId: semanticIdentifierText(item.ownerEntityId || ''),
+          holderEntityIds: normalizedIdentifierValues([item.holderEntityIds, item.holders], 32),
+          visibleToEntityIds: normalizedIdentifierValues([item.visibleToEntityIds, item.visibleTo, item.sharedWith, item.known_to, item.knownTo, item.knownBy], 32),
+          deniedToEntityIds: normalizedIdentifierValues([item.deniedToEntityIds, item.deniedTo, item.hidden_from, item.hiddenFrom, item.unknownTo], 32),
+          privacy: structuredFieldText(item.privacy || item.visibility || ''),
+          secrecyLevel: structuredFieldText(item.secrecyLevel || ''),
+          revealState: structuredFieldText(item.revealState || ''),
+          truthState: structuredFieldText(item.truthState || '')
         },
         updatedAt: Number(retrieval.updatedAt || item._locator?.createdAt || 0),
         importance: Number.isFinite(Number(retrieval.importance)) ? Number(retrieval.importance) : 0.4
@@ -13430,6 +14295,18 @@ const MODE_PROFILES = Object.freeze({
         item,
         memoryNoteContextsByPacket.get(row.packetHash)
       );
+      if (axis === 'entity' && category === 'character' && item?._characterStateProjection?.active === true && row.publicText) {
+        row.memoryNote = {
+          ...(row.memoryNote || {}),
+          sectionText: row.publicText,
+          coreMemory: row.publicText,
+          characterStateProjection: true,
+          characterStateProjectionVersion: CHARACTER_STATE_PROJECTION_VERSION,
+          characterStateSlotSources: clone(item._characterStateProjection?.slotSources || {}, {}),
+          characterStateSlotDecay: clone(item._characterStateProjection?.slotDecay || {}, {}),
+          characterStateExpiredSlots: ensureArray(item._characterStateProjection?.expiredSlots)
+        };
+      }
       const retrievalAliases = ensureArray(row.memoryNote?.retrievalAliases);
       if (retrievalAliases.length) {
         row.retrieval.priorityTerms = mergeValues([row.retrieval.priorityTerms, retrievalAliases], 128);
@@ -13840,9 +14717,210 @@ const MODE_PROFILES = Object.freeze({
   };
   const lifecycleScoreMultiplier = (row = {}, query = '') => {
     const state = rowLifecycleState(row);
+    const lifecycle = objectish(row?._memoryLifecycle) ? row._memoryLifecycle : {};
     if (!state.inactive) return 1;
-    return inactiveLifecycleTerms(query) ? 0.82 : 0.32;
+    if (inactiveLifecycleTerms(query)) return 0.82;
+    const decay = ledgerRev2Clamp(lifecycle.decay, 0, 1, 0.35);
+    const decayClass = text(lifecycle.decayClass || 'default');
+    const floor = decayClass === 'superseded' ? 0.12
+      : (decayClass === 'transient_state' ? 0.18
+        : (decayClass === 'relation_state' ? 0.24 : 0.30));
+    const ceiling = decayClass === 'superseded' ? 0.42
+      : (decayClass === 'transient_state' ? 0.70
+        : (decayClass === 'relation_state' ? 0.76 : 0.82));
+    return ledgerRev2Clamp(floor + (ceiling - floor) * decay, floor, ceiling, 0.32);
   };
+  const LATENT_EPISODIC_GENERIC_PLACE_TOKENS = new Set(['park', 'place', 'location', 'area', 'site', 'room', 'street', 'city', 'town', 'building', 'home', 'house', 'cafe', 'restaurant', 'school', 'office']);
+  const latentEpisodicSpecificPlaceCanonical = value => {
+    const raw = text(value).trim();
+    if (!/^place:/i.test(raw) || !packetCoverageSpecificCanonical(raw)) return false;
+    const tail = normalizeKey(raw.replace(/^place:/i, ''));
+    return tail.length >= 3 && !LATENT_EPISODIC_GENERIC_PLACE_TOKENS.has(tail);
+  };
+  const latentEpisodicCueContext = (store = {}, signature = {}, settings = {}) => {
+    const sceneBaton = objectish(settings?.retrievalSceneBaton) ? settings.retrievalSceneBaton : {};
+    const anchors = effectiveSceneAnchors(store, settings) || {};
+    const location = compact(sceneBaton.location || '', 180);
+    const placeTokens = uniq([
+      ...ensureArray(signature?.canonicalTokens).filter(latentEpisodicSpecificPlaceCanonical),
+      ...canonicalRecallTokensForText(location).filter(latentEpisodicSpecificPlaceCanonical)
+    ].map(normalizeKey).filter(Boolean), 24);
+    const objectTokens = uniq(ensureArray(signature?.canonicalTokens)
+      .filter(value => /^object:/i.test(text(value))).map(normalizeKey).filter(Boolean), 24);
+    const entities = uniq([
+      signature?.mentionedEntities,
+      queryMentionedEntities(store, signature?.rawQuery || ''),
+      anchors.povEntities,
+      anchors.activeSpeakers,
+      anchors.visibleParticipants
+    ].flatMap(value => ensureArray(value)).map(normalizeKey).filter(Boolean), 32);
+    const entitySet = new Set(entities);
+    const topicTokens = uniq([
+      signature?.surfaceQueryTokens,
+      signature?.tokens,
+      signature?.conceptTokens,
+      signature?.semanticFrameTokens
+    ].flatMap(value => ensureArray(value)).map(normalizeKey)
+      .filter(value => value && !entitySet.has(value)
+        && !/^(?:state|status|current|active|scene|memory|entity|character|world|narrative|planner|summary|현재|상태|장면|기억|인물)$/i.test(value)), 64);
+    return {
+      version: LATENT_EPISODIC_REACTIVATION_VERSION,
+      location,
+      locationKey: normalizeKey(location),
+      placeTokens,
+      objectTokens,
+      entities,
+      topicTokens
+    };
+  };
+  const latentEpisodicRowFeatures = row => {
+    const retrieval = row?.retrieval || {};
+    const atomic = retrieval.atomicRecord || {};
+    const canonicalRaw = mergeValues([retrieval.canonicalAnchors, retrieval.crossLingualTokens, row?.links?.canonicalAnchors], 120);
+    const canonical = canonicalRaw.map(normalizeKey).filter(Boolean);
+    return {
+      places: uniq(canonicalRaw.filter(latentEpisodicSpecificPlaceCanonical).map(normalizeKey).filter(Boolean), 24),
+      objects: uniq(canonicalRaw.filter(value => /^object:/i.test(text(value)) && packetCoverageSpecificCanonical(value)).map(normalizeKey).filter(Boolean), 24),
+      entities: uniq([
+        atomic.subjectRefs,
+        atomic.participants,
+        retrieval.subject,
+        retrieval.entityNames,
+        retrieval.relationEndpoints,
+        row?.visibility?.ownerEntityId
+      ].flatMap(value => ensureArray(value)).map(normalizeKey).filter(Boolean), 48),
+      topicTokens: uniq(surfaceSpecificTokensOf([
+        row?.publicText,
+        row?.publicProfile,
+        row?.memoryNote?.sectionText,
+        row?.memoryNote?.coreMemory,
+        ensureArray(retrieval.priorityTerms).join(' ')
+      ].filter(Boolean).join(' ')).map(normalizeKey).filter(Boolean), 96)
+    };
+  };
+  const latentEpisodicEligible = row => {
+    const category = normalizeKey(row?.category || '');
+    const lifecycle = objectish(row?._memoryLifecycle) ? row._memoryLifecycle : {};
+    if (!/^(?:historicalevent|eventmemory|scenedelta|criticaldialogue|conflicttrace|offscreenthread|thememotif|summarymemory|activeevent)$/.test(category)) return false;
+    if (lifecycle.disputed === true) return false;
+    const ageTurns = Math.max(0, Number(lifecycle.ageTurns || 0) || 0);
+    const historical = lifecycle.inactive === true
+      || lifecycle.historicalObservation === true
+      || /^(?:past|historical|archived|expired|prior|nolongertrue)$/i.test(text(row?.lifecycle?.timeScope || ''))
+      || /^prior_/.test(text(row?.sceneRelation || ''));
+    return ageTurns >= LATENT_EPISODIC_REACTIVATION_TUNING.minAgeTurns && historical;
+  };
+  const latentEpisodicCueScore = (row = {}, cue = {}, store = {}) => {
+    if (!latentEpisodicEligible(row)) return null;
+    const features = latentEpisodicRowFeatures(row);
+    const placeOverlap = features.places.filter(value => cue.placeTokens.includes(value)).length;
+    const textPlaceHit = Boolean(cue.locationKey && normalizeKey([
+      row?.publicText,
+      row?.memoryNote?.location,
+      row?.memoryNote?.sectionText
+    ].filter(Boolean).join(' ')).includes(cue.locationKey));
+    const placeSignal = placeOverlap > 0 || textPlaceHit ? 1 : 0;
+    const structuredEntityHits = features.entities.filter(value => cue.entities.includes(value));
+    const rowEntityText = normalizeKey([row?.publicText, row?.publicProfile, row?.memoryNote?.sectionText].filter(Boolean).join(' '));
+    const textualEntityHits = ensureArray(cue.entities).filter(value => value.length >= 2 && rowEntityText.includes(value));
+    const entityOverlap = uniq([...structuredEntityHits, ...textualEntityHits], 16).length;
+    const entitySignal = cue.entities.length ? Math.min(1, entityOverlap / Math.min(2, cue.entities.length)) : 0;
+    const pairSignal = entityOverlap >= 2 ? 1 : 0;
+    const objectOverlap = features.objects.filter(value => cue.objectTokens.includes(value)).length;
+    const objectSignal = cue.objectTokens.length ? Math.min(1, objectOverlap / Math.min(2, cue.objectTokens.length)) : 0;
+    const cueEntitySet = new Set(ensureArray(cue.entities));
+    const rowTopicTokens = features.topicTokens.filter(value => !cueEntitySet.has(value));
+    const topicOverlap = rowTopicTokens.filter(value => cue.topicTokens.includes(value)).length;
+    const topicSignal = cue.topicTokens.length ? Math.min(1, topicOverlap / Math.min(5, cue.topicTokens.length)) : 0;
+    let cueStrength = placeSignal * 0.46 + pairSignal * 0.28 + entitySignal * 0.12 + objectSignal * 0.07 + topicSignal * 0.15;
+    if (placeSignal && pairSignal) cueStrength = Math.max(cueStrength, 0.74);
+    else if (placeSignal && entityOverlap >= 1) cueStrength = Math.max(cueStrength, 0.58);
+    else if (objectSignal > 0 && entityOverlap >= 1) cueStrength = Math.max(cueStrength, 0.56);
+    else if (pairSignal && topicSignal >= 0.2) cueStrength = Math.max(cueStrength, 0.52);
+    else if (entityOverlap >= 1 && topicSignal >= 0.4) cueStrength = Math.max(cueStrength, 0.48);
+    cueStrength = clamp(cueStrength, 0, 1, 0);
+    if (cueStrength < LATENT_EPISODIC_REACTIVATION_TUNING.minCueSignal) return null;
+    const lifecycle = objectish(row?._memoryLifecycle) ? row._memoryLifecycle : {};
+    const decay = ledgerRev2Clamp(lifecycle.decay, 0, 1, 0);
+    const ageFactor = LATENT_EPISODIC_REACTIVATION_TUNING.decayFloor
+      + (1 - LATENT_EPISODIC_REACTIVATION_TUNING.decayFloor) * Math.sqrt(decay);
+    const retrieval = row?.retrieval || {};
+    const importance = ledgerRev2Clamp(row?.importance ?? retrieval.importance, 0, 1, 0.4);
+    const salience = ledgerRev2Clamp(retrieval.salience, 0, 1, importance * 0.84);
+    const memoryStrength = clamp(0.72 + importance * 0.18 + salience * 0.10, 0.72, 1, 0.82);
+    let signal = clamp(cueStrength * ageFactor * memoryStrength, 0, 1, 0);
+    const recent = objectish(Memory.lastLatentEpisodicRecall) ? Memory.lastLatentEpisodicRecall : {};
+    const currentTurn = Math.max(0, Number(store?.worldlineHeadOrdinal || store?.turn || 0));
+    const recentTurn = Math.max(0, Number(recent.worldlineOrdinal || 0));
+    const ref = text(row?.publicRef || row?.ref || row?.id || '').trim();
+    const repeatedRecently = ref && ensureArray(recent.refs).some(value => normalizeKey(value) === normalizeKey(ref))
+      && currentTurn >= recentTurn
+      && currentTurn - recentTurn <= LATENT_EPISODIC_REACTIVATION_TUNING.recentRepeatCooldownTurns;
+    if (repeatedRecently) signal *= LATENT_EPISODIC_REACTIVATION_TUNING.recentRepeatMultiplier;
+    return {
+      signal: clamp(signal, 0, 1, 0),
+      cueStrength,
+      placeSignal,
+      entitySignal,
+      entityOverlap,
+      pairSignal,
+      objectSignal,
+      topicSignal,
+      ageFactor,
+      repeatedRecently,
+      ref
+    };
+  };
+  const applyLatentEpisodicReactivation = (rows = [], signature = {}, store = {}) => {
+    const input = ensureArray(rows);
+    if (!input.length) return input;
+    const cue = signature?.latentEpisodicCue || latentEpisodicCueContext(store, signature, signature?.settings || Memory.settings || {});
+    if (!cue?.locationKey && !ensureArray(cue?.placeTokens).length && ensureArray(cue?.entities).length < 2) return input;
+    const scored = input.map((row, index) => ({ row, index, detail: latentEpisodicCueScore(row, cue, store) }))
+      .filter(entry => entry.detail && entry.detail.signal >= LATENT_EPISODIC_REACTIVATION_TUNING.minCueSignal)
+      .sort((a, b) => Number(b.detail.signal || 0) - Number(a.detail.signal || 0)
+        || Number(b.detail.cueStrength || 0) - Number(a.detail.cueStrength || 0)
+        || Number(b.row?.importance || 0) - Number(a.row?.importance || 0)
+        || Number(b.row?.updatedAt || 0) - Number(a.row?.updatedAt || 0));
+    const activated = new Set(scored.slice(0, LATENT_EPISODIC_REACTIVATION_TUNING.maxActivated).map(entry => entry.index));
+    const details = new Map(scored.map(entry => [entry.index, entry.detail]));
+    return input.map((row, index) => {
+      const detail = details.get(index);
+      if (!detail) return row;
+      const active = activated.has(index);
+      const existingEvidence = Number(row?.scoreBreakdown?.sparseEvidence || 0);
+      const episodicCueSignal = active ? detail.signal : 0;
+      const boostedEvidence = active
+        ? clamp(Math.max(
+            existingEvidence,
+            episodicCueSignal * LATENT_EPISODIC_REACTIVATION_TUNING.evidenceBlend,
+            existingEvidence + episodicCueSignal * 0.18
+          ), 0, 1, existingEvidence)
+        : existingEvidence;
+      return {
+        ...row,
+        scoreBreakdown: {
+          ...(row.scoreBreakdown || {}),
+          sparseEvidence: Number(boostedEvidence.toFixed(4)),
+          unifiedMemoryEvidence: Number(Math.max(Number(row?.scoreBreakdown?.unifiedMemoryEvidence || 0), boostedEvidence).toFixed(4)),
+          episodicCueVersion: LATENT_EPISODIC_REACTIVATION_VERSION,
+          episodicCueSignal: Number(episodicCueSignal.toFixed(4)),
+          episodicCueRawSignal: Number(detail.signal.toFixed(4)),
+          episodicCueStrength: Number(detail.cueStrength.toFixed(4)),
+          episodicCuePlace: Number(detail.placeSignal.toFixed(4)),
+          episodicCueEntity: Number(detail.entitySignal.toFixed(4)),
+          episodicCueEntityOverlap: detail.entityOverlap,
+          episodicCuePair: Number(detail.pairSignal.toFixed(4)),
+          episodicCueObject: Number(detail.objectSignal.toFixed(4)),
+          episodicCueTopic: Number(detail.topicSignal.toFixed(4)),
+          episodicCueAgeFactor: Number(detail.ageFactor.toFixed(4)),
+          episodicCueRepeatedRecently: detail.repeatedRecently === true,
+          episodicCueActivated: active
+        }
+      };
+    });
+  };
+
   const buildRetrievalQuerySignature = (store, query, settings = Memory.settings) => {
     const aliasDictionary = buildAliasDictionary(store);
     const knowledgeContext = buildKnowledgeContext(store, query, settings);
@@ -13878,6 +14956,16 @@ const MODE_PROFILES = Object.freeze({
       return w;
     })();
     const tokensList = tokenize(expandedText, 260);
+    const baseSignature = {
+      rawQuery,
+      canonicalTokens,
+      mentionedEntities,
+      surfaceQueryTokens: surfaceSpecificTokensOf(rawQuery),
+      tokens: tokensList,
+      conceptTokens: mergeValues([conceptTokens, canonicalTokens], 160),
+      semanticFrameTokens: semanticFrameTokensForText(expandedText, conceptTokens)
+    };
+    const latentEpisodicCue = latentEpisodicCueContext(store, baseSignature, settings);
     return {
       engine: RETRIEVAL_ENGINE_VERSION,
       settings,
@@ -13888,6 +14976,7 @@ const MODE_PROFILES = Object.freeze({
       mentionedEntities,
       knowledgeContext,
       contextFocus,
+      latentEpisodicCue,
       tokens: tokensList,
       phraseBigrams: bigramTokens(tokensList, 220),
       charTokens: charNgramTokens(expandedText, 260),
@@ -14448,7 +15537,11 @@ const MODE_PROFILES = Object.freeze({
     });
   };
   const applyUnifiedMemoryCandidateSignals = (rows = [], signature = {}, corpus = {}, store = {}) =>
-    applyUnifiedAssociationActivation(applyUnifiedContextualBm25f(rows, signature, corpus), signature, store);
+    applyLatentEpisodicReactivation(
+      applyUnifiedAssociationActivation(applyUnifiedContextualBm25f(rows, signature, corpus), signature, store),
+      signature,
+      store
+    );
   const sparseCandidateForceKeep = (row = {}, signature = {}) => {
     const category = text(row.category || '');
     const lifecycle = row?._memoryLifecycle || {};
@@ -14458,9 +15551,22 @@ const MODE_PROFILES = Object.freeze({
     if (signature.presentStateQuery && /character|current_state|active_event/i.test(category)) return true;
     return false;
   };
+  const packetMemoryPreRankDecayPenalty = (row = {}, signature = {}) => {
+    const lifecycle = objectish(row?._memoryLifecycle) ? row._memoryLifecycle : {};
+    const decay = ledgerRev2Clamp(lifecycle.decay, 0, 1, 1);
+    const maxPenalty = Math.max(0, Number(lifecycle.decayPenaltyMax || 0));
+    if (!maxPenalty || lifecycle.mustCarryClass) return 0;
+    const pastLookup = ledgerRev2IsPastLookup(signature?.rawQuery || signature?.expandedText || '');
+    const evidence = ledgerRev2Clamp(row?.scoreBreakdown?.sparseEvidence ?? row?.scoreBreakdown?.relevanceEvidence ?? 0, 0, 1, 0);
+    const evidenceRelief = Math.max(0.40, 1 - evidence * 0.60);
+    const episodicCue = ledgerRev2Clamp(row?.scoreBreakdown?.episodicCueSignal, 0, 1, 0);
+    const cueRelief = episodicCue > 0 ? Math.max(0.12, 1 - episodicCue * 0.88) : 1;
+    const lookupRelief = pastLookup ? 0.10 : 0.48;
+    return maxPenalty * Math.max(0, 1 - decay) * evidenceRelief * cueRelief * lookupRelief;
+  };
   const rankSparseCandidates = (rows = [], signature = {}, mode = 'balanced') => {
     if (!rows.length) return rows;
-    const signals = ['bm25fSignal', 'identitySignal', 'canonicalExactSignal', 'associationSignal', 'charNgramSignal', 'lexicalCoverageSignal', 'sparsePhraseSignal'];
+    const signals = ['bm25fSignal', 'identitySignal', 'canonicalExactSignal', 'associationSignal', 'episodicCueSignal', 'charNgramSignal', 'lexicalCoverageSignal', 'sparsePhraseSignal'];
     const ranks = {};
     signals.forEach(signal => {
       const sorted = [...rows]
@@ -14481,12 +15587,14 @@ const MODE_PROFILES = Object.freeze({
       const normalizedRrf = maxRrf > 0 ? rrf / maxRrf : 0;
       const evidence = Number(row.scoreBreakdown?.sparseEvidence || 0);
       const bm25f = Number(row.scoreBreakdown?.bm25fSignal || 0);
-      const rankScore = normalizedRrf * 0.52 + evidence * 0.34 + bm25f * 0.14;
+      const ageDecayPenalty = packetMemoryPreRankDecayPenalty(row, signature);
+      const rankScore = normalizedRrf * 0.52 + evidence * 0.34 + bm25f * 0.14 - ageDecayPenalty;
       return {
         ...row,
         scoreBreakdown: {
           ...(row.scoreBreakdown || {}),
           sparseCandidateRrf: Number(normalizedRrf.toFixed(4)),
+          sparseCandidateAgeDecayPenalty: Number(ageDecayPenalty.toFixed(4)),
           sparseCandidateRank: Number(rankScore.toFixed(4))
         }
       };
@@ -14905,8 +16013,10 @@ const MODE_PROFILES = Object.freeze({
     const breakdown = row.scoreBreakdown || {};
     const relevanceEvidence = Number(breakdown.relevanceEvidence || 0);
     const historicalIntentBoost = Number(breakdown?.packetLedgerV2?.historicalIntentBoost || 0);
+    const episodicCueSignal = Number(breakdown.episodicCueSignal || 0);
     const memoryLifecycle = breakdown.packetMemoryLifecycle || row?._memoryLifecycle || {};
     if (memoryLifecycle.tier === 'disputed' && memoryLifecycle.disputeIntent !== true && relevanceEvidence < 0.1) return false;
+    if (episodicCueSignal >= LATENT_EPISODIC_REACTIVATION_TUNING.minCueSignal && relevanceEvidence >= 0.025) return true;
     if (memoryLifecycle.tier === 'archived' && memoryLifecycle.pastLookup !== true && historicalIntentBoost <= 0 && relevanceEvidence < 0.08) return false;
     if (Number(breakdown.lifecycleMultiplier || 1) < 0.5 && historicalIntentBoost <= 0) return false;
     if (historicalIntentBoost > 0 && relevanceEvidence >= 0.01) return true;
@@ -15565,15 +16675,23 @@ const MODE_PROFILES = Object.freeze({
       const breakdown = row?.scoreBreakdown || {};
       const direct = Number(breakdown.directSpecificity || 0) >= 0.18
         && Number(breakdown.relevanceEvidence || 0) >= 0.08;
+      const latentEpisodic = breakdown.episodicCueActivated === true
+        && Number(breakdown.episodicCueSignal || 0) >= LATENT_EPISODIC_REACTIVATION_TUNING.minCueSignal;
+      const oldEpisodic = /^(?:episodic|durable_event)$/i.test(text(lifecycle.decayClass || breakdown?.packetMemoryLifecycle?.decayClass || ''));
       if (lifecycle.tier === 'disputed') return disputedMemoryQuery || direct;
-      if (lifecycle.tier === 'archived') return historicalMemoryQuery || direct;
+      if (lifecycle.tier === 'archived' && oldEpisodic) return historicalMemoryQuery || latentEpisodic;
+      if (lifecycle.tier === 'archived') return historicalMemoryQuery || direct || latentEpisodic;
       return true;
     };
     const memoryLifecycleSelectionBoost = row => {
       const lifecycle = row?._memoryLifecycle || row?.scoreBreakdown?.packetMemoryLifecycle || {};
       if (lifecycle.tier === 'hot') return lifecycle.mustCarryClass ? 0.2 : 0.1;
       if (lifecycle.tier === 'warm') return 0.05;
-      if (lifecycle.tier === 'archived') return historicalMemoryQuery ? 0.02 : -0.12;
+      if (lifecycle.tier === 'archived') {
+        if (historicalMemoryQuery) return 0.02;
+        if (row?.scoreBreakdown?.episodicCueActivated === true) return 0.06;
+        return -0.12;
+      }
       if (lifecycle.tier === 'disputed') return disputedMemoryQuery ? 0.08 : -0.24;
       return 0;
     };
@@ -15617,6 +16735,7 @@ const MODE_PROFILES = Object.freeze({
       const axis = text(row?.axis || '');
       if (Number(row?.scoreBreakdown?.multiTopicCoverageBoost || 0) > 0) return 'required';
       if (row === sparseLexicalChampion) return 'required';
+      if (row?.scoreBreakdown?.episodicCueActivated === true && Number(row?.scoreBreakdown?.episodicCueSignal || 0) >= LATENT_EPISODIC_REACTIVATION_TUNING.minCueSignal) return 'conditional';
       const lifecyclePriority = lifecycleMustCarryPriority(row);
       if (lifecyclePriority) return lifecyclePriority;
       const body = [
@@ -15783,6 +16902,7 @@ const MODE_PROFILES = Object.freeze({
     const hasSpecificSelectionAnchor = row => {
       const breakdown = row?.scoreBreakdown || {};
       if (!breakdown.genericConceptCap) return true;
+      if (breakdown.episodicCueActivated === true && Number(breakdown.episodicCueSignal || 0) >= LATENT_EPISODIC_REACTIVATION_TUNING.minCueSignal) return true;
       if (Number(breakdown.directSpecificity || 0) >= 0.16) return true;
       const axis = text(row?.axis || '');
       if (axis === 'planner' && plannerIntentQuery) {
@@ -16306,12 +17426,46 @@ const MODE_PROFILES = Object.freeze({
     if (!segments.length) return '';
     return compact(segments.map(([key, value]) => `${key}: ${compact(value, 140)}`).join(' | '), 420);
   };
+  const characterStateProjectionFieldText = (item, keys) => {
+    for (const key of ensureArray(keys)) {
+      if (!Object.prototype.hasOwnProperty.call(item || {}, key)) continue;
+      const value = item[key];
+      const body = compact(structuredFieldText(value), 240);
+      if (body) return body;
+    }
+    return '';
+  };
+  const characterStateProjectionPublicSummary = item => {
+    if (!objectish(item) || item?._characterStateProjection?.active !== true) return '';
+    const name = compact(item.name || item.title || item.label || '인물', 80);
+    const slots = [
+      ['state', characterStateProjectionFieldText(item, CHARACTER_STATE_SLOT_GROUPS.current_state.keys)],
+      ['location', characterStateProjectionFieldText(item, CHARACTER_STATE_SLOT_GROUPS.location.keys)],
+      ['last_known_location', characterStateProjectionFieldText(item, CHARACTER_STATE_SLOT_GROUPS.last_known_location.keys)],
+      ['action', characterStateProjectionFieldText(item, CHARACTER_STATE_SLOT_GROUPS.action.keys)],
+      ['emotion', characterStateProjectionFieldText(item, CHARACTER_STATE_SLOT_GROUPS.emotion.keys)],
+      ['goal', characterStateProjectionFieldText(item, CHARACTER_STATE_SLOT_GROUPS.goal.keys)],
+      ['psychology', characterStateProjectionFieldText(item, CHARACTER_STATE_SLOT_GROUPS.psychology.keys)],
+      ['expression', characterStateProjectionFieldText(item, CHARACTER_STATE_SLOT_GROUPS.expression.keys)],
+      ['posture', characterStateProjectionFieldText(item, CHARACTER_STATE_SLOT_GROUPS.posture.keys)],
+      ['presence', characterStateProjectionFieldText(item, CHARACTER_STATE_SLOT_GROUPS.presence.keys)],
+      ['condition', characterStateProjectionFieldText(item, CHARACTER_STATE_SLOT_GROUPS.physical.keys)],
+      ['attire', characterStateProjectionFieldText(item, CHARACTER_STATE_SLOT_GROUPS.attire.keys)],
+      ['carrying', characterStateProjectionFieldText(item, CHARACTER_STATE_SLOT_GROUPS.carrying.keys)]
+    ].filter(([, value]) => value);
+    if (!slots.length) return '';
+    return compact(`${name}: ${slots.map(([slot, value]) => `${slot}:${value}`).join(' · ')}`, 520);
+  };
   const publicSummary = (axis, item = {}) => {
-    const clean = value => compact(value, 180);
+    const clean = value => compact(structuredFieldText(value), 180);
     const scopedSummary = (scope, prefix, body, state = '') => {
-      const scopeText = scope ? `[${compact(scope, 70)}] ` : '';
-      const head = `${scopeText}${prefix}${state ? ` (${state})` : ''}: `;
-      return compact(`${head}${compact(body || '', Math.max(40, 180 - head.length))}`, 180);
+      const safeScope = structuredFieldText(scope);
+      const safePrefix = structuredFieldText(prefix);
+      const safeState = structuredFieldText(state);
+      const safeBody = structuredFieldText(body);
+      const scopeText = safeScope ? `[${compact(safeScope, 70)}] ` : '';
+      const head = `${scopeText}${safePrefix}${safeState ? ` (${safeState})` : ''}: `;
+      return compact(`${head}${compact(safeBody, Math.max(40, 180 - head.length))}`, 180);
     };
     if (axis === 'entity') {
       if (item.from || item.to) {
@@ -16339,12 +17493,18 @@ const MODE_PROFILES = Object.freeze({
         ].filter(Boolean).join(' ');
         return scopedSummary(scope, 'Secret', item.title || item.summary || item.rawText || '비밀', state);
       }
+      const projectedCharacterState = characterStateProjectionPublicSummary(item);
+      if (projectedCharacterState) return projectedCharacterState;
+      const characterState = structuredFieldText(item.state || item.current_state || item.currentState || item.summary || item.relation_to_user || item.last_action || '');
+      const condition = structuredFieldText(item.condition || item.physical_state || item.physicalState || '');
+      const attire = structuredFieldText(item.attire || item.outfit || '');
+      const carrying = structuredFieldText(item.carrying || item.carried || item.inventory || '');
       const charPhys = [
-        item.condition || item.physical_state || item.physicalState,
-        item.attire || item.outfit ? `attire:${item.attire || item.outfit}` : '',
-        ensureArray(item.carrying || item.carried || item.inventory).length ? `carrying:${ensureArray(item.carrying || item.carried || item.inventory).join(',')}` : ''
+        condition,
+        attire ? `attire:${attire}` : '',
+        carrying ? `carrying:${carrying}` : ''
       ].filter(Boolean).join(' · ');
-      const base = `${item.name || item.title || '인물'}: ${item.state || item.current_state || item.summary || item.relation_to_user || item.last_action || '상태 유지'}${charPhys ? ` · ${charPhys}` : ''}`;
+      const base = `${item.name || item.title || '인물'}: ${characterState || '상태 유지'}${charPhys ? ` · ${charPhys}` : ''}`;
       return compact(base, 260);
     }
     if (axis === 'world') {
@@ -16385,6 +17545,13 @@ const MODE_PROFILES = Object.freeze({
     return raw;
   };
   const isLowSignalContinuityRow = row => {
+    const modelFacingText = [
+      row?.publicText,
+      row?.publicProfile,
+      row?.memoryNote?.sectionText,
+      row?.memoryNote?.coreMemory
+    ].filter(Boolean).join('\n');
+    if (hasObjectStringificationArtifact(modelFacingText)) return true;
     const axis = row?.axis || '';
     if (axis !== 'narrative' && axis !== 'planner') return false;
     const raw = text(row?.publicText || '').trim();
@@ -16686,7 +17853,8 @@ const MODE_PROFILES = Object.freeze({
       if (profile) statements.push(modelMemorySentence(locale.profile(subject, profile), language));
     }
     statements.push(...modelMemorySemanticQualifiers(axis, row, language));
-    return `- ${statements.filter(Boolean).join(' ')}`;
+    const rendered = `- ${statements.filter(Boolean).join(' ')}`;
+    return hasObjectStringificationArtifact(rendered) ? '' : rendered;
   };
   const sourceTimeOrderValue = row => {
     const raw = text(row?.temporal?.eventTime || row?.sourceTime || row?.temporal?.observedAt || row?.temporal?.knownAt || row?.temporal?.lastConfirmedAt || '').trim();
@@ -16906,6 +18074,42 @@ const MODE_PROFILES = Object.freeze({
   };
   const AUTO_PERFORMANCE_TIMELINE_RE = /타임라인|연표|기록|내역|이력|히스토리|처음\s*(?:만난|본|시작)|timeline|history|record|log|first\s*(?:met|saw|started)|経緯|履歴|記録|初めて/i;
   const AUTO_PERFORMANCE_PROFILE_RE = /프로필|성격|말투|정체|관계|기억|과거|어떤\s*사람|profile|personality|speech|voice|identity|relationship|memory|past|who\s+(?:is|was)|どんな\s*(?:人|人物)|性格|口調|正体|関係|記憶|過去/i;
+  const RECALL_DATA_COMPLEX_QUERY_RE = /(?:비교|차이|각각|모두|전부|전체\s*(?:흐름|경위)|처음부터|순서대로|compare|difference|each|all|entire\s+(?:history|sequence)|from\s+the\s+beginning|chronological|比較|違い|それぞれ|すべて|最初から|時系列)/i;
+  const dynamicRecallDataBudget = (query = '', selected = {}, options = {}) => {
+    const queryText = text(query).trim();
+    const pastRecallIntent = isPastStateLookupQuery(queryText) || LEDGER_REV2_PAST_LOOKUP_RE.test(queryText);
+    const timelineIntent = AUTO_PERFORMANCE_TIMELINE_RE.test(queryText);
+    const profileRecallIntent = AUTO_PERFORMANCE_PROFILE_RE.test(queryText);
+    const multiTopicSegments = explicitQueryTopicSegments(queryText);
+    const explicitComplexIntent = RECALL_DATA_COMPLEX_QUERY_RE.test(queryText);
+    const packetRecoveryActive = options?.packetRecovery?.active === true || options?.packetRecoveryActive === true;
+    const narrativeTurn = looksLikeNarrativeTurn(queryText) || Boolean(narrativeActionText(queryText));
+    const selectedRows = ['entity', 'world', 'narrative', 'planner']
+      .flatMap(axis => ensureArray(selected?.[axis]));
+    const requiredRows = selectedRows.filter(row => /^(?:direct|required)$/i.test(text(row?._selectionPriority || ''))).length;
+    const selectedEntityCount = selectedRows.filter(row => row?.axis === 'entity' && row?.category === 'character').length;
+    // Input semantics are hints only. Full-persona/RP narrative input must not gain a
+    // larger recall allowance merely because words such as relationship, memory, or
+    // past appear in the prose. Every request starts at 3k and expansion is decided
+    // later from evidence that actually failed to fit.
+    return {
+      tier: 'standard',
+      targetChars: RECALL_DATA_BUDGETS.standard,
+      maxChars: RECALL_DATA_BUDGETS.extended,
+      reasons: ['evidence_first_standard_probe'],
+      signals: {
+        pastRecallIntent,
+        timelineIntent,
+        profileRecallIntent,
+        multiTopicCount: multiTopicSegments.length,
+        explicitComplexIntent,
+        packetRecoveryActive,
+        narrativeTurn,
+        requiredRows,
+        selectedEntityCount
+      }
+    };
+  };
   const resolvePerformanceMode = (settings = Memory.settings || DEFAULT_SETTINGS, messages = [], query = '', options = {}) => {
     const requested = text(settings?.mode || DEFAULT_SETTINGS.mode).trim().toLowerCase();
     const configuredMode = requested || DEFAULT_SETTINGS.mode;
@@ -17152,11 +18356,43 @@ const MODE_PROFILES = Object.freeze({
     const scene = normalizeKey(row?.scene_id || row?.locator?.sceneId || '');
     return Boolean(scene && cohort.sceneIds?.has(scene) && !recallRowIsPrior(row));
   };
+  const characterStateProjectionKeyForRow = row => normalizeKey(
+    row?.retrieval?.subject || row?.locator?.subject || characterProfileNames(row)[0] || row?.publicRef || row?.id || ''
+  );
+  const suppressOlderCharacterSnapshots = (selected, currentTurnText = '') => {
+    if (!objectish(selected)) return selected;
+    const narrativeTurn = looksLikeNarrativeTurn(currentTurnText) || Boolean(narrativeActionText(currentTurnText));
+    const explicitHistoryOrProfile = !narrativeTurn && (
+      isPastStateLookupQuery(currentTurnText)
+      || isExplicitStateHistoryComparisonQuery(currentTurnText)
+      || PROFILE_INTENT_RE.test(text(currentTurnText))
+      || PROFILE_BROAD_INTENT_RE.test(text(currentTurnText))
+    );
+    if (explicitHistoryOrProfile) return selected;
+    const rows = ensureArray(selected.entity).filter(row => row?.category === 'character');
+    if (rows.length < 2) return selected;
+    const winners = new Map();
+    rows.forEach(row => {
+      const key = characterStateProjectionKeyForRow(row);
+      if (!key) return;
+      const previous = winners.get(key);
+      if (!previous || compareContinuityEvidenceObservation(previous, row) < 0) winners.set(key, row);
+    });
+    return {
+      ...selected,
+      entity: ensureArray(selected.entity).filter(row => {
+        if (row?.category !== 'character') return true;
+        const key = characterStateProjectionKeyForRow(row);
+        return !key || winners.get(key) === row;
+      })
+    };
+  };
   const contextualizeSelectedCurrentness = (selected, currentTurnText = '') => {
     const cohort = currentSceneCohort(selected);
-    if (!cohort.anchor) return selected;
-    const profileIntent = PROFILE_INTENT_RE.test(text(currentTurnText)) || PROFILE_BROAD_INTENT_RE.test(text(currentTurnText));
-    return Object.fromEntries(Object.entries(selected || {}).map(([axis, rows]) => [axis, ensureArray(rows).flatMap(row => {
+    const narrativeTurn = looksLikeNarrativeTurn(currentTurnText) || Boolean(narrativeActionText(currentTurnText));
+    const profileIntent = !narrativeTurn && (PROFILE_INTENT_RE.test(text(currentTurnText)) || PROFILE_BROAD_INTENT_RE.test(text(currentTurnText)));
+    if (!cohort.anchor) return suppressOlderCharacterSnapshots(selected, currentTurnText);
+    const contextualized = Object.fromEntries(Object.entries(selected || {}).map(([axis, rows]) => [axis, ensureArray(rows).flatMap(row => {
       if (!row || rowBelongsToCurrentSceneCohort(row, cohort)) return row ? [row] : [];
       const anchorFresher = compareCurrentWorldFreshness(cohort.anchor, row) < 0;
       const crossPacket = Boolean(recallRowPacketHash(cohort.anchor) && recallRowPacketHash(row) && recallRowPacketHash(cohort.anchor) !== recallRowPacketHash(row));
@@ -17178,6 +18414,7 @@ const MODE_PROFILES = Object.freeze({
         }
       }];
     })]));
+    return suppressOlderCharacterSnapshots(contextualized, currentTurnText);
   };
   const injectionCapForSettings = (settings = Memory.settings) => {
     const explicit = Number(settings?.injectionCapChars);
@@ -17231,7 +18468,13 @@ const MODE_PROFILES = Object.freeze({
     return {
       parent_turn_node_id: requestLineage.parentTurnNodeId || '',
       logical_turn_id: requestLineage.logicalTurnId,
-      request_nonce: requestLineage.requestNonce || ''
+      request_nonce: requestLineage.requestNonce || '',
+      ...(Number(requestLineage.identityVersion || 0) >= REQUEST_LINEAGE_IDENTITY_VERSION ? {
+        identity_version: REQUEST_LINEAGE_IDENTITY_VERSION,
+        lineage_schema: requestLineage.lineageSchema || REQUEST_LINEAGE_SCHEMA_V2,
+        turn_owner_key: requestLineage.turnOwnerKey || '',
+        generation_attempt_id: requestLineage.generationAttemptId || ''
+      } : {})
     };
   };
   const packetStaticContractSettings = settings => (
@@ -17968,6 +19211,10 @@ const MODE_PROFILES = Object.freeze({
     const scene = normalizeKey(row?.scene_id || row?.sceneId || row?.locator?.sceneId || '');
     const predicate = normalizeKey(atomic.predicate || '');
     const structuredSubject = subjectRefs.join('|');
+    if (category === 'character') {
+      const characterSubject = normalizeKey(row?.retrieval?.subject || row?.locator?.subject || subjectRefs[0] || ref || 'global');
+      return [axis, category, '', characterSubject || 'global'].join('\u0001');
+    }
     const subject = relation.length
       ? [relation.join('|'), predicate].filter(Boolean).join('|')
       : (predicate && structuredSubject
@@ -18023,7 +19270,7 @@ const MODE_PROFILES = Object.freeze({
     const memory = continuityLane === CONTINUITY_EVIDENCE_LANES.prohibitedInferences
       ? (renderedBody ? `- ${renderedBody}` : '')
       : publicStateView(axis, row, query, viewContext);
-    if (!memory || !renderedBody) return null;
+    if (!memory || !renderedBody || hasObjectStringificationArtifact(memory) || hasObjectStringificationArtifact(renderedBody)) return null;
     const bodyParts = packetCoreRecallBodyParts(renderedBody, language);
     const sourceKey = packetCoreRecallSourceKey(row);
     return {
@@ -18207,7 +19454,10 @@ const MODE_PROFILES = Object.freeze({
       ? (entries[0]?.language || 'en')
       : configured;
     const locale = MODEL_MEMORY_VIEW_LOCALES[language] || MODEL_MEMORY_VIEW_LOCALES.ko;
-    const cap = Math.max(0, Math.min(9000, Math.floor(injectionCapForSettings(settings) * 0.72)));
+    const explicitRecallBudget = Number(settings?.recallDataBudgetChars);
+    const cap = Number.isFinite(explicitRecallBudget) && explicitRecallBudget >= 0
+      ? Math.max(0, Math.floor(explicitRecallBudget))
+      : Math.max(0, Math.min(9000, Math.floor(injectionCapForSettings(settings) * 0.72)));
     const renderEntries = values => {
       const grouped = new Map(CONTINUITY_EVIDENCE_LANE_ORDER.map(lane => [lane, []]));
       ensureArray(values).forEach(entry => {
@@ -18282,13 +19532,19 @@ const MODE_PROFILES = Object.freeze({
     if (text(settings?.requestPressure).toLowerCase() === 'extreme') {
       return [
         'Schema/revision: meta.schema="hayaku_packet_v1" and meta.packet_schema_rev=2. Use object-valued meta, entity, world, narrative, planner, and importance with canonical snake_case collection keys.',
-        'Required item fields: character.name; relation.from/to; pov_memory.ownerEntityId plus summary/text; secret.summary/text; critical_dialogue.text/quote. Use meta.overpromotion_risks for prohibited interpretations.'
+        'Required item fields: character.name; relation.from/to; pov_memory.ownerEntityId plus summary/text; secret.summary/text; critical_dialogue.text/quote. Use meta.overpromotion_risks for prohibited interpretations.',
+        'Character state/current_state values must be human-readable strings, never objects or arrays. Put location, action, emotion, goal, condition, attire, and carrying in sibling scalar fields.',
+        'Every human-readable scalar and entity identifier must be a string, never an object or array. Boundary lists such as visibleToEntityIds, deniedToEntityIds, and holderEntityIds contain string identifiers only.',
+        'Write world and narrative state scalars as direct sibling fields, never inside state_scalars/stateScalars. Scene deltas use summary; consequences use action plus consequence or expected_consequence; payoffs use setup plus payoff or expected_payoff.'
       ];
     }
     return [
       'Schema/revision: meta.schema="hayaku_packet_v1" and meta.packet_schema_rev=2.',
       `Canonical v2 routes: meta[summary_memory, ${HAYAKU_PACKET_SCHEMA_V2.canonicalCollections.meta.join(', ')}, optional consent_memory]; entity[${HAYAKU_PACKET_SCHEMA_V2.canonicalCollections.entity.join(', ')}]; world[state scalars, ${HAYAKU_PACKET_SCHEMA_V2.canonicalCollections.world.join(', ')}]; narrative[state scalars, ${HAYAKU_PACKET_SCHEMA_V2.canonicalCollections.narrative.join(', ')}]; planner[${HAYAKU_PACKET_SCHEMA_V2.canonicalCollections.planner.join(', ')}]. Use snake_case collection keys.`,
       'Required item fields: character.name; relation.from/to; pov_memory.ownerEntityId plus summary/text; secret.summary/text; critical_dialogue.text/quote and speaker when known.',
+      'Character state/current_state values must be human-readable strings, never objects or arrays. Put location, action, emotion, goal, condition, attire, and carrying in sibling scalar fields.',
+      'Every human-readable scalar and entity identifier must be a string, never an object or array. Boundary lists such as visibleToEntityIds, deniedToEntityIds, and holderEntityIds contain string identifiers only.',
+      'Write world and narrative state scalars as direct sibling fields, never inside state_scalars/stateScalars. Scene deltas use summary; consequences use action plus consequence or expected_consequence; payoffs use setup plus payoff or expected_payoff.',
       'Use meta.overpromotion_risks for prohibited interpretations, narrative.critical_dialogue for exact quotes, and importance.reason for evidence-backed rationale. Do not add filler.'
     ];
   };
@@ -18595,14 +19851,115 @@ const MODE_PROFILES = Object.freeze({
     deliveredRowKeys: [],
     droppedRowKeys: ensureArray(selectedRowKeys)
   });
+  const recallBudgetSelectedRowCatalog = selected => {
+    const out = new Map();
+    const add = (axis, row) => {
+      if (!row) return;
+      const resolvedAxis = text(axis || row?.axis || 'world').trim() || 'world';
+      const key = packetCoreRecallDeliveryRowKey(resolvedAxis, row);
+      if (key && !out.has(key)) out.set(key, { axis: resolvedAxis, row });
+    };
+    ['entity', 'world', 'narrative', 'planner'].forEach(axis => ensureArray(selected?.[axis]).forEach(row => add(axis, row)));
+    ensureArray(selected?.temporalOrder).forEach(row => add(row?.axis || 'world', row));
+    return out;
+  };
+  const recallBudgetEvidenceClass = (axis, row = {}, query = '') => {
+    const selectedPriority = text(row?._selectionPriority || '').trim().toLowerCase();
+    const lifecycle = row?._memoryLifecycle || row?.scoreBreakdown?.packetMemoryLifecycle || {};
+    const category = normalizeKey(row?.category || '');
+    const breakdown = row?.scoreBreakdown || {};
+    const score = Number(row?.score || 0) || 0;
+    const relevance = Math.max(
+      Number(breakdown.relevanceEvidence || 0) || 0,
+      Number(breakdown.directSpecificity || 0) || 0,
+      Number(breakdown.surfaceSpecificSignal || 0) || 0,
+      Number(breakdown.locatorSignal || 0) || 0
+    );
+    const lane = continuityEvidenceLaneFor(axis, row);
+    const reasons = [];
+    let level = 'optional';
+    const hard = reason => { level = 'hard'; reasons.push(reason); };
+    const important = reason => {
+      if (level !== 'hard') level = 'important';
+      reasons.push(reason);
+    };
+    if (selectedPriority === 'direct' || selectedPriority === 'required') hard(`selection:${selectedPriority}`);
+    if (/^(?:continuity|scene)$/.test(text(lifecycle.mustCarryClass || '').toLowerCase())) hard(`must_carry:${lifecycle.mustCarryClass}`);
+    if (/^(?:continuitylock|donotresolveyet|worldrule|secret|povmemory|consentmemory|speakerboundary|overpromotionrisk)$/.test(category)) {
+      hard(`protected:${category}`);
+    }
+    if ([CONTINUITY_EVIDENCE_LANES.knowledgeBoundaries, CONTINUITY_EVIDENCE_LANES.prohibitedInferences].includes(lane)) {
+      hard(`guardrail:${lane}`);
+    }
+    if (lane === CONTINUITY_EVIDENCE_LANES.unresolvedConstraints && (selectedPriority === 'conditional' || relevance >= 0.08 || score >= 0.16)) {
+      important('unresolved_relevant');
+    }
+    if (/^(?:currentstate|activeevent|scenedelta|criticaldialogue|consequence|payoff)$/.test(category)
+      && (selectedPriority === 'conditional' || relevance >= 0.08 || score >= 0.18)) {
+      important(`live_continuity:${category}`);
+    }
+    if (selectedPriority === 'conditional' && (relevance >= 0.1 || score >= 0.22)) important('strong_conditional');
+    if (text(lifecycle.mustCarryClass || '').toLowerCase() === 'durable_event' && (relevance >= 0.08 || score >= 0.2)) important('durable_event');
+    return { level, reasons: uniq(reasons, 12), lane, score, relevance };
+  };
+  const recallEvidencePressureForPacking = (selected = {}, query = '', result = {}) => {
+    const selectedKeys = new Set(ensureArray(result?.selectedRowKeys));
+    const deliveredKeys = new Set(ensureArray(result?.deliveredRowKeys));
+    const catalog = recallBudgetSelectedRowCatalog(selected);
+    const dropped = [];
+    for (const key of selectedKeys) {
+      if (deliveredKeys.has(key)) continue;
+      const candidate = catalog.get(key);
+      if (!candidate) continue;
+      const classification = recallBudgetEvidenceClass(candidate.axis, candidate.row, query);
+      dropped.push({ key, ...candidate, ...classification });
+    }
+    const hardDropped = dropped.filter(item => item.level === 'hard');
+    const importantDropped = dropped.filter(item => item.level === 'important');
+    const optionalDropped = dropped.filter(item => item.level === 'optional');
+    return {
+      needsPrecisionExpansion: hardDropped.length > 0 || importantDropped.length > 0,
+      hardDroppedCount: hardDropped.length,
+      importantDroppedCount: importantDropped.length,
+      optionalDroppedCount: optionalDropped.length,
+      totalDroppedCount: dropped.length,
+      hardDroppedReasons: uniq(hardDropped.flatMap(item => item.reasons), 24),
+      importantDroppedReasons: uniq(importantDropped.flatMap(item => item.reasons), 24),
+      droppedKeys: dropped.map(item => item.key),
+      deliveredKeys: [...deliveredKeys],
+      selectedKeys: [...selectedKeys]
+    };
+  };
   const buildAtomicPacketCoreBudgetPlan = ({
     settings = Memory.settings || DEFAULT_SETTINGS,
     selected = {},
     query = '',
     sceneBaton = null,
-    capChars = 0
+    capChars = 0,
+    recallCapChars = null,
+    recallBudgetPolicy = null
   } = {}) => {
+    // capChars is a physical context-safety ceiling for the complete HAYAKU
+    // injection. recallCapChars is a separate semantic ceiling for recalled
+    // evidence only; it never includes the packet-writing prompt.
     const cap = Math.max(0, Number(capChars || 0) || 0);
+    const recallCapNumber = Number(recallCapChars);
+    const recallCapProvided = recallCapChars !== null && recallCapChars !== undefined
+      && Number.isFinite(recallCapNumber) && recallCapNumber >= 0;
+    let recallBudgetRequestedChars = recallCapProvided ? Math.max(0, Math.floor(recallCapNumber)) : RECALL_DATA_BUDGETS.standard;
+    const baseRecallPolicy = objectish(recallBudgetPolicy)
+      ? recallBudgetPolicy
+      : dynamicRecallDataBudget(query, selected, { packetRecovery: settings?.packetRecoveryRequest });
+    let recallDataBudget = {
+      ...baseRecallPolicy,
+      tier: recallCapProvided ? 'explicit' : 'standard',
+      targetChars: recallBudgetRequestedChars,
+      appliedChars: 0,
+      actualChars: 0,
+      attempts: [],
+      evidencePressure: null,
+      contextConstrained: false
+    };
     const structuralCache = promptCacheModeOf(settings) !== 'off';
     const outputContractSuppressed = packetCoreWriteSuppressed(settings);
     const staticCandidates = structuralCache
@@ -18644,6 +20001,11 @@ const MODE_PROFILES = Object.freeze({
       reason,
       capChars: cap,
       atomicMinimumChars,
+      packetAuthoringChars: 0,
+      recallBudgetRequestedChars,
+      recallBudgetAppliedChars: 0,
+      recallBudgetConstrainedByContext: recallBudgetRequestedChars > 0,
+      recallDataBudget: { ...recallDataBudget, appliedChars: 0, actualChars: 0, contextConstrained: recallBudgetRequestedChars > 0 },
       outputContractSuppressed,
       fullStaticWrite,
       fullLineageInstruction: lineageInstruction,
@@ -18712,23 +20074,112 @@ const MODE_PROFILES = Object.freeze({
         || criticalStaticContract;
     }
     const staticWrite = selectedStaticContract.text;
-    let memoryBudgetChars = packetCoreAvailablePartChars(
+    const packetAuthoringChars = packetCoreJoinLength([
+      staticWrite,
+      healthRepairHint,
+      runtimeSkeletonInstruction,
+      terminalSeal
+    ]);
+    const physicalRecallRoomChars = packetCoreAvailablePartChars(
       [sceneBatonText],
       [staticWrite, healthRepairHint, runtimeSkeletonInstruction, terminalSeal],
       cap
     );
-    const contextSettings = {
-      ...settings,
-      injectionCapChars: memoryBudgetChars,
-      allowTailOnly: true
-    };
-    let memoryContextResult = memoryBudgetChars > 0
-      ? buildPacketCoreMemoryContextDetailed(selected, query, contextSettings)
-      : emptyPacketCoreMemoryResult(selectedRowKeys);
-    let memoryBlock = text(memoryContextResult?.text || '');
-    if (memoryBlock.length > memoryBudgetChars) {
-      memoryContextResult = emptyPacketCoreMemoryResult(memoryContextResult?.selectedRowKeys || selectedRowKeys);
-      memoryBlock = '';
+    const policySignals = objectish(baseRecallPolicy?.signals) ? baseRecallPolicy.signals : {};
+    const broadSecondaryEvidenceHint = policySignals.packetRecoveryActive === true
+      || policySignals.timelineIntent === true
+      || policySignals.explicitComplexIntent === true;
+    const tierSequence = recallCapProvided
+      ? [{ tier: 'explicit', targetChars: recallBudgetRequestedChars }]
+      : [
+          { tier: 'standard', targetChars: RECALL_DATA_BUDGETS.standard },
+          { tier: 'precision', targetChars: RECALL_DATA_BUDGETS.precision },
+          { tier: 'extended', targetChars: RECALL_DATA_BUDGETS.extended }
+        ];
+    let memoryBudgetChars = 0;
+    let memoryContextResult = emptyPacketCoreMemoryResult(selectedRowKeys);
+    let memoryBlock = '';
+    let finalPressure = recallEvidencePressureForPacking(selected, query, memoryContextResult);
+    const attempts = [];
+    let previousAppliedCap = -1;
+    for (let tierIndex = 0; tierIndex < tierSequence.length; tierIndex += 1) {
+      const tier = tierSequence[tierIndex];
+      const appliedCap = Math.max(0, Math.min(physicalRecallRoomChars, Math.max(0, Number(tier.targetChars || 0) || 0)));
+      if (appliedCap === previousAppliedCap && tierIndex > 0) break;
+      previousAppliedCap = appliedCap;
+      const contextSettings = {
+        ...settings,
+        // Packet-authoring text is outside this budget. This value controls only
+        // recalled continuity evidence rendered into HAYAKU PACKET MEMORY.
+        injectionCapChars: appliedCap,
+        recallDataBudgetChars: appliedCap,
+        allowTailOnly: true
+      };
+      const result = appliedCap > 0
+        ? buildPacketCoreMemoryContextDetailed(selected, query, contextSettings)
+        : emptyPacketCoreMemoryResult(selectedRowKeys);
+      let resultText = text(result?.text || '');
+      let normalizedResult = result;
+      if (resultText.length > appliedCap) {
+        normalizedResult = emptyPacketCoreMemoryResult(result?.selectedRowKeys || selectedRowKeys);
+        resultText = '';
+      }
+      const pressure = recallEvidencePressureForPacking(selected, query, normalizedResult);
+      attempts.push({
+        tier: tier.tier,
+        targetChars: tier.targetChars,
+        appliedChars: appliedCap,
+        actualChars: resultText.length,
+        selectedEntries: Number(normalizedResult?.selectedEntries || 0),
+        renderedEntries: Number(normalizedResult?.renderedEntries || 0),
+        hardDroppedCount: pressure.hardDroppedCount,
+        importantDroppedCount: pressure.importantDroppedCount,
+        optionalDroppedCount: pressure.optionalDroppedCount,
+        contextConstrained: appliedCap < tier.targetChars
+      });
+      memoryBudgetChars = appliedCap;
+      memoryContextResult = normalizedResult;
+      memoryBlock = resultText;
+      finalPressure = pressure;
+      recallBudgetRequestedChars = tier.targetChars;
+      recallDataBudget = {
+        ...baseRecallPolicy,
+        tier: tier.tier,
+        targetChars: tier.targetChars,
+        appliedChars: appliedCap,
+        actualChars: resultText.length,
+        attempts: attempts.slice(),
+        evidencePressure: pressure,
+        contextConstrained: appliedCap < tier.targetChars,
+        reasons: uniq([
+          ...ensureArray(baseRecallPolicy?.reasons),
+          tierIndex === 0 ? 'standard_probe' : `expanded_to_${tier.tier}`,
+          ...(tierIndex > 0 && attempts[tierIndex - 1]?.hardDroppedCount > 0 ? ['hard_evidence_did_not_fit'] : []),
+          ...(tierIndex > 0 && attempts[tierIndex - 1]?.importantDroppedCount > 0 ? ['important_evidence_did_not_fit'] : [])
+        ], 24)
+      };
+      if (recallCapProvided) break;
+      if (tier.tier === 'standard') {
+        // Normal narrative input remains at 3k unless evidence selected by the
+        // retrieval engine actually fails to fit. Optional leftovers never expand.
+        if (!pressure.needsPrecisionExpansion || appliedCap < tier.targetChars) break;
+        continue;
+      }
+      if (tier.tier === 'precision') {
+        // 6k is exceptional: hard required evidence still does not fit, or broad
+        // timeline/recovery evidence remains important after the 4.5k pass.
+        const needsExtended = pressure.hardDroppedCount > 0
+          || (pressure.importantDroppedCount > 0 && broadSecondaryEvidenceHint);
+        if (!needsExtended || appliedCap < tier.targetChars) break;
+        continue;
+      }
+      break;
+    }
+    if (finalPressure.hardDroppedCount > 0 && recallDataBudget.tier === 'extended') {
+      recallDataBudget.reasons = uniq([...ensureArray(recallDataBudget.reasons), 'max_recall_budget_hard_evidence_still_dropped'], 24);
+    }
+    if (finalPressure.needsPrecisionExpansion && recallDataBudget.contextConstrained) {
+      recallDataBudget.reasons = uniq([...ensureArray(recallDataBudget.reasons), 'context_limited_before_evidence_fit'], 24);
     }
 
     let block = packetCoreJoinParts(structuralCache
@@ -18766,6 +20217,11 @@ const MODE_PROFILES = Object.freeze({
         reason: 'atomic_critical_fallback',
         capChars: cap,
         atomicMinimumChars,
+        packetAuthoringChars: packetCoreJoinLength([criticalStaticWrite, healthRepairHint, runtimeSkeletonInstruction, criticalTerminalSeal]),
+        recallBudgetRequestedChars,
+        recallBudgetAppliedChars: 0,
+        recallBudgetConstrainedByContext: recallBudgetRequestedChars > 0,
+        recallDataBudget: { ...recallDataBudget, appliedChars: 0, actualChars: 0, contextConstrained: true },
         outputContractSuppressed,
         fullStaticWrite,
         fullLineageInstruction: lineageInstruction,
@@ -18794,6 +20250,11 @@ const MODE_PROFILES = Object.freeze({
       reason: budgetSafeFallbackApplied ? 'atomic_budget_fallback' : 'atomic_contract_complete',
       capChars: cap,
       atomicMinimumChars,
+      packetAuthoringChars,
+      recallBudgetRequestedChars,
+      recallBudgetAppliedChars: memoryBudgetChars,
+      recallBudgetConstrainedByContext: memoryBudgetChars < recallBudgetRequestedChars,
+      recallDataBudget,
       outputContractSuppressed,
       fullStaticWrite,
       fullLineageInstruction: lineageInstruction,
@@ -19269,12 +20730,10 @@ const MODE_PROFILES = Object.freeze({
             chatTopologyHash: topologyHash,
             worldline
           };
-          requestLineage = stage('requestLineage', () => requestLineageFor(
-            messages,
-            storageSnapshot,
-            chatScope,
-            worldline
-          ));
+          requestLineage = stage('requestLineage', () => {
+            const baseLineage = requestLineageFor(messages, storageSnapshot, chatScope, worldline);
+            return issueRequestGenerationIdentity(chatScope, baseLineage);
+          });
           livePackets = stage('dualLedgerPacketsForRequest', () => storagePacketsForRequest(
             mergedLedgerRecords.records,
             storageSnapshot,
@@ -19477,12 +20936,38 @@ const MODE_PROFILES = Object.freeze({
       const ingestBudgetMs = settings.effectiveMode === 'deep'
         ? Math.max(1000, Math.floor(requestBudgetMs * DEEP_INGEST_BUDGET_RATIO))
         : requestBudgetMs;
+      let emergencyFallbackAttempted = false;
       stage('ingestPackets', () => {
         if (projectionCacheHit) return;
         for (const selectedPacket of packetsToIngest) {
           if (now() - startedAt > ingestBudgetMs) {
             budgetExceeded = true;
-            packetResults.push({ ok: false, reason: 'before_request_ingest_budget_guard', skipped: true });
+            let emergencyResult = null;
+            if (ingested === 0) {
+              emergencyFallbackAttempted = true;
+              const emergencyPacket = emergencyRecallPacketForBudget(packetsToIngest, retrievalQuery);
+              emergencyResult = ingestEmergencyRecallPacket(store, emergencyPacket, {
+                messageCount: ensureArray(messages).length
+              });
+              packetResults.push(emergencyResult);
+              if (emergencyResult.ok && !emergencyResult.skipped) ingested += 1;
+              else if (!emergencyResult.ok && emergencyResult.skipped !== true) failed += 1;
+              debugLog('beforeRequest:emergencyRecall', {
+                reason: 'normal_ingest_budget_exhausted_before_first_packet',
+                elapsedMs: now() - startedAt,
+                ingestBudgetMs,
+                hash: emergencyResult.hash || '',
+                ok: emergencyResult.ok === true,
+                skipped: emergencyResult.skipped === true,
+                index: ensureArray(store.index).length
+              }, emergencyResult.ok ? 'warn' : 'error');
+            }
+            packetResults.push({
+              ok: false,
+              reason: 'before_request_ingest_budget_guard',
+              skipped: true,
+              emergencyBudgetFallback: emergencyResult?.ok === true
+            });
             break;
           }
           const packet = materializeExtractedPacket(selectedPacket);
@@ -19557,6 +21042,32 @@ const MODE_PROFILES = Object.freeze({
           if (result.ok && !result.skipped) ingested += 1;
           if (!result.ok) failed += 1;
         }
+        // A single full projection can cross the budget by itself. In that
+        // case there is no next loop iteration to trip the guard above, so
+        // guarantee one bounded light projection before rebuilding the index.
+        if (!emergencyFallbackAttempted
+          && ingested === 0
+          && packetsToIngest.length > 0
+          && now() - startedAt > ingestBudgetMs) {
+          budgetExceeded = true;
+          emergencyFallbackAttempted = true;
+          const emergencyPacket = emergencyRecallPacketForBudget(packetsToIngest, retrievalQuery);
+          const emergencyResult = ingestEmergencyRecallPacket(store, emergencyPacket, {
+            messageCount: ensureArray(messages).length
+          });
+          packetResults.push(emergencyResult);
+          if (emergencyResult.ok && !emergencyResult.skipped) ingested += 1;
+          else if (!emergencyResult.ok && emergencyResult.skipped !== true) failed += 1;
+          debugLog('beforeRequest:emergencyRecall', {
+            reason: 'single_packet_ingest_crossed_budget_before_first_index_row',
+            elapsedMs: now() - startedAt,
+            ingestBudgetMs,
+            hash: emergencyResult.hash || '',
+            ok: emergencyResult.ok === true,
+            skipped: emergencyResult.skipped === true,
+            index: ensureArray(store.index).length
+          }, emergencyResult.ok ? 'warn' : 'error');
+        }
       });
       stage('rebuildIndex', () => {
         if (!projectionCacheHit) rebuildIndex(store);
@@ -19592,7 +21103,9 @@ const MODE_PROFILES = Object.freeze({
         stageAsync('search', () => searchIndexCompositeRecall(
           store,
           retrievalQuery,
-          searchBudgetGuard ? { ...settings, effectiveMode: 'fast' } : settings
+          searchBudgetGuard
+            ? { ...settings, effectiveMode: 'fast', retrievalSceneBaton: sceneBaton }
+            : { ...settings, retrievalSceneBaton: sceneBaton }
         )),
         stageAsync('packetHealth', async () => computePacketHealth(packetResults, store))
       ]));
@@ -19642,13 +21155,20 @@ const MODE_PROFILES = Object.freeze({
       const selfAnchorChars = 0;
       const adaptiveCapChars = adaptiveInjectionCap(promptMode, budgetMessages, hostContextBudget);
       const injectionCapChars = adaptiveCapChars;
+      const recallBudgetPolicy = stage('planRecallDataBudgetPolicy', () => dynamicRecallDataBudget(
+        query,
+        selectedForContext,
+        { packetRecovery, requestPressure }
+      ));
       const packetBudgetPlan = stage('buildAtomicPacketCoreBudgetPlan', () => buildAtomicPacketCoreBudgetPlan({
         settings: promptSettings,
         selected: selectedForContext,
         query,
         sceneBaton,
-        capChars: injectionCapChars
+        capChars: injectionCapChars,
+        recallBudgetPolicy
       }));
+      const recallDataBudget = packetBudgetPlan.recallDataBudget || recallBudgetPolicy;
       const packetWriteActive = packetBudgetPlan.active === true;
       if (!packetWriteActive && packetBudgetPlan.reason === 'insufficient_context_budget') {
         const detail = {
@@ -19780,6 +21300,19 @@ const MODE_PROFILES = Object.freeze({
         droppedRows: ensureArray(memoryContextResult?.droppedRowKeys).length,
         failure: packetWriteActive && packetCoreRows.length > 0 && injectedPacketCoreRows === 0
       };
+      const deliveredRowKeySet = new Set(ensureArray(memoryContextResult?.deliveredRowKeys));
+      const deliveredLatentRefs = packetCoreRows
+        .filter(({ axis, row }) => row?.scoreBreakdown?.episodicCueActivated === true
+          && deliveredRowKeySet.has(packetCoreRecallDeliveryRowKey(axis, row)))
+        .map(({ row }) => text(row?.publicRef || row?.ref || row?.id || '').trim())
+        .filter(Boolean);
+      if (deliveredLatentRefs.length) {
+        Memory.lastLatentEpisodicRecall = {
+          refs: uniq(deliveredLatentRefs, 4),
+          worldlineOrdinal: Math.max(0, Number(store?.worldlineHeadOrdinal || store?.turn || 0)),
+          at: now()
+        };
+      }
       const recallDeliveryRepaired = false;
       const budgetSafeFallbackApplied = packetBudgetPlan.budgetSafeFallbackApplied === true;
       if (recallDelivery.failure) {
@@ -19797,7 +21330,9 @@ const MODE_PROFILES = Object.freeze({
         score: Number.isFinite(Number(row?.score)) ? Number(Number(row.score).toFixed(4)) : 0,
         importance: Number.isFinite(Number(row?.importance)) ? Number(Number(row.importance).toFixed(4)) : 0,
         sourceTime: Number(row?.sourceTime || row?.locator?.turnIndex || 0) || 0,
-        timeScope: compact(effectivePublicTimeScope(row), 80)
+        timeScope: compact(effectivePublicTimeScope(row), 80),
+        episodicCueSignal: Number(Number(row?.scoreBreakdown?.episodicCueSignal || 0).toFixed(4)),
+        episodicCueActivated: row?.scoreBreakdown?.episodicCueActivated === true
       }));
       Memory.lastViewerRecall = {
         at: now(),
@@ -19806,6 +21341,12 @@ const MODE_PROFILES = Object.freeze({
         retrievalQuery: compact(retrievalQuery, 3200),
         selectedRows: viewerRecallRows.length,
         injectedRows: injectedPacketCoreRows,
+        recallBudgetTier: recallDataBudget.tier,
+        recallBudgetRequestedChars: recallDataBudget.targetChars,
+        recallBudgetAppliedChars: memoryBudgetChars,
+        recallDataChars: memoryBlock.length,
+        recallBudgetReasons: ensureArray(recallDataBudget.reasons),
+        latentEpisodicInjectedRefs: uniq(deliveredLatentRefs, 4),
         rows: viewerRecallRows
       };
       pushOperationLog('recall:completed', {
@@ -19814,6 +21355,12 @@ const MODE_PROFILES = Object.freeze({
         selectedRows: viewerRecallRows.length,
         injectedRows: injectedPacketCoreRows,
         kernelChars: memoryBlock.length,
+        recallBudgetTier: recallDataBudget.tier,
+        recallBudgetRequestedChars: recallDataBudget.targetChars,
+        recallBudgetAppliedChars: memoryBudgetChars,
+        packetAuthoringChars: Number(packetBudgetPlan.packetAuthoringChars || 0),
+        latentEpisodicInjected: deliveredLatentRefs.length,
+        latentEpisodicRefs: uniq(deliveredLatentRefs, 4),
         droppedRows: Math.max(0, viewerRecallRows.length - injectedPacketCoreRows)
       }, recallDelivery.failure ? 'warn' : 'success');
       Memory.store = store;
@@ -19877,6 +21424,18 @@ const MODE_PROFILES = Object.freeze({
         sceneBaton: clone(sceneBaton || null, null),
         memoryContextChars: memoryBlock.length,
         memoryBudgetChars,
+        recallDataBudget: clone({
+          ...recallDataBudget,
+          appliedChars: memoryBudgetChars,
+          actualChars: memoryBlock.length,
+          contextConstrained: packetBudgetPlan.recallBudgetConstrainedByContext === true
+        }, {}),
+        packetAuthoringBudget: {
+          separated: true,
+          actualChars: Number(packetBudgetPlan.packetAuthoringChars || 0),
+          atomicMinimumChars: Number(packetBudgetPlan.atomicMinimumChars || 0),
+          contextSafetyCapChars: injectionCapChars
+        },
         completionSealPreserved: packetCoreWriteSuppressed(promptSettings) || packetWriteActive,
         packetWriteActive,
         packetWriteSuppressionReason: packetWriteActive ? '' : packetBudgetPlan.reason,
@@ -19906,6 +21465,11 @@ const MODE_PROFILES = Object.freeze({
         continuityChars,
         fixedChars: Math.max(0, totalInjectedChars - continuityChars),
         maxContinuityChars: injectionCapChars,
+        recallDataBudgetTier: recallDataBudget.tier,
+        recallDataBudgetRequestedChars: recallDataBudget.targetChars,
+        recallDataBudgetAppliedChars: memoryBudgetChars,
+        packetAuthoringChars: Number(packetBudgetPlan.packetAuthoringChars || 0),
+        packetAuthoringBudgetSeparated: true,
         recentEntities: ensureArray(store.context?.recentEntities),
         sceneAnchors: clone(store.context?.sceneAnchors || null, null),
         packetHealth: clone(packetHealth, {}),
@@ -20696,6 +22260,7 @@ const MODE_PROFILES = Object.freeze({
         : Math.max(1, finiteNonNegativeInteger(record.targetPairIndex, 1)),
       userHash: compact(record.userHash || '', 96),
       userMessageIdHash: compact(record.userMessageIdHash || '', 96),
+      userMessageIdentityStable: record.userMessageIdentityStable === true,
       assistantVisibleHash: compact(record.assistantVisibleHash || '', 96),
       assistantMessageIdHash: compact(record.assistantMessageIdHash || '', 96),
       parentTurnNodeId: compact(record.parentTurnNodeId || '', 96),
@@ -20704,6 +22269,10 @@ const MODE_PROFILES = Object.freeze({
       recordState,
       memoryClass,
       requestNonce,
+      identityVersion: finiteNonNegativeInteger(record.identityVersion, 0),
+      lineageSchema: compact(record.lineageSchema || '', 64),
+      turnOwnerKey: compact(record.turnOwnerKey || '', 96),
+      generationAttemptId: compact(record.generationAttemptId || '', 96),
       requestSequence: finiteNonNegativeInteger(record.requestSequence, 0),
       capturedAt: finiteNonNegativeInteger(record.capturedAt, 0),
       boundAt: finiteNonNegativeInteger(record.boundAt, 0),
@@ -21248,6 +22817,10 @@ const MODE_PROFILES = Object.freeze({
       logicalTurnId: '',
       ownerTurnNodeId: '',
       requestNonce,
+      identityVersion: 0,
+      lineageSchema: '',
+      turnOwnerKey: '',
+      generationAttemptId: '',
       requestSequence: Math.max(1, Number(record.targetPairIndex || record.requestSequence || index + 1) || index + 1),
       boundAt: 0,
       captureSource: 'copied_chat_clone',
@@ -21315,6 +22888,10 @@ const MODE_PROFILES = Object.freeze({
         logicalTurnId: '',
         ownerTurnNodeId: '',
         requestNonce,
+        identityVersion: 0,
+        lineageSchema: '',
+        turnOwnerKey: '',
+        generationAttemptId: '',
         requestSequence: targetPairIndex,
         boundAt: 0,
         captureSource: 'copied_chat_clone_repair',
@@ -22138,6 +23715,10 @@ ${sourceChatId}`)}`;
         parentTurnNodeId: compact(lineage.parent_turn_node_id || lineage.parentTurnNodeId || '', 96),
         logicalTurnId: compact(lineage.logical_turn_id || lineage.logicalTurnId || '', 96),
         requestNonce: compact(lineage.request_nonce || lineage.requestNonce || '', 96),
+        identityVersion: finiteNonNegativeInteger(lineage.identity_version || lineage.identityVersion, 0),
+        lineageSchema: compact(lineage.lineage_schema || lineage.lineageSchema || '', 64),
+        turnOwnerKey: compact(lineage.turn_owner_key || lineage.turnOwnerKey || '', 96),
+        generationAttemptId: compact(lineage.generation_attempt_id || lineage.generationAttemptId || '', 96),
         captureNormalized,
         sourceRawHash: compact(sourceRawHash || hash, 96),
         canonicalRawHash: compact(canonicalRawHash || hash, 96)
@@ -22399,11 +23980,9 @@ ${sourceChatId}`)}`;
       : 0;
     const obsolete = ensureArray(Memory.pendingCaptures).filter(entry => {
       if (entry?.scope?.key !== scope.key) return false;
-      // requestNonce is deterministic for a request lineage and may repeat on a
-      // reroll of the same user turn. A new beforeRequest invocation therefore
-      // supersedes an older pending capture for the same target even when the
-      // nonce is identical; otherwise a stale reroll can inherit the old capture
-      // sequence and finalized-binding monitor.
+      // Legacy request_lineage_v1 nonces may repeat, while v2 gives each main
+      // generation a unique nonce. In both cases a new beforeRequest for the
+      // same target supersedes the older monitor so a stale response cannot win.
       const pendingPairIndex = Math.max(0, Number(entry?.lineage?.targetPairIndex || 0) || 0);
       return pendingPairIndex === targetPairIndex
         || (recoveryTargetPairIndex > 0 && pendingPairIndex === recoveryTargetPairIndex);
@@ -22476,9 +24055,15 @@ ${sourceChatId}`)}`;
         targetPairIndex: Math.max(1, Number(lineage.targetPairIndex || 1) || 1),
         userHash: compact(lineage.userHash || '', 96),
         userMessageIdHash: compact(lineage.userMessageIdHash || '', 96),
+        userMessageIdentityStable: lineage.userMessageIdentityStable === true,
         parentTurnNodeId: compact(lineage.parentTurnNodeId || '', 96),
         logicalTurnId: compact(lineage.logicalTurnId || '', 96),
-        requestNonce: compact(lineage.requestNonce || '', 96)
+        requestNonce: compact(lineage.requestNonce || '', 96),
+        identityVersion: finiteNonNegativeInteger(lineage.identityVersion, 0),
+        lineageSchema: compact(lineage.lineageSchema || '', 64),
+        turnOwnerKey: compact(lineage.turnOwnerKey || '', 96),
+        generationAttemptId: compact(lineage.generationAttemptId || '', 96),
+        generationIdentityQuality: compact(lineage.generationIdentityQuality || '', 32)
       },
       baselineAssistantVisibleHash: compact(baselinePair?.assistantVisibleHash || '', 96),
       baselineAssistantMessageIdHash: compact(baselinePair?.assistantMessageIdHash || '', 96),
@@ -22679,7 +24264,74 @@ ${sourceChatId}`)}`;
     Memory.storageWriteQueue = queued.catch(() => null);
     return await queued;
   };
-  const writeStorageLedgerDirect = async (scope, ledger, reason = 'update') => {
+  const manualOrphanCleanupPlan = ledger => {
+    const records = ensureArray(ledger?.records).map(normalizeStorageRecord).filter(Boolean);
+    const worldline = normalizeTurnWorldline(ledger?.worldline);
+    const nodesById = new Map(ensureArray(worldline.nodes)
+      .filter(Boolean).map(node => [compact(node?.turnNodeId || '', 96), node]));
+    const nonOrphanRecordHashes = new Set(records
+      .filter(record => record.recordState !== 'orphaned')
+      .map(record => compact(record.hash || '', 96)).filter(Boolean));
+    const nonOrphanWorldlineHashes = new Set();
+    ensureArray(worldline.nodes).forEach(node => {
+      if (node?.status === 'orphaned') return;
+      ensureArray(node?.packetHashes).forEach(hash => {
+        const normalizedHash = compact(hash || '', 96);
+        if (normalizedHash) nonOrphanWorldlineHashes.add(normalizedHash);
+      });
+    });
+    const candidateRecords = [];
+    const protectedRecords = [];
+    const protectedByReason = {};
+    const protect = (record, reason) => {
+      protectedRecords.push(record);
+      protectedByReason[reason] = Math.max(0, Number(protectedByReason[reason] || 0)) + 1;
+    };
+    records.filter(record => record.recordState === 'orphaned').forEach(record => {
+      let reason = '';
+      if (record.archiveReferenceOnly === true) reason = 'archive_reference';
+      else if (record.memoryClass !== 'live') reason = 'non_live_memory';
+      else if (record.inheritedSessionHistory === true) reason = 'inherited_history';
+      else if (isPermanentHistoricalStorageRecord(record)) reason = 'permanent_history';
+      else if (record.historicalProtection) reason = 'historical_protection';
+      else if (record.orphanExempt === true) reason = 'orphan_exempt';
+      else if (record.retentionProtected === true) reason = 'retention_protected';
+      else if (record.deletionProtected === true) reason = 'deletion_protected';
+      else if (record.auditRetained === true) reason = 'audit_retained';
+      const ownerTurnNodeId = compact(record.ownerTurnNodeId || '', 96);
+      if (!reason && ownerTurnNodeId) {
+        const ownerNode = nodesById.get(ownerTurnNodeId);
+        if (!ownerNode) reason = 'owner_node_unverified';
+        else if (ownerNode.status !== 'orphaned') reason = 'owner_node_not_orphaned';
+      }
+      const recordHash = compact(record.hash || '', 96);
+      if (
+        !reason
+        && recordHash
+        && !nonOrphanRecordHashes.has(recordHash)
+        && nonOrphanWorldlineHashes.has(recordHash)
+      ) reason = 'non_orphan_worldline_reference';
+      if (reason) protect(record, reason);
+      else candidateRecords.push(record);
+    });
+    return {
+      records,
+      worldline,
+      orphanedRecords: candidateRecords.length + protectedRecords.length,
+      candidateRecords,
+      protectedRecords,
+      protectedByReason,
+      removableChars: candidateRecords.reduce((sum, record) => sum + text(record?.raw || '').length, 0)
+    };
+  };
+  const manualOrphanCleanupSummary = plan => ({
+    orphanedRecords: Math.max(0, Number(plan?.orphanedRecords || 0) || 0),
+    removableRecords: ensureArray(plan?.candidateRecords).length,
+    removableChars: Math.max(0, Number(plan?.removableChars || 0) || 0),
+    protectedRecords: ensureArray(plan?.protectedRecords).length,
+    protectedByReason: clone(plan?.protectedByReason || {}, {})
+  });
+  const writeStorageLedgerDirect = async (scope, ledger, reason = 'update', options = {}) => {
     if (Memory.unloaded || !ownsRuntime()) {
       return { durable: false, saved: false, reason: 'runtime_not_owner' };
     }
@@ -22691,7 +24343,9 @@ ${sourceChatId}`)}`;
       ['active', 'historical', 'unbound', 'quarantined'].includes(record?.recordState)
     ));
     const reconciled = reconcileStorageSlotHeads(ledgerForWrite, activeRecords, []);
-    const records = pruneStorageRecords(ensureArray(reconciled.ledger.records), reconciled.ledger);
+    const records = options?.preserveExactRecords === true
+      ? ensureArray(reconciled.ledger.records).map(normalizeStorageRecord).filter(Boolean)
+      : pruneStorageRecords(ensureArray(reconciled.ledger.records), reconciled.ledger);
     const survivingRecordIds = new Set(records.map(record => record.recordId));
     const survivingHashes = new Set(records.map(record => record.hash));
     const tombstoneSlots = new Set(ensureArray(reconciled.ledger.tombstones)
@@ -22767,6 +24421,129 @@ ${sourceChatId}`)}`;
   };
   const writeStorageLedger = async (scope, ledger, reason = 'update') =>
     enqueueStorageOperation(() => writeStorageLedgerDirect(scope, ledger, reason));
+  const removeOrphanedStorageRecords = async (options = {}) => enqueueStorageOperation(async () => {
+    const scope = await RisuCompat.currentChatScope();
+    if (!scope?.confident || !scope?.key) {
+      return { ok: false, removed: false, durable: false, reason: scope?.reason || 'scope_unavailable' };
+    }
+    const ledger = await loadStorageLedger(scope, { hydrateArchive: false });
+    if (ledger.enabled !== true) {
+      return { ok: false, removed: false, durable: false, reason: ledger.reason || 'storage_unavailable', scopeKey: scope.key };
+    }
+    const plan = manualOrphanCleanupPlan(ledger);
+    const summary = manualOrphanCleanupSummary(plan);
+    if (options?.preview === true) {
+      return {
+        ok: true,
+        preview: true,
+        removed: false,
+        durable: true,
+        reason: summary.removableRecords ? 'removable_orphans_found' : 'no_removable_orphans',
+        scopeKey: scope.key,
+        ...summary,
+        ledger
+      };
+    }
+    if (!plan.candidateRecords.length) {
+      return {
+        ok: true,
+        removed: false,
+        durable: true,
+        saved: false,
+        reason: 'no_removable_orphans',
+        scopeKey: scope.key,
+        removedRecords: 0,
+        removedChars: 0,
+        ...summary,
+        ledger
+      };
+    }
+    const removedRecordIds = new Set(plan.candidateRecords.map(record => record.recordId));
+    const removedHashes = new Set(plan.candidateRecords.map(record => record.hash));
+    const records = plan.records.filter(record => !removedRecordIds.has(record.recordId));
+    const survivingHashes = new Set(records.map(record => record.hash));
+    const fullyRemovedHashes = new Set([...removedHashes].filter(hash => !survivingHashes.has(hash)));
+    const tombstoneSlots = new Set(ensureArray(ledger.tombstones)
+      .map(normalizeStorageTombstone).filter(tombstone => tombstone?.active === true)
+      .map(tombstone => tombstone.slotId));
+    const slotHeads = ensureArray(ledger.slotHeads).map(normalizeStorageSlotHead).filter(Boolean).map(head => {
+      const pointsAtRemovedRecord = removedRecordIds.has(head.selectedRecordId);
+      const pointsAtRemovedHash = fullyRemovedHashes.has(head.selectedVariantHash);
+      if (!pointsAtRemovedRecord && !pointsAtRemovedHash) return head;
+      if (!tombstoneSlots.has(head.slotId)) return null;
+      return {
+        ...head,
+        selectedVariantHash: '',
+        selectedRecordId: '',
+        selectedSource: '',
+        ownerTurnNodeId: '',
+        state: 'tombstoned',
+        selectedAt: now()
+      };
+    }).filter(Boolean);
+    let worldlineReferencesCleared = 0;
+    const worldline = normalizeTurnWorldline({
+      ...plan.worldline,
+      nodes: ensureArray(plan.worldline.nodes).map(node => {
+        if (node?.status !== 'orphaned' || !fullyRemovedHashes.size) return node;
+        const packetHashes = ensureArray(node.packetHashes).filter(hash => !fullyRemovedHashes.has(hash));
+        worldlineReferencesCleared += Math.max(0, ensureArray(node.packetHashes).length - packetHashes.length);
+        return packetHashes.length === ensureArray(node.packetHashes).length ? node : { ...node, packetHashes, updatedAt: now() };
+      })
+    });
+    const commit = await writeStorageLedgerDirect(scope, {
+      ...ledger,
+      records,
+      slotHeads,
+      worldline
+    }, 'manual_orphan_cleanup', { preserveExactRecords: true });
+    const durableRemovedIds = new Set(ensureArray(commit.ledger?.records).map(record => record?.recordId).filter(Boolean));
+    const verified = commit.durable === true
+      && [...removedRecordIds].every(recordId => !durableRemovedIds.has(recordId))
+      && ensureArray(commit.ledger?.records).length === records.length;
+    const resultLedger = commit.ledger ? {
+      ...commit.ledger,
+      enabled: true,
+      reason: 'loaded',
+      storageKey: storageLedgerStorageKey(scope),
+      recordsIncluded: true
+    } : ledger;
+    const result = {
+      ok: verified,
+      removed: verified,
+      durable: commit.durable === true,
+      saved: commit.saved === true,
+      reason: verified ? 'manual_orphan_cleanup' : (commit.durable === true ? 'cleanup_readback_verification_failed' : commit.reason),
+      scopeKey: scope.key,
+      removedRecords: verified ? plan.candidateRecords.length : 0,
+      removedChars: verified ? plan.removableChars : 0,
+      protectedRecords: plan.protectedRecords.length,
+      protectedByReason: clone(plan.protectedByReason, {}),
+      worldlineReferencesCleared: verified ? worldlineReferencesCleared : 0,
+      ledger: resultLedger
+    };
+    if (verified) {
+      invalidateExternalLedgerCaches(scope.key);
+      pushOperationLog('ledger:orphan_cleanup', {
+        at: now(),
+        scopeKey: scope.key,
+        removedRecords: result.removedRecords,
+        removedChars: result.removedChars,
+        protectedRecords: result.protectedRecords,
+        worldlineReferencesCleared: result.worldlineReferencesCleared,
+        worldlineNodesPreserved: true,
+        tombstonesPreserved: true
+      }, 'success');
+    } else {
+      pushOperationLog('ledger:orphan_cleanup_failed', {
+        at: now(),
+        scopeKey: scope.key,
+        reason: result.reason,
+        candidateRecords: plan.candidateRecords.length
+      }, 'error');
+    }
+    return result;
+  });
   const adoptBridgeSessionHandoff = async (options = {}) => enqueueStorageOperation(async () => {
     const scope = await RisuCompat.currentChatScope();
     if (!scope?.confident || !scope?.key) return { ok: false, adopted: false, verified: false, durable: false, reason: scope?.reason || 'scope_unavailable', records: 0, physicalCopies: 0 };
@@ -23549,7 +25326,9 @@ ${sourceChatId}`)}`;
         'exact',
         'request_nonce_exact',
         'stable_user_id_exact',
-        'stable_user_id_text_drift'
+        'stable_user_id_text_drift',
+        'generation_stable_user_id_exact',
+        'generation_stable_user_id_text_drift'
       ].includes(authoritativePairIdentity.mode);
     const candidates = ensureArray(packets).filter(packet => packet?.raw);
     if (pending?.recoveryRequired === true && !pending?.recoveryTarget?.pairIndex) {
@@ -23607,6 +25386,29 @@ ${sourceChatId}`)}`;
     const expectedLogicalTurnId = compact(pending?.lineage?.logicalTurnId || '', 96);
     const declaredParentTurnNodeId = compact(currentPacket?.parentTurnNodeId || '', 96);
     const declaredLogicalTurnId = compact(currentPacket?.logicalTurnId || '', 96);
+    const pendingGenerationIdentity = requestGenerationIdentityIsCoherent(pending?.scope, pending?.lineage);
+    const declaredIdentityVersion = finiteNonNegativeInteger(currentPacket?.identityVersion, 0);
+    const declaredLineageSchema = compact(currentPacket?.lineageSchema || '', 64);
+    const declaredTurnOwnerKey = compact(currentPacket?.turnOwnerKey || '', 96);
+    const declaredGenerationAttemptId = compact(currentPacket?.generationAttemptId || '', 96);
+    const generationDeclarationMismatch = pendingGenerationIdentity && Boolean(
+      (declaredIdentityVersion && declaredIdentityVersion !== REQUEST_LINEAGE_IDENTITY_VERSION)
+      || (declaredLineageSchema && declaredLineageSchema !== pending.lineage.lineageSchema)
+      || (declaredTurnOwnerKey && declaredTurnOwnerKey !== pending.lineage.turnOwnerKey)
+      || (declaredGenerationAttemptId && declaredGenerationAttemptId !== pending.lineage.generationAttemptId)
+    );
+    if (generationDeclarationMismatch) {
+      return {
+        ok: false,
+        reason: 'request_generation_identity_mismatch',
+        expectedTypes,
+        presentTypes,
+        expectedGenerationAttemptId: pending.lineage.generationAttemptId,
+        declaredGenerationAttemptId,
+        expectedTurnOwnerKey: pending.lineage.turnOwnerKey,
+        declaredTurnOwnerKey
+      };
+    }
     const declaredLineageAbsent = Boolean(currentPacket)
       && !compact(currentPacket?.requestNonce || '', 96)
       && !declaredParentTurnNodeId
@@ -23676,13 +25478,13 @@ ${sourceChatId}`)}`;
       const byId = new Map(ensureArray(ledger.records).map(record => [record.recordId, record]));
       const sourcePriority = captureSource === 'finalized_live_chat' ? 3 : (captureSource === 'afterRequest' ? 2 : 1);
       let changed = false;
+      let preservedDivergentPacketVariants = 0;
       for (const packet of eligible) {
         const packetType = compact(packet.packetType || 'current_snapshot', 48);
         const recoveryPacket = packetType === 'recovery_snapshot';
         const target = recoveryPacket ? pending.recoveryTarget : pending.lineage;
         const recordId = `${expectedNonce}:${packetType}`;
         const previous = byId.get(recordId);
-        if (previous && Number(previous.sourcePriority || 0) > sourcePriority) continue;
         const record = normalizeStorageRecord({
           recordId,
           hash: packet.hash || stableHash64(packet.raw),
@@ -23691,6 +25493,9 @@ ${sourceChatId}`)}`;
           targetPairIndex: target?.pairIndex || target?.targetPairIndex,
           userHash: target?.userHash || '',
           userMessageIdHash: target?.userMessageIdHash || '',
+          userMessageIdentityStable: recoveryPacket
+            ? target?.userMessageIdentityStable === true
+            : pending?.lineage?.userMessageIdentityStable === true,
           assistantVisibleHash: compact(
             recoveryPacket
               ? target?.assistantVisibleHash
@@ -23711,12 +25516,76 @@ ${sourceChatId}`)}`;
             ? (target?.logicalTurnId || '')
             : (pending.lineage.logicalTurnId || ''),
           requestNonce: expectedNonce,
+          identityVersion: finiteNonNegativeInteger(pending?.lineage?.identityVersion, 0),
+          lineageSchema: compact(pending?.lineage?.lineageSchema || '', 64),
+          turnOwnerKey: compact(pending?.lineage?.turnOwnerKey || '', 96),
+          generationAttemptId: compact(pending?.lineage?.generationAttemptId || '', 96),
           requestSequence: pending.requestSequence,
           capturedAt: now(),
           captureSource,
           sourcePriority
         });
         if (!record) continue;
+        if (previous && Number(previous.sourcePriority || 0) > sourcePriority) {
+          if (previous.hash === record.hash || previous.recordState === 'tombstoned') continue;
+          // A legacy request_lineage_v1 nonce can repeat when the same user turn
+          // is generated again. A prior finalized live-chat mirror owns the canonical id, but
+          // it must not make the new response disappear as "already_persisted"
+          // merely because its source priority is higher. Preserve the new bytes
+          // as an unbound candidate variant. It remains non-recallable until the
+          // authoritative finalized U+A identity binds it, while a later live-chat
+          // import promotes the exact hash and keeps the displaced bytes as audit.
+          const matchingVariant = [...byId.values()].find(candidate => (
+            candidate?.recordId !== recordId
+            && candidate?.hash === record.hash
+            && candidate?.requestNonce === expectedNonce
+            && candidate?.packetType === packetType
+          )) || null;
+          const variantRecordId = matchingVariant?.recordId || `variant:${stableHash64([
+            expectedNonce,
+            packetType,
+            record.hash
+          ].join('\u0001'))}:${packetType}`;
+          const priorVariant = byId.get(variantRecordId) || matchingVariant;
+          // Repeated output/editoutput observations must not demote a variant
+          // that authoritative reconciliation has already bound, superseded,
+          // quarantined, or tombstoned. Only an absent/unbound candidate may
+          // receive refreshed transport identity before final binding.
+          if (priorVariant && priorVariant.recordState !== 'unbound') {
+            preservedDivergentPacketVariants += 1;
+            continue;
+          }
+          const capturedVariant = normalizeStorageRecord({
+            ...(priorVariant || {}),
+            ...record,
+            recordId: variantRecordId,
+            ownerTurnNodeId: '',
+            recordState: 'unbound',
+            boundAt: 0,
+            auditRetained: false,
+            divergenceReason: '',
+            supersededByHash: '',
+            supersededAt: 0
+          });
+          if (!capturedVariant) continue;
+          const variantChanged = !priorVariant || [
+            'hash',
+            'raw',
+            'userHash',
+            'userMessageIdHash',
+            'assistantVisibleHash',
+            'assistantMessageIdHash',
+            'parentTurnNodeId',
+            'logicalTurnId',
+            'recordState',
+            'captureSource',
+            'sourcePriority'
+          ].some(key => priorVariant?.[key] !== capturedVariant[key]);
+          if (variantChanged) changed = true;
+          byId.set(variantRecordId, capturedVariant);
+          preservedDivergentPacketVariants += 1;
+          continue;
+        }
         if (!previous || previous.hash !== record.hash || previous.sourcePriority !== record.sourcePriority) changed = true;
         byId.set(recordId, { ...(previous || {}), ...record });
       }
@@ -23729,6 +25598,7 @@ ${sourceChatId}`)}`;
           expectedPacketTypes: group.expectedTypes,
           persistedPacketTypes: group.presentTypes,
           packetGroupComplete: true,
+          preservedDivergentPacketVariants,
           lineageRepairApplied: group.lineageRepairApplied === true,
           lineageRepairReason: group.lineageRepairReason || ''
         };
@@ -23739,6 +25609,7 @@ ${sourceChatId}`)}`;
         expectedPacketTypes: group.expectedTypes,
         persistedPacketTypes: group.presentTypes,
         packetGroupComplete: commit.durable === true,
+        preservedDivergentPacketVariants,
         lineageRepairApplied: group.lineageRepairApplied === true,
         lineageRepairReason: group.lineageRepairReason || ''
       };
@@ -24057,19 +25928,32 @@ ${sourceChatId}`)}`;
       && pair?.userMessageIdHash
       && expectedUserMessageIdHash === pair.userMessageIdHash
     );
+    const generationIdentity = requestGenerationIdentityIsCoherent(pending?.scope, pending?.lineage);
+    const generationIdentityClaimed = Number(pending?.lineage?.identityVersion || 0) >= REQUEST_LINEAGE_IDENTITY_VERSION;
+    const generationStableUserIdentity = generationIdentity
+      && pending?.lineage?.userMessageIdentityStable === true
+      && pair?.userMessageIdentityStable === true;
+    if (generationIdentityClaimed && !generationIdentity) {
+      return { matched: false, mode: 'generation_identity_invalid' };
+    }
     if (userMessageIdConflict) return { matched: false, mode: 'user_message_id_conflict' };
     if (stableUserMessageIdExact && pairIndex !== targetPairIndex) {
       return { matched: false, mode: 'pair_index_conflict' };
     }
-    if (stableUserMessageIdExact) {
-      if (userHashConflict && text(pending?.lineage?.mode || 'append').trim() !== 'append') {
+    if (stableUserMessageIdExact && (!generationIdentityClaimed || generationStableUserIdentity)) {
+      if (userHashConflict && !generationStableUserIdentity
+        && text(pending?.lineage?.mode || 'append').trim() !== 'append') {
         return { matched: false, mode: 'reroll_user_hash_conflict' };
       }
       return {
         matched: true,
-        mode: requestNonceConflict
-          ? 'stable_user_id_request_nonce_conflict'
-          : (userHashConflict ? 'stable_user_id_text_drift' : 'stable_user_id_exact')
+        mode: generationStableUserIdentity
+          ? (requestNonceConflict
+              ? 'generation_stable_user_id_request_nonce_conflict'
+              : (userHashConflict ? 'generation_stable_user_id_text_drift' : 'generation_stable_user_id_exact'))
+          : (requestNonceConflict
+              ? 'stable_user_id_request_nonce_conflict'
+              : (userHashConflict ? 'stable_user_id_text_drift' : 'stable_user_id_exact'))
       };
     }
     if (expectedNonce && pairNonce && expectedNonce === pairNonce
@@ -24378,6 +26262,7 @@ ${sourceChatId}`)}`;
       return { ledger, changed: false, refreshed: 0, reason: 'final_pair_identity_unavailable' };
     }
     const outputVisibleHash = compact(options?.outputVisibleHash || '', 96);
+    const outputPacketHashes = new Set(ensureArray(options?.outputPacketHashes).map(value => compact(value || '', 96)).filter(Boolean));
     const outputRequestNonces = new Set(ensureArray(options?.outputRequestNonces).map(value => compact(value || '', 96)).filter(Boolean));
     const pairNonce = compact(pair?.requestNonce || '', 96);
     const pairNonceCompatible = !pairNonce || pairNonce === expectedNonce;
@@ -24405,6 +26290,7 @@ ${sourceChatId}`)}`;
       || pending.lineage.userHash === pair.userHash;
     const pairUserIdentityCompatible = !userMessageIdConflict
       && (userHashCompatible || stableUserMessageIdExact);
+    const coherentGenerationIdentity = requestGenerationIdentityIsCoherent(pending?.scope, pending?.lineage);
     const livePacketHashes = new Set(ensureArray(pair?.packetHashes).map(value => compact(value || '', 96)).filter(Boolean));
     const requestPacketStableUserProof = Boolean(
       pairNonce
@@ -24445,12 +26331,27 @@ ${sourceChatId}`)}`;
         && outputVisibleExact;
       const exactIdentityProof = exactVisible || exactMessage;
       const identitylessPacketProof = exactPacket && !record?.assistantVisibleHash && !record?.assistantMessageIdHash;
-      if (!(postProcessIdentityProof || requestPacketStableUserProof || exactIdentityProof || identitylessPacketProof)) return record;
-      if ((staleVisible || staleMessage) && !(postProcessIdentityProof || requestPacketStableUserProof)) return record;
+      // Output observation binds the captured bytes to this exact generation.
+      // Stable U + pair index + coherent owner key then let the finalized chat
+      // replace only the provisional response hashes, even if editOutput/Lua or
+      // reroll persistence changed them repeatedly after the response hook.
+      const requestGenerationOutputProof = coherentGenerationIdentity
+        && pending?.lineage?.userMessageIdentityStable === true
+        && pair?.userMessageIdentityStable === true
+        && stableUserMessageIdExact
+        && pairNonceCompatible
+        && outputBelongsToRequest
+        && Boolean(record?.hash && outputPacketHashes.has(record.hash));
+      if (!(postProcessIdentityProof || requestPacketStableUserProof || requestGenerationOutputProof
+        || exactIdentityProof || identitylessPacketProof)) return record;
+      if ((staleVisible || staleMessage)
+        && !(postProcessIdentityProof || requestPacketStableUserProof || requestGenerationOutputProof)) return record;
       const next = {
         ...record,
         userHash: compact(pair.userHash || record.userHash || '', 96),
         userMessageIdHash: compact(pair.userMessageIdHash || record.userMessageIdHash || '', 96),
+        userMessageIdentityStable: pair.userMessageIdentityStable === true
+          || record.userMessageIdentityStable === true,
         assistantVisibleHash: compact(pair.assistantVisibleHash || record.assistantVisibleHash || '', 96),
         assistantMessageIdHash: compact(pair.assistantMessageIdHash || record.assistantMessageIdHash || '', 96),
         boundAt: Number(record.boundAt || 0) > 0 ? record.boundAt : now()
@@ -24463,6 +26364,8 @@ ${sourceChatId}`)}`;
         ? 'output_final_pair_identity'
         : requestPacketStableUserProof
           ? 'request_packet_stable_user_identity'
+          : requestGenerationOutputProof
+            ? 'request_generation_output_identity'
           : exactIdentityProof ? 'exact_final_identity' : 'exact_packet_identityless');
       return next;
     });
@@ -25088,12 +26991,36 @@ ${sourceChatId}`)}`;
     const inspection = packetCaptureInspectionFromText(content);
     const observedPackets = [...ensureArray(inspection.packets), ...ensureArray(inspection.repairablePackets)];
     const observedNonces = new Set(observedPackets.map(packet => compact(packet?.requestNonce || '', 96)).filter(Boolean));
+    const observedAt = now();
+    const visible = canonicalHistoryText(content, 'assistant');
+    const observation = {
+      at: observedAt,
+      outputVisibleHash: visible ? stableHash64(visible) : '',
+      outputPacketHashes: uniq(observedPackets.map(packet => compact(packet?.hash || '', 96)).filter(Boolean), 8),
+      outputRequestNonces: uniq([...observedNonces], 8)
+    };
+    const observationCutoff = observedAt - CAPTURE_ORIGIN_TTL_MS;
+    for (const [nonce, cached] of Memory.generationOutputObservations.entries()) {
+      if (Number(cached?.at || 0) < observationCutoff) Memory.generationOutputObservations.delete(nonce);
+    }
+    for (const nonce of observedNonces) {
+      Memory.generationOutputObservations.set(nonce, observation);
+    }
+    while (Memory.generationOutputObservations.size > 16) {
+      const oldestNonce = Memory.generationOutputObservations.keys().next().value;
+      if (!oldestNonce) break;
+      Memory.generationOutputObservations.delete(oldestNonce);
+    }
     const allStates = [...Memory.finalizedBindingMonitors.values()];
     const exactStates = observedNonces.size
       ? allStates.filter(candidate => observedNonces.has(compact(candidate?.pending?.lineage?.requestNonce || '', 96)))
       : [];
     let state = exactStates
       .sort((a, b) => Number(b.startedAt || 0) - Number(a.startedAt || 0))[0] || null;
+    // A nonce-bearing output belongs only to its exact generation. If durable
+    // persistence has not created that monitor yet, retain the observation for
+    // scheduleFinalizedBindingMonitor instead of attaching it to a different turn.
+    if (!state && observedNonces.size) return true;
     if (!state) {
       const liveScope = await RisuCompat.currentChatScope();
       if (!liveScope?.key) return false;
@@ -25102,11 +27029,10 @@ ${sourceChatId}`)}`;
         .sort((a, b) => Number(b.startedAt || 0) - Number(a.startedAt || 0))[0] || null;
     }
     if (!state) return false;
-    state.outputObservedAt = now();
-    const visible = canonicalHistoryText(content, 'assistant');
-    state.outputVisibleHash = visible ? stableHash64(visible) : '';
-    state.outputPacketHashes = uniq(observedPackets.map(packet => compact(packet?.hash || '', 96)).filter(Boolean), 8);
-    state.outputRequestNonces = uniq([...observedNonces], 8);
+    state.outputObservedAt = observation.at;
+    state.outputVisibleHash = observation.outputVisibleHash;
+    state.outputPacketHashes = observation.outputPacketHashes;
+    state.outputRequestNonces = observation.outputRequestNonces;
     state.lastSignature = '';
     state.stableSince = 0;
     state.pollDelayMs = FINALIZED_BINDING_POLL_MS;
@@ -25115,6 +27041,12 @@ ${sourceChatId}`)}`;
   const scheduleFinalizedBindingMonitor = (pending, capture = {}) => {
     if (Memory.unloaded || !ownsRuntime() || !pending?.scope?.key || !pending?.lineage?.requestNonce) return false;
     const key = finalizedBindingMonitorKey(pending);
+    const pendingNonce = compact(pending?.lineage?.requestNonce || '', 96);
+    const cachedOutputObservation = Memory.generationOutputObservations.get(pendingNonce) || null;
+    const cachedOutputIsRecent = Boolean(
+      cachedOutputObservation
+      && now() - Number(cachedOutputObservation.at || 0) <= CAPTURE_ORIGIN_TTL_MS
+    );
     let state = Memory.finalizedBindingMonitors.get(key);
     if (!state) {
       state = {
@@ -25125,10 +27057,10 @@ ${sourceChatId}`)}`;
         stableSince: 0,
         attempts: 0,
         timer: null,
-        outputObservedAt: 0,
-        outputVisibleHash: '',
-        outputPacketHashes: [],
-        outputRequestNonces: [],
+        outputObservedAt: cachedOutputIsRecent ? Number(cachedOutputObservation.at || 0) : 0,
+        outputVisibleHash: cachedOutputIsRecent ? compact(cachedOutputObservation.outputVisibleHash || '', 96) : '',
+        outputPacketHashes: cachedOutputIsRecent ? ensureArray(cachedOutputObservation.outputPacketHashes) : [],
+        outputRequestNonces: cachedOutputIsRecent ? ensureArray(cachedOutputObservation.outputRequestNonces) : [],
         capture: {
           source: compact(capture?.source || '', 48),
           durable: capture?.durable === true,
@@ -25151,6 +27083,12 @@ ${sourceChatId}`)}`;
         packetGroupComplete: capture?.packetGroupComplete === true
           || state.capture?.packetGroupComplete === true
       };
+      if (cachedOutputIsRecent && Number(cachedOutputObservation.at || 0) >= Number(state.outputObservedAt || 0)) {
+        state.outputObservedAt = Number(cachedOutputObservation.at || 0);
+        state.outputVisibleHash = compact(cachedOutputObservation.outputVisibleHash || '', 96);
+        state.outputPacketHashes = ensureArray(cachedOutputObservation.outputPacketHashes);
+        state.outputRequestNonces = ensureArray(cachedOutputObservation.outputRequestNonces);
+      }
     }
     const schedulePoll = delay => {
       if (Memory.unloaded || !ownsRuntime() || Memory.finalizedBindingMonitors.get(key) !== state || state.timer != null) return;
@@ -25284,11 +27222,16 @@ ${sourceChatId}`)}`;
       targetPairIndex: pair?.pairIndex,
       userHash: pair?.userHash || '',
       userMessageIdHash: pair?.userMessageIdHash || '',
+      userMessageIdentityStable: pair?.userMessageIdentityStable === true,
       assistantVisibleHash: pair?.assistantVisibleHash || '',
       assistantMessageIdHash: pair?.assistantMessageIdHash || '',
       parentTurnNodeId: packet?.parentTurnNodeId || pair?.declaredParentTurnNodeId || '',
       logicalTurnId: packet?.logicalTurnId || pair?.declaredLogicalTurnId || '',
       requestNonce,
+      identityVersion: finiteNonNegativeInteger(packet?.identityVersion || pair?.identityVersion, 0),
+      lineageSchema: compact(packet?.lineageSchema || pair?.lineageSchema || '', 64),
+      turnOwnerKey: compact(packet?.turnOwnerKey || pair?.turnOwnerKey || '', 96),
+      generationAttemptId: compact(packet?.generationAttemptId || pair?.generationAttemptId || '', 96),
       requestSequence: Math.max(0, Number(pair?.pairIndex || 0) || 0),
       capturedAt: now(),
       boundAt: now(),
@@ -26616,6 +28559,10 @@ ${sourceChatId}`)}`;
       observations: Number(state?.observations || 0),
       lastSignature: compact(state?.lastSignature || '', 240),
       incompleteReported: state?.incompleteReported === true,
+      outputObservedAt: Math.max(0, Number(state?.outputObservedAt || 0) || 0),
+      outputVisibleHash: compact(state?.outputVisibleHash || '', 96),
+      outputPacketHashes: ensureArray(state?.outputPacketHashes),
+      outputRequestNonces: ensureArray(state?.outputRequestNonces),
       timerActive: state?.timer != null,
       pending: debugPendingCaptureForExport(state?.pending)
     }));
@@ -26883,6 +28830,8 @@ ${sourceChatId}`)}`;
           : 'is-pending')
   );
   const viewerOperationTitle = event => ({
+    'ledger:orphan_cleanup': '고아 데이터 정리 완료',
+    'ledger:orphan_cleanup_failed': '고아 데이터 정리 실패',
     'beforeRequest:start': '요청 분석 시작',
     'beforeRequest:done': '기억 주입 완료',
     'beforeRequest:skip': '요청 건너뜀',
@@ -27101,6 +29050,16 @@ ${sourceChatId}`)}`;
     setText('#hayakuMetricWorldline', `${nodes.filter(node => node?.status === 'active').length} / ${nodes.length}`);
     setText('#hayakuMetricSlots', slotHeads.length.toLocaleString());
     setText('#hayakuMetricTombstones', tombstones.filter(item => item?.active === true).length.toLocaleString());
+    const orphanPlan = manualOrphanCleanupPlan(ledger);
+    setText('#hayakuMetricOrphans', orphanPlan.candidateRecords.length.toLocaleString());
+    setText('#hayakuOrphanCleanupCount', orphanPlan.candidateRecords.length.toLocaleString());
+    const orphanCleanupButton = root.querySelector?.('#cleanupHayakuOrphans');
+    if (orphanCleanupButton) {
+      orphanCleanupButton.disabled = ledger?.enabled !== true || orphanPlan.candidateRecords.length < 1;
+      orphanCleanupButton.title = orphanPlan.candidateRecords.length
+        ? `확인된 고아 레코드 ${orphanPlan.candidateRecords.length}개를 영구 삭제합니다.`
+        : '정리할 수 있는 고아 레코드가 없습니다.';
+    }
     const stateSelect = root.querySelector?.('#hayakuViewerState');
     const typeSelect = root.querySelector?.('#hayakuViewerType');
     if (stateSelect) {
@@ -27167,7 +29126,7 @@ ${sourceChatId}`)}`;
       }
       viewerRenderData();
       if (status) status.textContent = Memory.ledgerViewer.ledger?.enabled
-        ? '읽기 전용 · pluginStorage 원장'
+        ? '조회·관리 · pluginStorage 원장'
         : `조회 실패 · ${Memory.ledgerViewer.ledger?.reason || 'storage_unavailable'}`;
       return clone({ scope: Memory.ledgerViewer.scope, ledger: Memory.ledgerViewer.ledger }, null);
     } catch (error) {
@@ -27236,6 +29195,55 @@ ${sourceChatId}`)}`;
     }
     return ok;
   };
+  const cleanupLedgerViewerOrphans = async () => {
+    const root = Memory.ledgerViewer.root;
+    if (!root || Memory.ledgerViewer.busy) return null;
+    Memory.ledgerViewer.busy = true;
+    root.querySelector?.('.hayaku-viewer')?.classList?.add('is-busy');
+    try {
+      viewerSetStatusMessage('정리 가능한 고아 데이터를 다시 검증하는 중입니다.');
+      const preview = await removeOrphanedStorageRecords({ preview: true });
+      if (!preview?.ok) {
+        viewerSetStatusMessage(`고아 데이터 검증 실패 · ${preview?.reason || 'unknown'}`, true);
+        return preview;
+      }
+      if (!preview.removableRecords) {
+        if (preview.ledger) Memory.ledgerViewer.ledger = preview.ledger;
+        viewerRenderData();
+        viewerSetStatusMessage('정리할 수 있는 고아 데이터가 없습니다.');
+        return preview;
+      }
+      const confirmation = [
+        `확인된 고아 레코드 ${preview.removableRecords}개(${preview.removableChars.toLocaleString()}자)를 영구 삭제합니다.`,
+        '',
+        '활성·격리·상속·영구·보호 데이터와 tombstone은 유지되며, 월드라인 고아 노드는 감사 흔적으로 남습니다.',
+        '삭제한 패킷 본문은 복구할 수 없습니다. 계속할까요?'
+      ].join('\n');
+      if (typeof globalThis.confirm !== 'function' || globalThis.confirm(confirmation) !== true) {
+        viewerSetStatusMessage('고아 데이터 정리를 취소했습니다.');
+        return { ...preview, removed: false, reason: 'user_cancelled' };
+      }
+      viewerSetStatusMessage('검증된 고아 데이터를 정리하고 내구 저장을 확인하는 중입니다.');
+      const result = await removeOrphanedStorageRecords();
+      if (result?.ledger) Memory.ledgerViewer.ledger = result.ledger;
+      viewerRenderData();
+      viewerRenderOperationLog();
+      if (result?.ok && result?.removed) {
+        viewerSetStatusMessage(`고아 데이터 ${result.removedRecords}개를 영구 삭제했습니다.`);
+      } else if (result?.ok && result?.reason === 'no_removable_orphans') {
+        viewerSetStatusMessage('재검증 중 대상이 사라져 삭제하지 않았습니다.');
+      } else {
+        viewerSetStatusMessage(`고아 데이터 정리 실패 · ${result?.reason || 'unknown'}`, true);
+      }
+      return result;
+    } catch (error) {
+      viewerSetStatusMessage(`고아 데이터 정리 실패 · ${compact(error?.message || error, 180)}`, true);
+      return null;
+    } finally {
+      Memory.ledgerViewer.busy = false;
+      root.querySelector?.('.hayaku-viewer')?.classList?.remove('is-busy');
+    }
+  };
   const closeLedgerViewer = async () => {
     Memory.ledgerViewer.visible = false;
     const api = apiCandidates().find(candidate => typeof candidate?.hideContainer === 'function') || RisuCompat.api();
@@ -27252,6 +29260,7 @@ ${sourceChatId}`)}`;
     if (!root) return;
     root.querySelector?.('#closeHayakuViewer')?.addEventListener('click', () => closeLedgerViewer());
     root.querySelector?.('#refreshHayakuViewer')?.addEventListener('click', () => refreshLedgerViewer());
+    root.querySelector?.('#cleanupHayakuOrphans')?.addEventListener('click', () => cleanupLedgerViewerOrphans());
     root.querySelector?.('#refreshHayakuLog')?.addEventListener('click', () => {
       viewerRenderOperationLog();
       viewerRenderDebugExportText();
@@ -27295,7 +29304,7 @@ ${sourceChatId}`)}`;
       .hayaku-viewer{width:min(1180px,100%);height:min(920px,100vh);display:grid;grid-template-rows:72px minmax(0,1fr);overflow:hidden;background:var(--hv-bg);border:1px solid var(--hv-line);border-radius:24px;box-shadow:0 25px 80px rgba(12,24,55,.28)}
       .hv-top{display:flex;align-items:center;gap:13px;padding:0 22px;border-bottom:1px solid var(--hv-line);background:var(--hv-card)}.hv-mark{width:40px;height:40px;display:grid;place-items:center;border-radius:13px;background:linear-gradient(145deg,var(--hv-primary),#7d68e8);color:#fff;box-shadow:0 8px 20px rgba(85,104,232,.24)}.hv-brand{display:grid;gap:2px}.hv-brand strong{font-size:18px}.hv-brand span{font-size:11px;color:var(--hv-muted)}.hv-top-actions{margin-left:auto;display:flex;align-items:center;gap:8px}.hv-status{color:var(--hv-muted);font-size:11px}
       .hv-workspace{display:grid;grid-template-columns:116px minmax(0,1fr);min-height:0}.hv-sidebar{padding:16px 10px;border-right:1px solid var(--hv-line);background:var(--hv-card);display:flex;flex-direction:column;gap:8px}.hv-nav{min-height:68px;padding:9px 6px;border:1px solid transparent;border-radius:14px;background:transparent;color:var(--hv-muted);font:700 11px inherit;cursor:pointer;display:grid;place-items:center;gap:5px}.hv-nav span:first-child{width:32px;height:32px;border-radius:10px;display:grid;place-items:center;background:var(--hv-soft);color:var(--hv-primary);font-size:15px}.hv-nav.active{border-color:var(--hv-line);background:var(--hv-primary-soft);color:var(--hv-primary)}.hv-nav-count{min-width:18px;padding:1px 5px;border-radius:999px;background:var(--hv-card);font-size:9px}
-      .hv-content{min-width:0;min-height:0}.hv-panel{display:none;height:100%;overflow-y:auto;padding:22px}.hv-panel.active{display:block}.hv-heading{display:flex;align-items:flex-end;justify-content:space-between;gap:16px}.hv-heading h1{margin:2px 0 0;font-size:24px}.hv-heading p{margin:5px 0 0;color:var(--hv-muted)}.hv-eyebrow{display:block;color:var(--hv-muted);font-size:10px;letter-spacing:.02em}.hv-actions{display:flex;gap:8px;flex-wrap:wrap}.hv-btn{min-height:36px;padding:7px 13px;border:1px solid var(--hv-line);border-radius:11px;background:var(--hv-card);color:var(--hv-text);font:650 12px inherit;cursor:pointer}.hv-btn:hover{background:var(--hv-soft)}.hv-btn.primary{border-color:var(--hv-primary);background:var(--hv-primary);color:#fff}
+      .hv-content{min-width:0;min-height:0}.hv-panel{display:none;height:100%;overflow-y:auto;padding:22px}.hv-panel.active{display:block}.hv-heading{display:flex;align-items:flex-end;justify-content:space-between;gap:16px}.hv-heading h1{margin:2px 0 0;font-size:24px}.hv-heading p{margin:5px 0 0;color:var(--hv-muted)}.hv-eyebrow{display:block;color:var(--hv-muted);font-size:10px;letter-spacing:.02em}.hv-actions{display:flex;gap:8px;flex-wrap:wrap}.hv-btn{min-height:36px;padding:7px 13px;border:1px solid var(--hv-line);border-radius:11px;background:var(--hv-card);color:var(--hv-text);font:650 12px inherit;cursor:pointer}.hv-btn:hover{background:var(--hv-soft)}.hv-btn.primary{border-color:var(--hv-primary);background:var(--hv-primary);color:#fff}.hv-btn.danger{border-color:var(--hv-red);color:var(--hv-red);background:var(--hv-red-soft)}.hv-btn:disabled{cursor:not-allowed;opacity:.48}
       .hv-recall{margin:15px 0;padding:15px;border:1px solid var(--hv-line);border-radius:17px;background:var(--hv-card);box-shadow:0 4px 14px rgba(29,43,75,.04)}.hv-recall-head{display:grid;grid-template-columns:minmax(180px,.65fr) minmax(260px,1.35fr);gap:14px;align-items:start}.hv-recall-title{display:grid;gap:4px}.hv-recall-title strong{font-size:15px}.hv-recall-title small{color:var(--hv-muted)}.hv-current-input{padding:10px 12px;border:1px solid var(--hv-line);border-radius:12px;background:var(--hv-soft)}.hv-current-input span{display:block;color:var(--hv-primary);font-size:9px;font-weight:800;text-transform:uppercase}.hv-current-input p{margin:4px 0 0;max-height:84px;overflow:auto;color:var(--hv-text);white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px;line-height:1.5}.hv-recall-rows{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:8px;margin-top:12px}.hv-recall-item{min-width:0;padding:11px;border:1px solid var(--hv-line);border-radius:12px;background:var(--hv-soft)}.hv-recall-item-head{display:flex;justify-content:space-between;gap:8px;color:var(--hv-primary);font-size:9px}.hv-recall-item-head em{font-style:normal;color:var(--hv-muted)}.hv-recall-item>strong{display:block;margin-top:6px;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.hv-recall-item>p{margin:4px 0;color:var(--hv-muted);font-size:11px;line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere}.hv-recall-item>small{color:var(--hv-muted);font-size:9px}.hv-recall-empty{grid-column:1/-1;padding:14px;border:1px dashed var(--hv-line);border-radius:11px;color:var(--hv-muted);text-align:center}
       .hv-scope{display:grid;gap:5px;margin:15px 0;padding:12px 14px;border:1px solid var(--hv-line);border-radius:14px;background:var(--hv-card)}.hv-scope>div{display:flex;gap:8px;min-width:0}.hv-scope b{min-width:62px}.hv-scope code,.hv-scope span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--hv-muted)}
       .hv-metrics{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:9px;margin-bottom:14px}.hv-metric{padding:12px;border:1px solid var(--hv-line);border-radius:14px;background:var(--hv-card)}.hv-metric span{display:block;color:var(--hv-muted);font-size:10px}.hv-metric strong{display:block;margin-top:3px;font-size:16px}
@@ -27308,7 +29317,7 @@ ${sourceChatId}`)}`;
       @media(prefers-color-scheme:dark){#${LEDGER_VIEWER_ROOT_ID}{--hv-bg:#0d1320;--hv-card:#141c2b;--hv-soft:#101827;--hv-line:#29354a;--hv-text:#eef3ff;--hv-muted:#9aa8c1;--hv-primary-soft:#222b55;--hv-green-soft:#153b32;--hv-red-soft:#44252b}.hv-record pre,.hv-diagnostics pre,.hv-log-entry pre{color:#c8d2e6}}
     </style>
     <section class="hayaku-viewer">
-      <header class="hv-top"><span class="hv-mark">${ledgerViewerIconSvg}</span><div class="hv-brand"><strong>HAYAKU 원장 뷰어</strong><span>Plugin Storage · Read Only</span></div><div class="hv-top-actions"><span id="hayakuViewerStatus" class="hv-status">조회 대기</span><button id="closeHayakuViewer" class="hv-btn">닫기</button></div></header>
+      <header class="hv-top"><span class="hv-mark">${ledgerViewerIconSvg}</span><div class="hv-brand"><strong>HAYAKU 원장 뷰어</strong><span>Plugin Storage · Inspect &amp; Maintain</span></div><div class="hv-top-actions"><span id="hayakuViewerStatus" class="hv-status">조회 대기</span><button id="closeHayakuViewer" class="hv-btn">닫기</button></div></header>
       <div class="hv-workspace">
         <aside class="hv-sidebar">
           <button class="hv-nav active" data-hayaku-viewer-tab="packets" type="button"><span>速</span><span>패킷 뷰어</span></button>
@@ -27316,7 +29325,7 @@ ${sourceChatId}`)}`;
         </aside>
         <div class="hv-content">
           <main class="hv-panel active" data-hayaku-viewer-panel="packets">
-            <div class="hv-heading"><div><small class="hv-eyebrow">하야쿠의 플러그인 스토리지에 쌓인 기억을 사용자에게 보여줍니다.</small><h1>패킷 원장</h1><p>브릿지와 같은 카드형 원장으로 현재 채팅의 기억을 읽기 전용으로 확인합니다.</p></div><div class="hv-actions"><button id="exportHayakuViewer" class="hv-btn">JSON 내보내기</button><button id="refreshHayakuViewer" class="hv-btn primary">새로고침</button></div></div>
+            <div class="hv-heading"><div><small class="hv-eyebrow">하야쿠의 플러그인 스토리지에 쌓인 기억을 조회하고 검증된 고아 데이터만 수동 정리합니다.</small><h1>패킷 원장</h1><p>활성·격리·상속·영구·보호 데이터는 건드리지 않으며, 고아 정리는 확인 후 영구 삭제됩니다.</p></div><div class="hv-actions"><button id="cleanupHayakuOrphans" class="hv-btn danger">고아 데이터 정리 (<span id="hayakuOrphanCleanupCount">0</span>)</button><button id="exportHayakuViewer" class="hv-btn">JSON 내보내기</button><button id="refreshHayakuViewer" class="hv-btn primary">새로고침</button></div></div>
             <section class="hv-recall">
               <div class="hv-recall-head">
                 <div class="hv-recall-title"><strong>이번에 떠올린 기억</strong><small id="hayakuViewerRecallMeta">아직 이번 세션에서 떠올린 기억이 없습니다.</small></div>
@@ -27333,6 +29342,7 @@ ${sourceChatId}`)}`;
               <div class="hv-metric"><span>월드라인 활성/전체</span><strong id="hayakuMetricWorldline">0 / 0</strong></div>
               <div class="hv-metric"><span>슬롯 헤드</span><strong id="hayakuMetricSlots">0</strong></div>
               <div class="hv-metric"><span>활성 tombstone</span><strong id="hayakuMetricTombstones">0</strong></div>
+              <div class="hv-metric"><span>정리 가능 고아</span><strong id="hayakuMetricOrphans">0</strong></div>
             </div>
             <div class="hv-tools"><select id="hayakuViewerState"><option value="all">모든 상태</option></select><select id="hayakuViewerType"><option value="all">모든 패킷 타입</option></select><input id="hayakuViewerSearch" type="search" placeholder="본문·hash·nonce 검색"><label class="hv-audit-toggle"><input id="hayakuViewerShowAuditCopies" type="checkbox">감사 사본 표시</label><small>표시 <b id="hayakuViewerVisibleCount">0 / 0</b></small></div>
             <div id="hayakuViewerRecords" class="hv-records"><div class="hv-empty"><strong>조회 대기</strong><span>새로고침하여 플러그인 원장을 읽습니다.</span></div></div>
@@ -27558,6 +29568,9 @@ ${sourceChatId}`)}`;
       permanentSessionHistoryProtection: true,
       finalizedLiveChatCapture: true,
       finalizedSidecarBinding: true,
+      requestLineageIdentityVersion: REQUEST_LINEAGE_IDENTITY_VERSION,
+      generationAttemptIdentity: true,
+      generationBoundFinalIdentityRefresh: true,
       uiWorldlineTopologyObserver: true,
       rerollVariantReactivation: true,
       rollbackQuarantineConfirmation: true,
@@ -27690,6 +29703,30 @@ ${sourceChatId}`)}`;
           restored: false,
           reason: 'restore_failed'
         }),
+        orphanCleanup: {
+          inspect: async () => {
+            const result = await removeOrphanedStorageRecords({ preview: true });
+            const { ledger: _ledger, ...summary } = result || {};
+            return clone(summary, {
+              ok: false,
+              preview: true,
+              removableRecords: 0,
+              protectedRecords: 0,
+              reason: 'orphan_inspection_failed'
+            });
+          },
+          remove: async () => {
+            const result = await removeOrphanedStorageRecords();
+            const { ledger: _ledger, ...summary } = result || {};
+            return clone(summary, {
+              ok: false,
+              removed: false,
+              durable: false,
+              removedRecords: 0,
+              reason: 'orphan_cleanup_failed'
+            });
+          }
+        },
         coldStartStatus: async () => {
           const scope = await RisuCompat.currentChatScope();
           if (!scope?.confident) return { available: false, reason: scope?.reason || 'scope_unavailable' };
@@ -27785,6 +29822,7 @@ ${sourceChatId}`)}`;
         }, {}),
         lastBeforeRequest: Memory.lastBeforeRequest,
         lastViewerRecall: clone(Memory.lastViewerRecall, null),
+        lastLatentEpisodicRecall: clone(Memory.lastLatentEpisodicRecall, null),
         projectionCache: {
           scopeKey: Memory.projectionCacheScopeKey || '',
           entries: Memory.projectionCache?.size || 0,
@@ -27861,6 +29899,10 @@ ${sourceChatId}`)}`;
         completeValidHayakuPacketsFromText,
         historyPacketDiagnosticsFromBody,
         recoveryTargetForCapture,
+        requestLineageFor,
+        requestTurnOwnerKeyFor,
+        issueRequestGenerationIdentity,
+        requestGenerationIdentityIsCoherent,
         retireObsoletePendingCaptures,
         finalizedCaptureTimeoutIsActionable,
         registerPendingCapture,
@@ -27898,6 +29940,8 @@ ${sourceChatId}`)}`;
         storageRecordsDescribeSameVariant,
         reconcileStorageSlotHeads,
         pruneStorageRecords,
+        manualOrphanCleanupPlan,
+        removeOrphanedStorageRecords,
         bindStorageLedgerToSnapshot,
         reconcileObservedChatTopology,
         scheduleWorldlineTopologyObserver,
@@ -27970,6 +30014,8 @@ ${sourceChatId}`)}`;
         packetCoverageCanonicalTokens,
         emptyStore,
         ingestPacket,
+        ingestEmergencyRecallPacket,
+        emergencyRecallPacketForBudget,
         selectPacketsForIngest,
         rebuildIndex,
         buildKnowledgeContext,
@@ -28004,7 +30050,11 @@ ${sourceChatId}`)}`;
         ledgerRev2ReplacementRefs,
         resolvePacketLedgerRev2Supersessions,
         packetMemoryLifecycleFor,
+        packetMemoryDecayClassFor,
+        packetMemoryPreRankDecayPenalty,
         applyPacketMemoryLifecycleScoring,
+        decayCharacterStateProjectionItem,
+        decayCharacterStateProjectionsForRecall,
         buildDerivedEventMemoryRows,
         scoreRowWithStrengthenedJaccard,
         rowPassesRetrievalGate,
@@ -28014,6 +30064,16 @@ ${sourceChatId}`)}`;
         currentWorldSummaryRowsConflict,
         collapseCurrentWorldConflicts,
         explicitQueryTopicSegments,
+        dynamicRecallDataBudget,
+        latentEpisodicCueContext,
+        latentEpisodicCueScore,
+        applyLatentEpisodicReactivation,
+        recallBudgetEvidenceClass,
+        recallEvidencePressureForPacking,
+        mergeCharacterStateProjectionItem,
+        upsertCharacterStateList,
+        characterStateProjectionPublicSummary,
+        suppressOlderCharacterSnapshots,
         applyExplicitMultiTopicCoverage,
         buildPacketCoverageSourceEvidence,
         packetEvidenceOutcomeText,
@@ -28108,9 +30168,11 @@ ${sourceChatId}`)}`;
         Memory.promptCache.registerError = configuredPromptCacheMode === 'off' ? 'disabled_by_setting' : 'structural_mode';
         Memory.promptCache.nativeReason = Memory.promptCache.registerError;
       }
-      const afterRequestRegistered = await RisuCompat.addAfterRequest((content, requestType) =>
-        captureHayakuOutput(content, 'afterRequest', requestType)
-      );
+      const afterRequestRegistered = await RisuCompat.addAfterRequest(async (content, requestType) => {
+        const captured = await captureHayakuOutput(content, 'afterRequest', requestType);
+        try { await markFinalizedBindingOutputObserved(captured); } catch (_) {}
+        return captured;
+      });
       if (!afterRequestRegistered) {
         console.warn(`[HAYAKU] afterRequest packet capture unavailable: ${Memory.afterRequest.registerError || 'registration_failed'}`);
       }
@@ -28140,6 +30202,7 @@ ${sourceChatId}`)}`;
         retireLedgerViewerUiOwner();
         Memory.capturePersistInFlight.clear();
         Memory.capturePersistRecent.clear();
+        Memory.generationOutputObservations.clear();
         Memory.packetScanCache.clear();
         Memory.projectionCache.clear();
         Memory.copiedChatSourceCache.clear();
