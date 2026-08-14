@@ -1,9 +1,10 @@
 //@name hayaku_locator_continuity
-//@display-name HAYAKU · Locator Continuity v2.3.63
+//@display-name HAYAKU · Locator Continuity v2.3.64
 //@author rusinus12@gmail.com
 //@api 3.0
-//@version 2.3.63
+//@version 2.3.64
 
+/* v2.3.64 activates provider-native prompt-cache interception in native mode, aligns OpenAI explicit breakpoints and Anthropic model thresholds/multi-breakpoint coexistence, and treats Gemini 2.5+ as provider-managed implicit caching while preserving preconfigured explicit cachedContent. */
 /* v2.3.63 makes a unique persisted user-message id authoritative over request/live text-hash drift, rejects conflicting ids and nonces before append affinity, and immediately rekeys a post-processed finalized packet when the same stable U, target pair, and validated request nonce agree. */
 /* v2.3.62 gives the response model a typed continuity-evidence contract, resolves latest valid state and chronological transitions, and keeps unresolved constraints, knowledge boundaries, and prohibited inferences from becoming occurred events. */
 /* v2.3.61 keeps response hooks byte-preserving, recovers the innermost valid packet candidate internally, and removes repeated or damaged reserved packet prefixes consistently from display and visible-identity text. */
@@ -117,7 +118,7 @@
   };
 
   const PLUGIN_NAME = 'HAYAKU';
-  const PLUGIN_VERSION = '2.3.63';
+  const PLUGIN_VERSION = '2.3.64';
   const HAYAKU_PACKET_AUTHORING_PROFILE_SCHEMA = 'hayaku-packet-authoring-profile-v1';
   const HAYAKU_PACKET_AUTHORING_ALIAS_LANGUAGES = Object.freeze(['ko', 'en', 'ja', 'zh']);
   const HAYAKU_CANONICAL_ANCHOR_PREFIXES = Object.freeze([
@@ -1690,8 +1691,8 @@ const MODE_PROFILES = Object.freeze({
       registeredModes: []
     },
     promptCache: {
-      nativePolicy: 'structural_alias',
-      nativeReason: 'stock_risu_transport_metadata_insufficient',
+      nativePolicy: 'provider_native_v2',
+      nativeReason: '',
       permission: 'not_requested',
       registered: false,
       registerAttempted: false,
@@ -1713,6 +1714,9 @@ const MODE_PROFILES = Object.freeze({
       lastExistingConfigPreserved: false,
       lastBelowEstimatedProviderMinimum: false,
       lastContractAttested: false,
+      lastProviderManaged: false,
+      lastProviderMinimumTokens: 0,
+      lastExistingBreakpointCount: 0,
       circuitByAdapter: {}
     },
     ledgerViewer: {
@@ -2452,7 +2456,12 @@ const MODE_PROFILES = Object.freeze({
           Memory.promptCache.lastExistingConfigPreserved = diagnostics.existingConfigPreserved === true;
           Memory.promptCache.lastBelowEstimatedProviderMinimum = diagnostics.belowEstimatedProviderMinimum === true;
           Memory.promptCache.lastContractAttested = diagnostics.contractAttested === true;
-          Memory.promptCache.effectiveMode = diagnostics.applied === true ? 'native' : 'structural';
+          Memory.promptCache.lastProviderManaged = diagnostics.providerManaged === true;
+          Memory.promptCache.lastProviderMinimumTokens = Math.max(0, Number(diagnostics.providerMinimumTokens || 0) || 0);
+          Memory.promptCache.lastExistingBreakpointCount = Math.max(0, Number(diagnostics.existingBreakpointCount || 0) || 0);
+          Memory.promptCache.effectiveMode = diagnostics.providerManaged === true
+            ? 'native_implicit'
+            : (diagnostics.applied === true ? 'native' : 'structural');
           if (diagnostics.applied === true) Memory.promptCache.appliedCount += 1;
           if (objectish(Memory.lastBeforeRequest?.cacheSafety)) {
             Object.assign(Memory.lastBeforeRequest.cacheSafety, {
@@ -2464,12 +2473,15 @@ const MODE_PROFILES = Object.freeze({
               transportClass: Memory.promptCache.lastTransportClass,
               directProviderProven: Memory.promptCache.lastDirectProviderProven,
               providerEvidence: Memory.promptCache.lastProviderEvidence,
-              effectiveMode: diagnostics.applied === true ? 'native' : 'structural',
+              effectiveMode: Memory.promptCache.effectiveMode,
               nativeApplied: diagnostics.applied === true,
+              providerManagedNative: Memory.promptCache.lastProviderManaged,
               nativeSkipReason: Memory.promptCache.lastSkipReason,
               breakpointApplied: Memory.promptCache.lastBreakpointApplied,
               cacheKeyHash: Memory.promptCache.lastCacheKeyHash,
               existingUserCacheConfigPreserved: Memory.promptCache.lastExistingConfigPreserved,
+              existingBreakpointCount: Memory.promptCache.lastExistingBreakpointCount,
+              providerMinimumTokens: Memory.promptCache.lastProviderMinimumTokens,
               belowEstimatedProviderMinimum: Memory.promptCache.lastBelowEstimatedProviderMinimum,
               contractAttested: Memory.promptCache.lastContractAttested
             });
@@ -3027,6 +3039,14 @@ const MODE_PROFILES = Object.freeze({
     }
     return false;
   };
+  const promptCacheBodyFieldCount = (value, field, seen = new WeakSet()) => {
+    if (!value || typeof value !== 'object') return 0;
+    if (seen.has(value)) return 0;
+    seen.add(value);
+    let count = Object.prototype.hasOwnProperty.call(value, field) ? 1 : 0;
+    for (const key of Object.keys(value)) count += promptCacheBodyFieldCount(value[key], field, seen);
+    return count;
+  };
   const promptCacheStringOccurrenceCount = (source = '', needle = '') => {
     const value = text(source);
     if (!needle) return 0;
@@ -3092,7 +3112,9 @@ const MODE_PROFILES = Object.freeze({
       ? 'openai'
       : /^https:\/\/api\.anthropic\.com(?:\/|$)/i.test(endpoint)
         ? 'anthropic'
-        : '';
+        : /^https:\/\/(?:generativelanguage\.googleapis\.com|[^/]*aiplatform\.googleapis\.com)(?:\/|$)/i.test(endpoint)
+          ? 'gemini'
+          : '';
     const directProviderProven = metadata.directProviderProven === true
       && Boolean(endpointProvider)
       && (!claimedProvider || claimedProvider === endpointProvider);
@@ -3115,34 +3137,73 @@ const MODE_PROFILES = Object.freeze({
     return ['provider', 'route', 'router', 'endpoint', 'endpoint_url', 'base_url', 'api_base', 'custom_url', 'customURL', 'reverse_proxy']
       .some(key => Object.prototype.hasOwnProperty.call(body || {}, key));
   };
+  const promptCacheNumericModelVersion = (model = '', prefix = '') => {
+    const source = text(model).trim().toLowerCase();
+    const match = source.match(new RegExp(`^${prefix}(\\d+)(?:\\.(\\d+))?(?:-|$)`, 'i'));
+    if (!match) return null;
+    return { major: Number(match[1] || 0), minor: Number(match[2] || 0) };
+  };
+  const openAIExplicitPromptCacheSupported = model => {
+    const version = promptCacheNumericModelVersion(model, 'gpt-');
+    return Boolean(version && (version.major > 5 || (version.major === 5 && version.minor >= 6)));
+  };
+  const geminiImplicitPromptCacheSupported = model => {
+    const version = promptCacheNumericModelVersion(model, 'gemini-');
+    return Boolean(version && (version.major > 2 || (version.major === 2 && version.minor >= 5)));
+  };
+  const claudePromptCacheModel = model => /^claude-[a-z0-9.-]*(?:opus|sonnet|haiku|fable|mythos)[a-z0-9.-]*$/i.test(text(model).trim());
+  const anthropicPromptCacheMinimumTokens = model => {
+    const value = text(model).trim().toLowerCase();
+    // Claude API minima as of 2026-08. Unknown/new Claude models use the most
+    // conservative known threshold so an explicit marker can fail soft rather
+    // than producing misleading cache diagnostics.
+    if (/(?:claude-(?:opus|fable|mythos)-5(?:-|$)|claude-5(?:[.-]0)?-(?:opus|fable|mythos)(?:-|$))/.test(value)) return 512;
+    if (/(?:claude-(?:opus)-4[.-]?(?:6|5)(?:-|$)|claude-(?:haiku)-4[.-]?5(?:-|$))/.test(value)) return 4096;
+    if (/(?:claude-(?:opus)-4[.-]?7(?:-|$)|claude-(?:mythos)-preview(?:-|$)|claude-(?:haiku)-3[.-]?5(?:-|$)|claude-3[.-]?5-haiku(?:-|$))/.test(value)) return 2048;
+    if (/(?:claude-(?:sonnet)-5(?:-|$)|claude-(?:opus)-4[.-]?8(?:-|$)|claude-(?:sonnet)-4[.-]?(?:6|5)(?:-|$)|claude-(?:opus)-4[.-]?1(?:-|$)|claude-(?:opus|sonnet)-4(?:-|$))/.test(value)) return 1024;
+    if (/haiku/.test(value)) return 4096;
+    return 4096;
+  };
   const detectPromptCacheProvider = (body, requestType = '') => {
     const transport = promptCacheTransportInfo(requestType);
     const model = text(body?.model || '').trim().toLowerCase();
     const proxied = promptCacheProxyIndicator(body);
-    const finish = (providerFamily, apiShape) => {
+    const nativeOptIn = promptCacheModeOf(Memory.settings || DEFAULT_SETTINGS) === 'native';
+    const finish = (providerFamily, apiShape, extra = {}) => {
       const shapeMatches = !transport.expectedApiShape || transport.expectedApiShape === apiShape;
       const providerMatches = !transport.expectedProviderFamily || transport.expectedProviderFamily === providerFamily;
       const directProviderProven = !proxied && shapeMatches && providerMatches
         && transport.directProviderProven === true && transport.directProviderFamily === providerFamily;
+      const stockTransportEligible = nativeOptIn && !proxied && shapeMatches && providerMatches
+        && transport.knownType === true && transport.expectedProviderFamily === providerFamily;
+      const nativeTransportEligible = directProviderProven || stockTransportEligible || providerFamily === 'gemini';
       return {
-        providerFamily, apiShape, model, proxied, ...transport,
+        providerFamily, apiShape, model, proxied, ...transport, ...extra,
         directProviderProven,
+        stockTransportEligible,
+        nativeTransportEligible,
         providerEvidence: proxied
           ? 'body_proxy_indicator'
           : directProviderProven
             ? transport.providerEvidence
-            : transport.providerEvidence
+            : stockTransportEligible
+              ? 'native_opt_in_stock_transport'
+              : providerFamily === 'gemini'
+                ? 'provider_managed_implicit_cache'
+                : transport.providerEvidence
       };
     };
-    if (!proxied && /^gpt-5\.6(?:-|$)/i.test(model)) {
+    if (!proxied && openAIExplicitPromptCacheSupported(model)) {
       if (Array.isArray(body?.messages) && !Array.isArray(body?.input)) return finish('openai', 'chat_completions');
       if (Array.isArray(body?.input) && !Array.isArray(body?.messages)) return finish('openai', 'responses');
     }
-    if (!proxied && /^claude-(?:opus-5|fable-5)(?:-|$)/i.test(model)
+    if (!proxied && claudePromptCacheModel(model)
       && Object.prototype.hasOwnProperty.call(body || {}, 'system') && Array.isArray(body?.messages)) {
-      return finish('anthropic', 'messages');
+      return finish('anthropic', 'messages', { providerMinimumTokens: anthropicPromptCacheMinimumTokens(model) });
     }
-    if (/^gemini-3\.(?:1-pro|6-flash)(?:-|$)/i.test(model)) return finish('gemini', 'automatic');
+    if (/^gemini-/i.test(model)) {
+      return finish('gemini', 'automatic', { providerManaged: geminiImplicitPromptCacheSupported(model) });
+    }
     if (/^deepseek-v4(?:-(?:pro|flash))?(?:-|$)/i.test(model)) return finish('deepseek', 'automatic');
     if (/^(?:kimi-k3|moonshot.*k3)(?:-|$)/i.test(model)) return finish('kimi', 'automatic');
     if (/^(?:zai[-_/]?)?glm-?5\.2(?:-|$)/i.test(model)) return finish('zai', 'automatic');
@@ -3186,6 +3247,40 @@ const MODE_PROFILES = Object.freeze({
       }
     }
     return allowed.length === 1 ? allowed[0] : null;
+  };
+  const promptCacheCarrierObject = (body, attestation) => {
+    if (!attestation || attestation.blockIndex < 0) return null;
+    if (attestation.sourceKey === 'system') return ensureArray(body?.system)[attestation.blockIndex] || null;
+    const item = ensureArray(body?.[attestation.sourceKey])[attestation.itemIndex];
+    return ensureArray(item?.content)[attestation.blockIndex] || null;
+  };
+  const anthropicPromptCachePrefixFingerprint = (body, provider, attestation) => {
+    const prefixSystem = [];
+    if (attestation.blockIndex < 0) {
+      prefixSystem.push(text(body?.system || '').slice(0, attestation.endAt));
+    } else {
+      const system = ensureArray(body?.system);
+      for (let index = 0; index <= attestation.blockIndex; index += 1) {
+        const block = system[index];
+        if (index < attestation.blockIndex) {
+          prefixSystem.push(block);
+          continue;
+        }
+        const value = promptCacheTextOfBlock(block);
+        prefixSystem.push({ ...(objectish(block) ? block : { type: 'text' }), text: value.slice(0, attestation.endAt) });
+      }
+    }
+    const canonical = canonicalPromptCacheStringify({
+      model: body?.model || '',
+      tools: body?.tools || [],
+      system: prefixSystem
+    });
+    return {
+      canonical,
+      hash: stableHash64(canonical),
+      chars: canonical.length,
+      estimatedTokens: Math.ceil(canonical.length / 4)
+    };
   };
   const attestPromptCacheStaticContract = (body, provider) => {
     const inventory = promptCacheMarkerInventory(body);
@@ -3296,19 +3391,41 @@ const MODE_PROFILES = Object.freeze({
     return { allowed: true, reason: '', adapterKey };
   };
   const applyOpenAIPromptCache = async (body, provider, attestation = attestPromptCacheStaticContract(body, provider)) => {
-    const diagnostics = { ...provider, applied: false, breakpointApplied: false, existingConfigPreserved: false, contractAttested: attestation?.ok === true, skipReason: '' };
-    if (['prompt_cache_key', 'prompt_cache_options', 'prompt_cache_breakpoint'].some(field => promptCacheBodyHasField(body, field))) {
-      diagnostics.existingConfigPreserved = true;
-      diagnostics.skipReason = 'existing_user_cache_config';
-      return { body, diagnostics };
-    }
+    const diagnostics = {
+      ...provider,
+      applied: false,
+      providerManaged: false,
+      breakpointApplied: false,
+      existingConfigPreserved: false,
+      contractAttested: attestation?.ok === true,
+      skipReason: ''
+    };
     if (!attestation?.ok) {
       diagnostics.skipReason = attestation?.reason || 'static_contract_not_attested';
+      return { body, diagnostics };
+    }
+    const existingBreakpointCount = promptCacheBodyFieldCount(body, 'prompt_cache_breakpoint');
+    diagnostics.existingBreakpointCount = existingBreakpointCount;
+    const carrier = promptCacheCarrierObject(body, attestation);
+    if (carrier?.prompt_cache_breakpoint) {
+      diagnostics.applied = true;
+      diagnostics.breakpointApplied = true;
+      diagnostics.existingConfigPreserved = true;
+      diagnostics.skipReason = 'hayaku_breakpoint_already_present';
+      return { body, diagnostics };
+    }
+    const existingOptions = objectish(body?.prompt_cache_options) ? body.prompt_cache_options : null;
+    const existingMode = text(existingOptions?.mode || '').trim().toLowerCase();
+    const explicitCapacity = existingOptions && existingMode !== 'explicit' ? 3 : 4;
+    if (existingBreakpointCount >= explicitCapacity) {
+      diagnostics.existingConfigPreserved = true;
+      diagnostics.skipReason = 'existing_breakpoint_capacity_exhausted';
       return { body, diagnostics };
     }
     const fingerprint = promptCachePrefixFingerprint(body, provider, attestation);
     diagnostics.prefixChars = fingerprint.chars;
     diagnostics.prefixEstimatedTokens = fingerprint.estimatedTokens;
+    diagnostics.providerMinimumTokens = 1024;
     diagnostics.belowEstimatedProviderMinimum = fingerprint.estimatedTokens < 1280;
     if (diagnostics.belowEstimatedProviderMinimum) {
       diagnostics.skipReason = 'below_safe_provider_minimum';
@@ -3349,39 +3466,62 @@ const MODE_PROFILES = Object.freeze({
     diagnostics.applied = true;
     diagnostics.breakpointApplied = true;
     diagnostics.cacheKeyHash = digest.slice(0, 32);
-    return {
-      body: {
-        ...body,
-        [key]: nextSource,
-        prompt_cache_key: `hayaku:v2:openai:${provider.apiShape}:${attestation.profile}:${diagnostics.cacheKeyHash}`,
-        prompt_cache_options: { mode: 'explicit' }
-      },
-      diagnostics
-    };
+    diagnostics.existingConfigPreserved = Boolean(body?.prompt_cache_key || existingOptions);
+    const nextBody = { ...body, [key]: nextSource };
+    // Respect caller-owned cache bucketing/options. HAYAKU supplies only missing
+    // fields; when there is no caller policy it chooses explicit mode so dynamic
+    // dialogue after the HAYAKU static contract is never written as an implicit
+    // cache breakpoint.
+    if (!Object.prototype.hasOwnProperty.call(nextBody, 'prompt_cache_key')) {
+      nextBody.prompt_cache_key = `hayaku:v2:openai:${provider.apiShape}:${attestation.profile}:${diagnostics.cacheKeyHash}`;
+    }
+    if (!Object.prototype.hasOwnProperty.call(nextBody, 'prompt_cache_options')) {
+      nextBody.prompt_cache_options = { mode: 'explicit', ttl: '30m' };
+    }
+    return { body: nextBody, diagnostics };
   };
   const applyAnthropicPromptCache = async (body, provider, attestation = attestPromptCacheStaticContract(body, provider)) => {
-    const diagnostics = { ...provider, applied: false, breakpointApplied: false, existingConfigPreserved: false, contractAttested: attestation?.ok === true, skipReason: '' };
-    if (promptCacheBodyHasField(body, 'cache_control')) {
-      diagnostics.existingConfigPreserved = true;
-      diagnostics.skipReason = 'existing_user_cache_config';
-      return { body, diagnostics };
-    }
+    const diagnostics = {
+      ...provider,
+      applied: false,
+      providerManaged: false,
+      breakpointApplied: false,
+      existingConfigPreserved: false,
+      contractAttested: attestation?.ok === true,
+      skipReason: ''
+    };
     if (!attestation?.ok) {
       diagnostics.skipReason = attestation?.reason || 'static_contract_not_attested';
       return { body, diagnostics };
     }
-    const prefixChars = attestation.blockIndex < 0
-      ? attestation.endAt
-      : ensureArray(body.system).slice(0, attestation.blockIndex).reduce((sum, block) => sum + promptCacheTextOfBlock(block).length, 0) + attestation.endAt;
-    const estimatedTokens = Math.ceil(prefixChars / 4);
-    diagnostics.prefixChars = prefixChars;
-    diagnostics.prefixEstimatedTokens = estimatedTokens;
-    diagnostics.belowEstimatedProviderMinimum = estimatedTokens < 640;
+    const existingBreakpointCount = promptCacheBodyFieldCount(body, 'cache_control');
+    diagnostics.existingBreakpointCount = existingBreakpointCount;
+    const carrier = promptCacheCarrierObject(body, attestation);
+    if (carrier?.cache_control) {
+      diagnostics.applied = true;
+      diagnostics.breakpointApplied = true;
+      diagnostics.existingConfigPreserved = true;
+      diagnostics.skipReason = 'hayaku_breakpoint_already_present';
+      return { body, diagnostics };
+    }
+    if (existingBreakpointCount >= 4) {
+      diagnostics.existingConfigPreserved = true;
+      diagnostics.skipReason = 'existing_breakpoint_capacity_exhausted';
+      return { body, diagnostics };
+    }
+    const fingerprint = anthropicPromptCachePrefixFingerprint(body, provider, attestation);
+    const providerMinimumTokens = Math.max(512, Number(provider?.providerMinimumTokens || anthropicPromptCacheMinimumTokens(provider?.model)) || 4096);
+    // Approximate token count from serialized prefix. Keep a modest safety margin
+    // because Anthropic silently ignores an under-minimum cache marker.
+    const safeMinimumTokens = Math.ceil(providerMinimumTokens * 1.08);
+    diagnostics.prefixChars = fingerprint.chars;
+    diagnostics.prefixEstimatedTokens = fingerprint.estimatedTokens;
+    diagnostics.providerMinimumTokens = providerMinimumTokens;
+    diagnostics.belowEstimatedProviderMinimum = fingerprint.estimatedTokens < safeMinimumTokens;
     if (diagnostics.belowEstimatedProviderMinimum) {
       diagnostics.skipReason = 'below_safe_provider_minimum';
       return { body, diagnostics };
     }
-    const fingerprint = { hash: stableHash64(`${provider.model}\u0001${attestation.contractHash}\u0001${prefixChars}`) };
     const circuit = promptCacheCircuitDecision(provider, fingerprint, attestation.profile);
     if (!circuit.allowed) {
       diagnostics.skipReason = circuit.reason;
@@ -3406,42 +3546,76 @@ const MODE_PROFILES = Object.freeze({
     }
     diagnostics.applied = true;
     diagnostics.breakpointApplied = true;
+    diagnostics.existingConfigPreserved = existingBreakpointCount > 0;
     diagnostics.cacheKeyHash = fingerprint.hash;
     return { body: { ...body, system: nextSystem }, diagnostics };
+  };
+  const applyGeminiPromptCache = async (body, provider) => {
+    const diagnostics = {
+      ...provider,
+      applied: false,
+      providerManaged: false,
+      breakpointApplied: false,
+      existingConfigPreserved: false,
+      contractAttested: false,
+      skipReason: ''
+    };
+    const existingExplicit = promptCacheBodyHasField(body, 'cached_content')
+      || promptCacheBodyHasField(body, 'cachedContent');
+    if (existingExplicit) {
+      diagnostics.providerManaged = true;
+      diagnostics.existingConfigPreserved = true;
+      diagnostics.skipReason = 'gemini_explicit_cached_content_preserved';
+      return { body, diagnostics };
+    }
+    if (!geminiImplicitPromptCacheSupported(provider?.model || body?.model || '')) {
+      diagnostics.skipReason = 'gemini_implicit_cache_model_unsupported';
+      return { body, diagnostics };
+    }
+    // Gemini 2.5+ implicit caching is provider-managed. Explicit cachedContent
+    // requires creating and expiring a separate server-side resource, which a
+    // request-body interceptor cannot do safely without owning provider auth and
+    // cache lifecycle. Preserve the stable-prefix layout and leave the body intact.
+    diagnostics.providerManaged = true;
+    diagnostics.skipReason = 'gemini_provider_managed_implicit_cache';
+    return { body, diagnostics };
   };
   const transformPromptCacheBody = async (body, requestType = '') => {
     const original = body;
     try {
-      if (!body || typeof body !== 'object') return { body: original, diagnostics: { providerFamily: 'unknown', apiShape: '', applied: false, skipReason: 'invalid_body' } };
+      if (promptCacheModeOf(Memory.settings || DEFAULT_SETTINGS) !== 'native') {
+        return { body: original, diagnostics: { providerFamily: 'unknown', apiShape: '', applied: false, providerManaged: false, skipReason: 'native_mode_not_enabled' } };
+      }
+      if (!body || typeof body !== 'object') return { body: original, diagnostics: { providerFamily: 'unknown', apiShape: '', applied: false, providerManaged: false, skipReason: 'invalid_body' } };
       const provider = detectPromptCacheProvider(body, requestType);
       if (provider.auxiliary) {
-        return { body: original, diagnostics: { ...provider, applied: false, skipReason: 'auxiliary_request' } };
+        return { body: original, diagnostics: { ...provider, applied: false, providerManaged: false, skipReason: 'auxiliary_request' } };
       }
+      if (provider.providerFamily === 'gemini') return await applyGeminiPromptCache(body, provider);
       if (provider.apiShape === 'automatic') {
-        return { body: original, diagnostics: { ...provider, applied: false, contractAttested: false, skipReason: 'provider_automatic_cache_structural_only' } };
-      }
-      if (provider.providerFamily === 'unknown') {
-        return { body: original, diagnostics: { ...provider, applied: false, contractAttested: false, skipReason: 'unsupported_or_opaque_provider' } };
-      }
-      // RisuAI currently supplies protocol-stage strings such as openai_basic and
-      // anthropic_http for both direct and compatible/proxy transports. Never scan
-      // or mutate the full body until trusted host metadata proves the endpoint.
-      if (!provider.directProviderProven) {
-        return { body: original, diagnostics: { ...provider, applied: false, contractAttested: false, skipReason: provider.proxied ? 'proxy_or_custom_endpoint' : 'direct_provider_not_proven' } };
-      }
-      if (provider.expectedApiShape && provider.expectedApiShape !== provider.apiShape) {
-        return { body: original, diagnostics: { ...provider, applied: false, contractAttested: false, skipReason: 'transport_api_shape_mismatch' } };
-      }
-      if (['prompt_cache_key', 'prompt_cache_options', 'prompt_cache_breakpoint', 'cache_control']
-        .some(field => promptCacheBodyHasField(body, field))) {
         return {
           body: original,
-          diagnostics: { ...provider, applied: false, existingConfigPreserved: true, skipReason: 'existing_user_cache_config' }
+          diagnostics: {
+            ...provider,
+            applied: false,
+            providerManaged: provider.providerManaged === true,
+            contractAttested: false,
+            skipReason: provider.providerManaged === true ? 'provider_managed_implicit_cache' : 'provider_automatic_cache_structural_only'
+          }
         };
+      }
+      if (provider.providerFamily === 'unknown') {
+        return { body: original, diagnostics: { ...provider, applied: false, providerManaged: false, contractAttested: false, skipReason: 'unsupported_or_opaque_provider' } };
+      }
+      if (!provider.nativeTransportEligible) {
+        return { body: original, diagnostics: { ...provider, applied: false, providerManaged: false, contractAttested: false, skipReason: provider.proxied ? 'proxy_or_custom_endpoint' : 'direct_provider_not_proven' } };
+      }
+      if (provider.expectedApiShape && provider.expectedApiShape !== provider.apiShape) {
+        return { body: original, diagnostics: { ...provider, applied: false, providerManaged: false, contractAttested: false, skipReason: 'transport_api_shape_mismatch' } };
       }
       const attestation = attestPromptCacheStaticContract(body, provider);
       if (!attestation.ok) {
-        return { body: original, diagnostics: { ...provider, applied: false, contractAttested: false, skipReason: attestation.reason } };
+        return { body: original, diagnostics: { ...provider, applied: false, providerManaged: false, contractAttested: false, skipReason: attestation.reason } };
       }
       if (provider.providerFamily === 'openai') return await applyOpenAIPromptCache(body, provider, attestation);
       if (provider.providerFamily === 'anthropic') return await applyAnthropicPromptCache(body, provider, attestation);
@@ -3450,12 +3624,13 @@ const MODE_PROFILES = Object.freeze({
         diagnostics: {
           ...provider,
           applied: false,
+          providerManaged: false,
           contractAttested: true,
           skipReason: 'unsupported_or_opaque_provider'
         }
       };
     } catch (error) {
-      return { body: original, diagnostics: { providerFamily: 'unknown', apiShape: '', applied: false, skipReason: `transform_error:${compact(error?.message || error, 120)}` } };
+      return { body: original, diagnostics: { providerFamily: 'unknown', apiShape: '', applied: false, providerManaged: false, skipReason: `transform_error:${compact(error?.message || error, 120)}` } };
     }
   };
   const normalizeKey = (value = '') => text(value)
@@ -19525,14 +19700,17 @@ const MODE_PROFILES = Object.freeze({
         promptCacheModeOf(promptSettings) === 'off' ? '' : staticWrite
       ));
       const configuredPromptCacheMode = promptCacheModeOf(promptSettings);
-      const effectivePromptCacheMode = configuredPromptCacheMode === 'off' ? 'off' : 'structural';
+      const effectivePromptCacheMode = configuredPromptCacheMode === 'off'
+        ? 'off'
+        : (configuredPromptCacheMode === 'native' && Memory.promptCache.registered === true ? 'native' : 'structural');
       const previousStaticProfile = text(Memory.promptCache.staticProfile || '');
       const cacheSafety = {
         configuredMode: configuredPromptCacheMode,
         effectiveMode: effectivePromptCacheMode,
-        nativeAlias: configuredPromptCacheMode === 'native',
+        nativeAlias: false,
+        nativeRequested: configuredPromptCacheMode === 'native',
         nativePolicy: Memory.promptCache.nativePolicy,
-        nativeUnavailableReason: configuredPromptCacheMode === 'native' ? Memory.promptCache.nativeReason : '',
+        nativeUnavailableReason: configuredPromptCacheMode === 'native' && Memory.promptCache.registered !== true ? Memory.promptCache.nativeReason : '',
         staticProfile: packetBudgetPlan.staticProfile || '',
         previousStaticProfile,
         profileChanged: Boolean(previousStaticProfile && previousStaticProfile !== packetBudgetPlan.staticProfile),
@@ -27666,6 +27844,10 @@ ${sourceChatId}`)}`;
         transformPromptCacheBody,
         applyOpenAIPromptCache,
         applyAnthropicPromptCache,
+        applyGeminiPromptCache,
+        anthropicPromptCacheMinimumTokens,
+        geminiImplicitPromptCacheSupported,
+        openAIExplicitPromptCacheSupported,
         promptCachePrefixFingerprint,
         canonicalHistoryText,
         stripHayakuBlocks,
@@ -27832,11 +28014,18 @@ ${sourceChatId}`)}`;
       Memory.promptCache.permission = 'not_requested';
       Memory.promptCache.registered = false;
       Memory.promptCache.registerAttempted = false;
-      Memory.promptCache.registerError = configuredPromptCacheMode === 'off'
-        ? 'disabled_by_setting'
-        : configuredPromptCacheMode === 'native'
-          ? 'native_reserved_structural_alias'
-          : 'structural_mode';
+      Memory.promptCache.registerError = '';
+      Memory.promptCache.nativeReason = '';
+      if (configuredPromptCacheMode === 'native') {
+        const nativeCacheRegistered = await RisuCompat.addBodyInterceptor(transformPromptCacheBody);
+        if (!nativeCacheRegistered) {
+          Memory.promptCache.nativeReason = Memory.promptCache.registerError || 'body_interceptor_registration_failed';
+          console.warn(`[HAYAKU] native prompt-cache interceptor unavailable: ${Memory.promptCache.nativeReason}`);
+        }
+      } else {
+        Memory.promptCache.registerError = configuredPromptCacheMode === 'off' ? 'disabled_by_setting' : 'structural_mode';
+        Memory.promptCache.nativeReason = Memory.promptCache.registerError;
+      }
       const afterRequestRegistered = await RisuCompat.addAfterRequest((content, requestType) =>
         captureHayakuOutput(content, 'afterRequest', requestType)
       );
@@ -27878,6 +28067,7 @@ ${sourceChatId}`)}`;
         for (const key of [...Memory.finalizedBindingMonitors.keys()]) stopFinalizedBindingMonitor(key);
         Memory.finalizedBindingInFlight.clear();
         await RisuCompat.removeBeforeRequest();
+        await RisuCompat.removeBodyInterceptor();
         await RisuCompat.removeAfterRequest();
         await RisuCompat.removeOutputHandler();
         await RisuCompat.removeDisplayHandler();
