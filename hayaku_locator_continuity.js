@@ -1,9 +1,10 @@
 //@name hayaku_locator_continuity
-//@display-name HAYAKU · Locator Continuity v2.4.3
+//@display-name HAYAKU · Locator Continuity v2.4.4
 //@author rusinus12@gmail.com
 //@api 3.0
-//@version 2.4.3
+//@version 2.4.4
 
+/* v2.4.4 makes current-chat selection races fail-soft, gives the UI topology observer a steady-state fast scope path that avoids repeated full copy/verification scans, and adds explicit first-run hook lifecycle diagnostics without changing capture, binding, lineage, recall, or packet-authoring behavior. */
 /* v2.4.3 avoids the Permissions-Policy-blocked Clipboard API inside RisuAI about:srcdoc containers, prefers a synchronous ownerDocument execCommand copy path with focus/selection restoration, and falls back to the existing visible debug JSON panel when copying is unavailable. */
 /* v2.4.2 replaces unavailable host-native confirm() in orphan cleanup with an in-viewer confirmation dialog, so verified cleanup no longer self-cancels in RisuAI plugin containers. */
 /* v2.4.1 keeps rollback/reroll audit branches out of the default ledger view and makes manual orphan cleanup remove the whole verified discarded branch, including orphan-owned audit/quarantine copies, while creating system tombstones so hidden live-chat mirrors cannot resurrect deleted packets. */
@@ -141,7 +142,7 @@
   };
 
   const PLUGIN_NAME = 'HAYAKU';
-  const PLUGIN_VERSION = '2.4.3';
+  const PLUGIN_VERSION = '2.4.4';
   const REQUEST_LINEAGE_IDENTITY_VERSION = 2;
   const REQUEST_LINEAGE_SCHEMA_V2 = 'hayaku_request_lineage_v2';
   const HAYAKU_PACKET_AUTHORING_PROFILE_SCHEMA = 'hayaku-packet-authoring-profile-v1';
@@ -226,6 +227,7 @@
   const FINALIZED_BINDING_MAX_ATTEMPTS = 3;
   const WORLDLINE_OBSERVER_POLL_MS = 1600;
   const WORLDLINE_OBSERVER_STABLE_MS = 1200;
+  const WORLDLINE_OBSERVER_SCOPE_REVERIFY_MS = 10000;
   const LIVE_CHAT_LEDGER_SOURCE_PRIORITY = 4;
   // Protected-sidecar contract: downstream response processors receive only the
   // visible body after the complete expected packet group is durably committed.
@@ -1766,7 +1768,23 @@ const MODE_PROFILES = Object.freeze({
       lastCommittedSignature: '',
       observations: 0,
       commits: 0,
+      fastScopeHits: 0,
+      fullScopeRefreshes: 0,
+      transientScopeMisses: 0,
+      lastScopeMode: '',
+      lastScopeAt: 0,
+      scopeCache: null,
       lastResult: null
+    },
+    runtimeDiagnostics: {
+      installedAt: Date.now(),
+      requestHooksObservedSinceInstall: 0,
+      modelRequestsObservedSinceInstall: 0,
+      firstBeforeRequestAt: 0,
+      firstAfterRequestAt: 0,
+      firstOutputAt: 0,
+      firstDisplayAt: 0,
+      lastRequestType: ''
     },
     unloaded: false,
     storageWriteQueue: Promise.resolve(),
@@ -1784,11 +1802,14 @@ const MODE_PROFILES = Object.freeze({
       calls: 0,
       timeouts: 0,
       failures: 0,
+      softMisses: 0,
       deadlineSkips: 0,
       lateStorageWriteRepairs: 0,
       lateStorageWriteRepairFailures: 0,
       lastTimeout: '',
-      lastFailure: ''
+      lastFailure: '',
+      lastSoftMiss: '',
+      lastSoftMissAt: 0
     },
     compatRequestDeadlines: new Map(),
     compatRequestSequence: 0,
@@ -1878,6 +1899,32 @@ const MODE_PROFILES = Object.freeze({
 
   const now = () => Date.now();
   const text = value => String(value == null ? '' : value);
+  const hookLifecycleSnapshot = () => {
+    const installedAt = Math.max(0, Number(Memory.runtimeDiagnostics?.installedAt || 0) || 0);
+    const beforeRuns = Math.max(0, Number(Memory.replacer?.runCount || 0) || 0);
+    const afterRuns = Math.max(0, Number(Memory.afterRequest?.runCount || 0) || 0);
+    const outputRuns = Math.max(0, Number(Memory.outputHandler?.runCount || 0) || 0);
+    const displayRuns = Math.max(0, Number(Memory.displayHandler?.runCount || 0) || 0);
+    let status = 'installed_no_host_activity';
+    if (beforeRuns > 0 || afterRuns > 0 || outputRuns > 0) status = 'request_pipeline_observed';
+    else if (displayRuns > 0) status = 'ui_active_no_request_pipeline_observed_since_install';
+    return {
+      installedAt,
+      ageMs: installedAt > 0 ? Math.max(0, now() - installedAt) : 0,
+      status,
+      requestHooksObservedSinceInstall: Math.max(0, Number(Memory.runtimeDiagnostics?.requestHooksObservedSinceInstall || 0) || 0),
+      modelRequestsObservedSinceInstall: Math.max(0, Number(Memory.runtimeDiagnostics?.modelRequestsObservedSinceInstall || 0) || 0),
+      firstBeforeRequestAt: Math.max(0, Number(Memory.runtimeDiagnostics?.firstBeforeRequestAt || 0) || 0),
+      firstAfterRequestAt: Math.max(0, Number(Memory.runtimeDiagnostics?.firstAfterRequestAt || 0) || 0),
+      firstOutputAt: Math.max(0, Number(Memory.runtimeDiagnostics?.firstOutputAt || 0) || 0),
+      firstDisplayAt: Math.max(0, Number(Memory.runtimeDiagnostics?.firstDisplayAt || 0) || 0),
+      lastRequestType: text(Memory.runtimeDiagnostics?.lastRequestType || ''),
+      beforeRequestRuns: beforeRuns,
+      afterRequestRuns: afterRuns,
+      outputRuns,
+      displayRuns
+    };
+  };
   const RISU_STORED_ESCAPE_REPLACEMENTS = Object.freeze({
     '\uE9B8': '{',
     '\uE9B9': '}',
@@ -2034,8 +2081,17 @@ const MODE_PROFILES = Object.freeze({
         }
         return result;
       } catch (error) {
+        const message = compact(error?.message || error, 120);
+        const currentChatSelectionTransition = /CurrentChatIndex/i.test(text(label))
+          && /(?:chatPage|reading ['"]chatPage['"]|undefined.*chatPage)/i.test(message);
+        if (currentChatSelectionTransition) {
+          Memory.compatCallStats.softMisses += 1;
+          Memory.compatCallStats.lastSoftMiss = `${text(label)}:${message}`;
+          Memory.compatCallStats.lastSoftMissAt = now();
+          return fallback;
+        }
         Memory.compatCallStats.failures += 1;
-        Memory.compatCallStats.lastFailure = `${text(label)}:${compact(error?.message || error, 120)}`;
+        Memory.compatCallStats.lastFailure = `${text(label)}:${message}`;
         return fallback;
       } finally {
         if (timer != null) clearTimeout(timer);
@@ -2377,8 +2433,9 @@ const MODE_PROFILES = Object.freeze({
         ? { sourceChatId: candidates[0].sourceChatId, reason: 'risu_native_chat_copy' }
         : { sourceChatId: '', reason: 'copy_source_ledger_not_found' });
     };
-    const currentChatScope = async () => {
+    const currentChatScope = async (options = {}) => {
       const current = api();
+      const fastObserver = options?.observerFast === true;
       try {
         const required = ['getCurrentCharacterIndex', 'getCurrentChatIndex', 'getCharacterFromIndex', 'getChatFromIndex'];
         if (required.some(name => typeof current?.[name] !== 'function')) {
@@ -2386,19 +2443,32 @@ const MODE_PROFILES = Object.freeze({
         }
         const readCurrentIndexes = async label => {
           const operationPrefix = label ? `${label}Get` : 'get';
+          const softMissesBefore = Math.max(0, Number(Memory.compatCallStats.softMisses || 0) || 0);
           const [characterIndexRaw, chatIndexRaw] = await Promise.all([
             boundedHostCall(`${operationPrefix}CurrentCharacterIndex`, () => current.getCurrentCharacterIndex(), -1),
             boundedHostCall(`${operationPrefix}CurrentChatIndex`, () => current.getCurrentChatIndex(), -1)
           ]);
-          return { characterIndex: Number(characterIndexRaw), chatIndex: Number(chatIndexRaw) };
+          return {
+            characterIndex: Number(characterIndexRaw),
+            chatIndex: Number(chatIndexRaw),
+            selectionTransition: Math.max(0, Number(Memory.compatCallStats.softMisses || 0) || 0) > softMissesBefore
+          };
         };
         let indexes = await readCurrentIndexes('');
         if (!Number.isInteger(indexes.characterIndex) || indexes.characterIndex < 0
           || !Number.isInteger(indexes.chatIndex) || indexes.chatIndex < 0) {
-          // RisuAI Web can expose a short selection-transition window where
-          // getCurrentChatIndex throws while the selected character object is
-          // being swapped. A single short retry avoids turning that transient
-          // host race into minutes of finalized-binding starvation.
+          // The UI observer is periodic. During RisuAI's short character/chat
+          // selection transition, getCurrentChatIndex can temporarily touch an
+          // absent chatPage. Treat that as a soft miss and let the next poll
+          // retry instead of immediately repeating the same failing host call.
+          if (fastObserver && indexes.selectionTransition) {
+            Memory.worldlineObserver.transientScopeMisses += 1;
+            Memory.worldlineObserver.lastScopeMode = 'fast_transition_miss';
+            Memory.worldlineObserver.lastScopeAt = now();
+            return { key: '', confident: false, reason: 'current_chat_selection_transition' };
+          }
+          // Main request/capture callers keep the existing one-shot retry so a
+          // transient host race cannot starve finalized binding.
           await waitMs(45);
           indexes = await readCurrentIndexes('retry');
         }
@@ -2407,6 +2477,39 @@ const MODE_PROFILES = Object.freeze({
         if (!Number.isInteger(characterIndex) || characterIndex < 0 || !Number.isInteger(chatIndex) || chatIndex < 0) {
           return { key: '', confident: false, reason: 'current_chat_indexes_invalid' };
         }
+
+        // v2.4.4 steady-state observer fast path. Once a full, verified scope has
+        // established the exact character/chat identity, repeated topology polls
+        // only need the current indexes plus the current chat body. A chat switch
+        // or identity drift falls through to the original full verification path.
+        if (fastObserver) {
+          const cached = objectish(Memory.worldlineObserver.scopeCache) ? Memory.worldlineObserver.scopeCache : null;
+          if (cached
+            && Number(cached.characterIndex) === characterIndex
+            && Number(cached.chatIndex) === chatIndex
+            && now() - Math.max(0, Number(cached.updatedAt || 0) || 0) <= WORLDLINE_OBSERVER_SCOPE_REVERIFY_MS
+            && objectish(cached.scope)
+            && cached.scope?.confident === true) {
+            const chat = await boundedHostCall('observerGetChatFromIndex', () => current.getChatFromIndex(characterIndex, chatIndex), null);
+            const chatId = text(chat?.id || '').trim();
+            if (chatId && chatId === text(cached.chatId || '').trim()) {
+              const scope = {
+                ...cached.scope,
+                chatTitle: text(chat?.name || chat?.title || chat?.chatName || chat?.filename || chatId).trim(),
+                chatMessages: Array.isArray(chat?.message) ? chat.message : [],
+                chatMessagesAvailable: Array.isArray(chat?.message),
+                chatMessageCount: Array.isArray(chat?.message) ? chat.message.length : 0,
+                requestType: 'model',
+                scopeReadMode: 'observer_fast'
+              };
+              Memory.worldlineObserver.fastScopeHits += 1;
+              Memory.worldlineObserver.lastScopeMode = 'observer_fast';
+              Memory.worldlineObserver.lastScopeAt = now();
+              return scope;
+            }
+          }
+        }
+
         const [character, chat] = await Promise.all([
           boundedHostCall('getCharacterFromIndex', () => current.getCharacterFromIndex(characterIndex), null),
           boundedHostCall('getChatFromIndex', () => current.getChatFromIndex(characterIndex, chatIndex), null)
@@ -2477,7 +2580,7 @@ const MODE_PROFILES = Object.freeze({
             observedChatIdHash: verifiedChatId ? stableHash64(verifiedChatId) : ''
           };
         }
-        return {
+        const scope = {
           key: `chat_${digest}`,
           confident: true,
           reason: 'risu_current_chat_ids',
@@ -2495,8 +2598,21 @@ const MODE_PROFILES = Object.freeze({
           chatMessages: Array.isArray(chat?.message) ? chat.message : [],
           chatMessagesAvailable: Array.isArray(chat?.message),
           chatMessageCount: Array.isArray(chat?.message) ? chat.message.length : 0,
-          requestType: 'model'
+          requestType: 'model',
+          scopeReadMode: 'full_verified'
         };
+        Memory.worldlineObserver.scopeCache = {
+          characterIndex,
+          chatIndex,
+          characterId: compact(characterId, 160),
+          chatId: compact(chatId, 160),
+          scope: { ...scope, chatMessages: [] },
+          updatedAt: now()
+        };
+        Memory.worldlineObserver.fullScopeRefreshes += 1;
+        Memory.worldlineObserver.lastScopeMode = 'full_verified';
+        Memory.worldlineObserver.lastScopeAt = now();
+        return scope;
       } catch (error) {
         return { key: '', confident: false, reason: 'current_chat_scope_failed', error: compact(error?.message || error, 180) };
       }
@@ -2523,6 +2639,10 @@ const MODE_PROFILES = Object.freeze({
         if (Memory.unloaded || !ownsRuntime()) return messages;
         Memory.replacer.runCount += 1;
         Memory.replacer.lastRunAt = now();
+        Memory.runtimeDiagnostics.requestHooksObservedSinceInstall += 1;
+        Memory.runtimeDiagnostics.lastRequestType = text(requestType || 'model');
+        if (!Memory.runtimeDiagnostics.firstBeforeRequestAt) Memory.runtimeDiagnostics.firstBeforeRequestAt = Memory.replacer.lastRunAt;
+        if (text(requestType || 'model').toLowerCase() === 'model') Memory.runtimeDiagnostics.modelRequestsObservedSinceInstall += 1;
         const requestToken = ++Memory.compatRequestSequence;
         Memory.compatRequestDeadlines.set(requestToken, now() + HOST_REQUEST_DEADLINE_MS);
         try {
@@ -2685,6 +2805,9 @@ const MODE_PROFILES = Object.freeze({
         if (Memory.unloaded || !ownsRuntime()) return content;
         Memory.afterRequest.runCount += 1;
         Memory.afterRequest.lastRunAt = now();
+        Memory.runtimeDiagnostics.requestHooksObservedSinceInstall += 1;
+        Memory.runtimeDiagnostics.lastRequestType = text(requestType || 'model');
+        if (!Memory.runtimeDiagnostics.firstAfterRequestAt) Memory.runtimeDiagnostics.firstAfterRequestAt = Memory.afterRequest.lastRunAt;
         try {
           return await handler(content, requestType);
         } catch (error) {
@@ -2731,6 +2854,7 @@ const MODE_PROFILES = Object.freeze({
         if (Memory.unloaded || !ownsRuntime()) return content;
         Memory.displayHandler.runCount += 1;
         Memory.displayHandler.lastRunAt = now();
+        if (!Memory.runtimeDiagnostics.firstDisplayAt) Memory.runtimeDiagnostics.firstDisplayAt = Memory.displayHandler.lastRunAt;
         try {
           return await handler(content);
         } catch (error) {
@@ -2778,6 +2902,8 @@ const MODE_PROFILES = Object.freeze({
         if (Memory.unloaded || !ownsRuntime()) return content;
         Memory.outputHandler.runCount += 1;
         Memory.outputHandler.lastRunAt = now();
+        Memory.runtimeDiagnostics.requestHooksObservedSinceInstall += 1;
+        if (!Memory.runtimeDiagnostics.firstOutputAt) Memory.runtimeDiagnostics.firstOutputAt = Memory.outputHandler.lastRunAt;
         try {
           return await handler(content, mode);
         } catch (error) {
@@ -2858,7 +2984,8 @@ const MODE_PROFILES = Object.freeze({
         stats: clone(Memory.copiedChatSourceCacheStats, {})
       },
       promptCache: clone(Memory.promptCache, {}),
-      boundedHostCalls: clone(Memory.compatCallStats, {})
+      boundedHostCalls: clone(Memory.compatCallStats, {}),
+      hookLifecycle: hookLifecycleSnapshot()
     });
     return Object.freeze({
       api, has, hasPluginStorage, refreshInfo, snapshot, getArgument, getStorageItem, setStorageItem, contextBudget,
@@ -28320,7 +28447,7 @@ ${sourceChatId}`)}`;
       }
       state.inFlight = true;
       try {
-        const scope = await RisuCompat.currentChatScope();
+        const scope = await RisuCompat.currentChatScope({ observerFast: true });
         if (!scope?.confident || !scope?.key || scope.chatMessagesAvailable !== true) {
           resetCandidate();
           return;
@@ -28718,10 +28845,18 @@ ${sourceChatId}`)}`;
           lastCommittedSignature: Memory.worldlineObserver.lastCommittedSignature,
           observations: Memory.worldlineObserver.observations,
           commits: Memory.worldlineObserver.commits,
+          fastScopeHits: Memory.worldlineObserver.fastScopeHits,
+          fullScopeRefreshes: Memory.worldlineObserver.fullScopeRefreshes,
+          transientScopeMisses: Memory.worldlineObserver.transientScopeMisses,
+          lastScopeMode: Memory.worldlineObserver.lastScopeMode,
+          lastScopeAt: Memory.worldlineObserver.lastScopeAt,
+          scopeCacheAvailable: objectish(Memory.worldlineObserver.scopeCache),
+          scopeReverifyMs: WORLDLINE_OBSERVER_SCOPE_REVERIFY_MS,
           lastResult: Memory.worldlineObserver.lastResult
         }
       },
       hooks: {
+        lifecycle: hookLifecycleSnapshot(),
         compat: RisuCompat.snapshot(),
         beforeRequest: {
           permission: Memory.replacer.permission,
@@ -29268,6 +29403,7 @@ ${sourceChatId}`)}`;
         afterRequestBudgetMs: AFTER_REQUEST_CAPTURE_WAIT_MS,
         outputBudgetMs: OUTPUT_CAPTURE_WAIT_MS
       },
+      hookLifecycle: hookLifecycleSnapshot(),
       hooks: {
         afterRequestRegistered: Memory.afterRequest.registered === true,
         afterRequestRunCount: Memory.afterRequest.runCount,
@@ -30081,8 +30217,16 @@ ${sourceChatId}`)}`;
           lastCommittedSignature: Memory.worldlineObserver.lastCommittedSignature,
           observations: Memory.worldlineObserver.observations,
           commits: Memory.worldlineObserver.commits,
+          fastScopeHits: Memory.worldlineObserver.fastScopeHits,
+          fullScopeRefreshes: Memory.worldlineObserver.fullScopeRefreshes,
+          transientScopeMisses: Memory.worldlineObserver.transientScopeMisses,
+          lastScopeMode: Memory.worldlineObserver.lastScopeMode,
+          lastScopeAt: Memory.worldlineObserver.lastScopeAt,
+          scopeCacheAvailable: objectish(Memory.worldlineObserver.scopeCache),
+          scopeReverifyMs: WORLDLINE_OBSERVER_SCOPE_REVERIFY_MS,
           lastResult: Memory.worldlineObserver.lastResult
         }, {}),
+        hookLifecycle: hookLifecycleSnapshot(),
         lastBeforeRequest: Memory.lastBeforeRequest,
         lastViewerRecall: clone(Memory.lastViewerRecall, null),
         lastLatentEpisodicRecall: clone(Memory.lastLatentEpisodicRecall, null),
@@ -30111,6 +30255,8 @@ ${sourceChatId}`)}`;
         pushOperationLog,
         operationLogSnapshot,
         buildHayakuOperationDebugExport,
+        hookLifecycleSnapshot,
+        currentChatScope: RisuCompat.currentChatScope,
         debugSanitizeForExport,
         reconcileTurnWorldline,
         normalizeTurnWorldline,
