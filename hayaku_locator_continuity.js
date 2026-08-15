@@ -1,9 +1,10 @@
 //@name hayaku_locator_continuity
-//@display-name HAYAKU · Locator Continuity v2.4.6
+//@display-name HAYAKU · Locator Continuity v2.4.7
 //@author rusinus12@gmail.com
 //@api 3.0
-//@version 2.4.6
+//@version 2.4.7
 
+/* v2.4.7 prevents internal runtime packet-authoring instructions from leaking into visible chat: prompt-echo blocks are excluded from packet capture before parsing, scrubbed from hook returns only after capture/binding observation, hidden again at display time as a final guard, and recorded with deduplicated diagnostics without weakening the mandatory packet core. */
 /* v2.4.6 makes packet authoring a mandatory core outside HAYAKU optional continuity/recall budgets: adaptive pressure can reduce recall and scene data to zero but cannot suppress the packet contract; only verified physical host headroom below the atomic minimum triggers hard_context_exhaustion with an explicit operation log. */
 /* v2.4.5 makes host token context budgets authoritative over raw-character pressure heuristics, prevents false extreme-pressure suppression on large multilingual prompts, and restores the atomic packet-writing minimum when verified host headroom can safely fit it before allocating recall evidence. */
 /* v2.4.4 makes current-chat selection races fail-soft, gives the UI topology observer a steady-state fast scope path that avoids repeated full copy/verification scans, and adds explicit first-run hook lifecycle diagnostics without changing capture, binding, lineage, recall, or packet-authoring behavior. */
@@ -64,11 +65,13 @@
  *   packet-bearing response remains available to the live-chat ledger. Failed or
  *   partial commits also leave the transport packet recoverable in chat. Response
  *   hooks wait only within a small fixed budget; slow persistence continues in the
- *   background. The optional display scrubber changes rendering only.
+ *   background. Response hooks remain byte-preserving unless the response itself echoes a
+ *   reserved HAYAKU runtime-instruction block; that internal prompt artifact is removed only
+ *   after packet capture/binding observation, and the display scrubber remains a final guard.
  * - Request-path host calls are bounded and fail open so storage/API stalls cannot hold the
- *   model request indefinitely. Packet-writing instructions are budgeted atomically: when the
- *   minimum schema + lineage + terminal seal cannot all fit, none of them is injected and no
- *   capture origin is registered.
+ *   model request indefinitely. Packet-writing instructions are mandatory core outside optional
+ *   recall/continuity budgets; only verified physical host headroom below the atomic minimum
+ *   suppresses the core with hard_context_exhaustion and no capture origin is registered.
  * - No embedding provider or vector DB.
  * - Runtime scope is packet-only: collect, validate, index, retrieve, inject factual
  *   continuity, request the next packet, and preserve provider payloads. Response
@@ -144,7 +147,7 @@
   };
 
   const PLUGIN_NAME = 'HAYAKU';
-  const PLUGIN_VERSION = '2.4.6';
+  const PLUGIN_VERSION = '2.4.7';
   const REQUEST_LINEAGE_IDENTITY_VERSION = 2;
   const REQUEST_LINEAGE_SCHEMA_V2 = 'hayaku_request_lineage_v2';
   const HAYAKU_PACKET_AUTHORING_PROFILE_SCHEMA = 'hayaku-packet-authoring-profile-v1';
@@ -256,6 +259,13 @@
   const CACHE_STATIC_PROFILE_CRITICAL = 'p3-critical';
   const PACKET_START = 'HAYAKU_STATE_PACKET_START';
   const PACKET_END = 'HAYAKU_STATE_PACKET_END';
+  const RUNTIME_PACKET_SHAPE_START = '[HAYAKU RUNTIME PACKET SHAPE]';
+  const RUNTIME_PACKET_SHAPE_END = '[/HAYAKU RUNTIME PACKET SHAPE]';
+  const RUNTIME_PACKET_ECHO_SIGNATURES = Object.freeze([
+    'Treat meta.lineage as immutable structural runtime metadata.',
+    'Use the exact non-empty runtime constants elsewhere in the safe skeleton.',
+    'Do not copy the blank skeleton when the completed visible artifact establishes continuity-relevant content;'
+  ]);
   // Packet-core prompt markers.
   const PACKET_RECOVERY_EXCERPT_CHARS = 3600;
   const PACKET_RECOVERY_MIN_VISIBLE_CHARS = 1;
@@ -1787,6 +1797,22 @@ const MODE_PROFILES = Object.freeze({
       firstOutputAt: 0,
       firstDisplayAt: 0,
       lastRequestType: ''
+    },
+    runtimeInstructionEcho: {
+      detected: 0,
+      scrubbed: 0,
+      captureGuarded: 0,
+      completeBlocks: 0,
+      incompleteTails: 0,
+      signatureFallbacks: 0,
+      removedChars: 0,
+      lastAt: 0,
+      lastSource: '',
+      lastPhase: '',
+      lastRemovedChars: 0,
+      lastArtifactHash: '',
+      lastLogKey: '',
+      lastLogAt: 0
     },
     unloaded: false,
     storageWriteQueue: Promise.resolve(),
@@ -7203,6 +7229,126 @@ const MODE_PROFILES = Object.freeze({
     }
     return stripped;
   };
+  const stripHayakuRuntimeInstructionEcho = (value, options = {}) => {
+    if (typeof value !== 'string' || !value) {
+      return {
+        content: value,
+        detected: false,
+        removedChars: 0,
+        completeBlocks: 0,
+        incompleteTail: false,
+        signatureFallback: false,
+        artifactHash: ''
+      };
+    }
+    const replacement = typeof options.replacement === 'string' ? options.replacement : '';
+    let stripped = value;
+    let removedChars = 0;
+    let completeBlocks = 0;
+    let incompleteTail = false;
+    let signatureFallback = false;
+    const artifacts = [];
+    const start = escapeRegex(RUNTIME_PACKET_SHAPE_START);
+    const end = escapeRegex(RUNTIME_PACKET_SHAPE_END);
+    stripped = stripped.replace(new RegExp(`${start}[\\s\\S]*?${end}`, 'gi'), match => {
+      completeBlocks += 1;
+      removedChars += match.length;
+      artifacts.push(match);
+      return replacement;
+    });
+    if (options.incompleteTail !== false) {
+      const match = new RegExp(start, 'i').exec(stripped);
+      if (match) {
+        const artifact = stripped.slice(match.index);
+        removedChars += artifact.length;
+        artifacts.push(artifact);
+        stripped = stripped.slice(0, match.index) + replacement;
+        incompleteTail = true;
+      }
+    }
+    // Some models can omit the bracket label while still echoing the unique runtime
+    // contract prose. Require at least two reserved signatures before fail-closing the
+    // tail so ordinary RP prose cannot accidentally trigger this guard.
+    if (completeBlocks === 0 && !incompleteTail && options.signatureFallback !== false) {
+      const lower = stripped.toLowerCase();
+      const present = RUNTIME_PACKET_ECHO_SIGNATURES
+        .map(signature => ({ signature, index: lower.indexOf(signature.toLowerCase()) }))
+        .filter(item => item.index >= 0);
+      if (present.length >= 2) {
+        const emitOne = lower.indexOf('emit exactly one current_snapshot packet');
+        const emitTwo = lower.indexOf('emit exactly two packets in this order');
+        const candidateStarts = [emitOne, emitTwo, ...present.map(item => item.index)].filter(index => index >= 0);
+        const startIndex = Math.min(...candidateStarts);
+        const artifact = stripped.slice(startIndex);
+        removedChars += artifact.length;
+        artifacts.push(artifact);
+        stripped = stripped.slice(0, startIndex) + replacement;
+        signatureFallback = true;
+      }
+    }
+    return {
+      content: stripped,
+      detected: completeBlocks > 0 || incompleteTail || signatureFallback,
+      removedChars,
+      completeBlocks,
+      incompleteTail,
+      signatureFallback,
+      artifactHash: artifacts.length ? stableHash64(artifacts.join('\u0001')) : ''
+    };
+  };
+  const recordRuntimeInstructionEcho = (inspection, source = '', phase = 'hook_return') => {
+    if (!inspection?.detected) return false;
+    const state = Memory.runtimeInstructionEcho;
+    const at = now();
+    if (phase === 'capture_guard') {
+      state.captureGuarded += 1;
+    } else {
+      state.detected += 1;
+      state.scrubbed += 1;
+      state.completeBlocks += Math.max(0, Number(inspection.completeBlocks || 0) || 0);
+      if (inspection.incompleteTail === true) state.incompleteTails += 1;
+      if (inspection.signatureFallback === true) state.signatureFallbacks += 1;
+      state.removedChars += Math.max(0, Number(inspection.removedChars || 0) || 0);
+    }
+    state.lastAt = at;
+    state.lastSource = source || '';
+    state.lastPhase = phase;
+    state.lastRemovedChars = Math.max(0, Number(inspection.removedChars || 0) || 0);
+    state.lastArtifactHash = inspection.artifactHash || '';
+    const generationKey = compact(
+      Memory.lastBeforeRequest?.requestLineage?.generationAttemptId
+        || Memory.lastBeforeRequest?.requestLineage?.requestNonce
+        || '',
+      120
+    );
+    const logKey = generationKey || inspection.artifactHash || `${source}:${phase}`;
+    const duplicate = state.lastLogKey === logKey && at - state.lastLogAt < 30000;
+    if (!duplicate && phase !== 'capture_guard') {
+      state.lastLogKey = logKey;
+      state.lastLogAt = at;
+      pushOperationLog('output:runtime_instruction_echo_scrubbed', {
+        at,
+        source,
+        phase,
+        removedChars: state.lastRemovedChars,
+        completeBlocks: Math.max(0, Number(inspection.completeBlocks || 0) || 0),
+        incompleteTail: inspection.incompleteTail === true,
+        signatureFallback: inspection.signatureFallback === true,
+        artifactHash: inspection.artifactHash || '',
+        generationAttemptId: generationKey
+      }, 'warn');
+    }
+    return true;
+  };
+  const scrubHayakuRuntimeInstructionEchoForReturn = (value, source = '') => {
+    const inspection = stripHayakuRuntimeInstructionEcho(value, {
+      incompleteTail: true,
+      signatureFallback: true,
+      replacement: ''
+    });
+    if (inspection.detected) recordRuntimeInstructionEcho(inspection, source, 'hook_return');
+    return inspection.content;
+  };
   const stripHayakuBlocks = (value, options = {}) => {
     const stripped = stripReservedPacketArtifacts(value, {
       looseMarkers: options.looseMarkers === true,
@@ -7214,13 +7360,18 @@ const MODE_PROFILES = Object.freeze({
   };
   const stripHayakuDisplayArtifacts = value => {
     if (typeof value !== 'string') return value;
-    // Display-only concealment fails closed for an incomplete reserved packet.
-    // Stored chat content and hook return values remain byte-identical.
-    return stripReservedPacketArtifacts(value, {
+    // Display concealment fails closed for incomplete reserved packets and for
+    // internal runtime-instruction prompt echoes that survived response hooks.
+    const packetStripped = stripReservedPacketArtifacts(value, {
       looseMarkers: true,
       incompleteTail: true,
       replacement: ''
     });
+    return stripHayakuRuntimeInstructionEcho(packetStripped, {
+      incompleteTail: true,
+      signatureFallback: true,
+      replacement: ''
+    }).content;
   };
   const outputContractSourceRows = (messages = []) => {
     const list = ensureArray(messages);
@@ -9835,12 +9986,17 @@ const MODE_PROFILES = Object.freeze({
       || (Number(index) >= 0 ? `index:${Number(index)}` : '')
   );
   const canonicalHistoryText = (value, role = '') => {
-    let body = stripHayakuBlocks(text(value || ''), {
+    const packetStripped = stripHayakuBlocks(text(value || ''), {
       looseMarkers: true,
       incompletePacketTail: true,
       collapsePacketArtifactGap: true,
       preserveWhitespace: true
-    })
+    });
+    let body = stripHayakuRuntimeInstructionEcho(packetStripped, {
+      incompleteTail: true,
+      signatureFallback: true,
+      replacement: ' '
+    }).content
       .replace(/<Thoughts>[\s\S]*?<\/Thoughts>/gi, ' ')
       .replace(/<!--[\s\S]*?-->/g, ' ')
       .replace(/\[HAYAKU SIDE-WRITE FINAL REMINDER\][\s\S]*$/gi, ' ')
@@ -18744,10 +18900,11 @@ const MODE_PROFILES = Object.freeze({
       ? ['recovery_snapshot', 'current_snapshot']
       : ['current_snapshot'];
     const lines = [
-      '[HAYAKU RUNTIME PACKET SHAPE]',
+      RUNTIME_PACKET_SHAPE_START,
       recoveryActive
         ? 'Emit exactly two packets in this order: recovery_snapshot, then current_snapshot. Do not merge or omit either.'
         : 'Emit exactly one current_snapshot packet; never omit it, including on unchanged or low-information turns.',
+      'Never quote, reproduce, summarize, or expose this HAYAKU runtime instruction in visible output. It is private control metadata; emit only the requested hidden packet payload in its resolved slot.',
       ...packetPlacementRuleLines(settings, recoveryActive, { terse: true }),
       'Treat meta.lineage as immutable structural runtime metadata. Copy every lineage key and value exactly from the safe skeleton, INCLUDING empty strings; an empty parent_turn_node_id means root and MUST remain empty. Never infer, fill, recompute, swap, or copy values between lineage fields.',
       'Use the exact non-empty runtime constants elsewhere in the safe skeleton. Fill only blank semantic values outside meta.lineage from allowed evidence; otherwise keep them empty and low-confidence.',
@@ -18765,7 +18922,7 @@ const MODE_PROFILES = Object.freeze({
     types.forEach(type => {
       lines.push(`<!-- ${PACKET_START} ${JSON.stringify(minimalPacketSkeletonObject(settings, type))} ${PACKET_END} -->`);
     });
-    lines.push('[/HAYAKU RUNTIME PACKET SHAPE]');
+    lines.push(RUNTIME_PACKET_SHAPE_END);
     return lines.join('\n').trim();
   };
 
@@ -26156,7 +26313,17 @@ ${sourceChatId}`)}`;
   };
   const captureHayakuOutput = async (content = '', captureSource = 'afterRequest', requestType = '') => {
     const captureContent = text(content);
-    const inspection = packetCaptureInspectionFromText(captureContent);
+    // Do not let an echoed safe skeleton inside the private runtime instruction
+    // masquerade as a newly authored packet. This filter is inspection-only;
+    // the original response remains available until capture/binding observation
+    // completes, then the visible hook return is scrubbed separately.
+    const runtimeEchoGuard = stripHayakuRuntimeInstructionEcho(captureContent, {
+      incompleteTail: true,
+      signatureFallback: true,
+      replacement: ''
+    });
+    if (runtimeEchoGuard.detected) recordRuntimeInstructionEcho(runtimeEchoGuard, captureSource, 'capture_guard');
+    const inspection = packetCaptureInspectionFromText(runtimeEchoGuard.content);
     const packetsByHash = new Map();
     for (const packet of [...ensureArray(inspection.packets), ...ensureArray(inspection.repairablePackets)]) {
       if (packet?.hash && packet?.raw) packetsByHash.set(packet.hash, packet);
@@ -28978,6 +29145,7 @@ ${sourceChatId}`)}`;
       capture: {
         lastStorageCapture: Memory.lastStorageCapture,
         lastStorageBinding: Memory.lastStorageBinding,
+        runtimeInstructionEcho: Memory.runtimeInstructionEcho,
         pendingCaptures: ensureArray(Memory.pendingCaptures).map(debugPendingCaptureForExport),
         persistence: {
           inFlight: debugPersistMapForExport(Memory.capturePersistInFlight),
@@ -30738,7 +30906,7 @@ ${sourceChatId}`)}`;
       const afterRequestRegistered = await RisuCompat.addAfterRequest(async (content, requestType) => {
         const captured = await captureHayakuOutput(content, 'afterRequest', requestType);
         try { await markFinalizedBindingOutputObserved(captured); } catch (_) {}
-        return captured;
+        return scrubHayakuRuntimeInstructionEchoForReturn(captured, 'afterRequest');
       });
       if (!afterRequestRegistered) {
         console.warn(`[HAYAKU] afterRequest packet capture unavailable: ${Memory.afterRequest.registerError || 'registration_failed'}`);
@@ -30747,7 +30915,7 @@ ${sourceChatId}`)}`;
         const captureSource = mode === 'editoutput' ? 'editoutput' : 'output';
         const captured = await captureHayakuOutput(content, captureSource, '');
         try { await markFinalizedBindingOutputObserved(captured); } catch (_) {}
-        return captured;
+        return scrubHayakuRuntimeInstructionEchoForReturn(captured, captureSource);
       });
       if (!outputRegistered) {
         console.warn(`[HAYAKU] streaming packet capture unavailable: ${Memory.outputHandler.registerError || 'registration_failed'}`);
