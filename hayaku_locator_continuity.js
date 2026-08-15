@@ -1,9 +1,11 @@
 //@name hayaku_locator_continuity
-//@display-name HAYAKU · Locator Continuity v2.4.4
+//@display-name HAYAKU · Locator Continuity v2.4.6
 //@author rusinus12@gmail.com
 //@api 3.0
-//@version 2.4.4
+//@version 2.4.6
 
+/* v2.4.6 makes packet authoring a mandatory core outside HAYAKU optional continuity/recall budgets: adaptive pressure can reduce recall and scene data to zero but cannot suppress the packet contract; only verified physical host headroom below the atomic minimum triggers hard_context_exhaustion with an explicit operation log. */
+/* v2.4.5 makes host token context budgets authoritative over raw-character pressure heuristics, prevents false extreme-pressure suppression on large multilingual prompts, and restores the atomic packet-writing minimum when verified host headroom can safely fit it before allocating recall evidence. */
 /* v2.4.4 makes current-chat selection races fail-soft, gives the UI topology observer a steady-state fast scope path that avoids repeated full copy/verification scans, and adds explicit first-run hook lifecycle diagnostics without changing capture, binding, lineage, recall, or packet-authoring behavior. */
 /* v2.4.3 avoids the Permissions-Policy-blocked Clipboard API inside RisuAI about:srcdoc containers, prefers a synchronous ownerDocument execCommand copy path with focus/selection restoration, and falls back to the existing visible debug JSON panel when copying is unavailable. */
 /* v2.4.2 replaces unavailable host-native confirm() in orphan cleanup with an in-viewer confirmation dialog, so verified cleanup no longer self-cancels in RisuAI plugin containers. */
@@ -142,7 +144,7 @@
   };
 
   const PLUGIN_NAME = 'HAYAKU';
-  const PLUGIN_VERSION = '2.4.4';
+  const PLUGIN_VERSION = '2.4.6';
   const REQUEST_LINEAGE_IDENTITY_VERSION = 2;
   const REQUEST_LINEAGE_SCHEMA_V2 = 'hayaku_request_lineage_v2';
   const HAYAKU_PACKET_AUTHORING_PROFILE_SCHEMA = 'hayaku-packet-authoring-profile-v1';
@@ -5071,23 +5073,43 @@ const MODE_PROFILES = Object.freeze({
     if (ratio >= 0.58) return 'medium';
     return 'normal';
   };
-  const adaptiveInjectionCap = (mode, messages = [], contextBudget = null) => {
-    const configuredCap = modeInjectionCap(mode);
-    const pressure = higherPromptPressure(requestPromptPressure(messages), hostBudgetPromptPressure(messages, contextBudget));
-    const pressureRatio = ({ normal: 1, medium: 0.72, high: 0.46, extreme: 0.24 })[pressure] || 1;
-    let cap = Math.max(1, Math.floor(configuredCap * pressureRatio));
-    const maxContext = Math.max(0, Number(contextBudget?.maxContext || 0) || 0);
-    if (maxContext > 0) {
-      const maxResponse = Math.max(0, Number(contextBudget?.maxResponse || 0) || 0);
-      const responseReserve = Math.min(Math.floor(maxContext * 0.35), Math.max(256, maxResponse, Math.floor(maxContext * 0.08)));
-      const safetyReserve = Math.min(768, Math.max(128, Math.floor(maxContext * 0.04)));
-      const remainingTokens = Math.max(0, maxContext - estimatedPromptTokens(messages) - responseReserve - safetyReserve);
-      // HAYAKU's injection is predominantly English. Three characters per token is
-      // deliberately conservative versus the observed provider tokenizers.
-      cap = Math.min(cap, Math.max(1, Math.floor(remainingTokens * 3)));
-    }
-    return Math.max(1, cap);
+  const hostContextBudgetAuthoritative = contextBudget => Math.max(0, Number(contextBudget?.maxContext || 0) || 0) > 0;
+  const promptPressureDecision = (messages = [], contextBudget = null) => {
+    const charPressure = requestPromptPressure(messages);
+    const hostPressure = hostBudgetPromptPressure(messages, contextBudget);
+    const hostAuthoritative = hostContextBudgetAuthoritative(contextBudget);
+    return {
+      pressure: hostAuthoritative ? hostPressure : charPressure,
+      source: hostAuthoritative ? 'host_token_budget' : 'char_heuristic_fallback',
+      hostAuthoritative,
+      hostPressure,
+      charPressure
+    };
   };
+  const hostSafeInjectionCapacityChars = (messages = [], contextBudget = null) => {
+    const maxContext = Math.max(0, Number(contextBudget?.maxContext || 0) || 0);
+    if (maxContext <= 0) return 0;
+    const maxResponse = Math.max(0, Number(contextBudget?.maxResponse || 0) || 0);
+    const responseReserve = Math.min(Math.floor(maxContext * 0.35), Math.max(256, maxResponse, Math.floor(maxContext * 0.08)));
+    const safetyReserve = Math.min(768, Math.max(128, Math.floor(maxContext * 0.04)));
+    const remainingTokens = Math.max(0, maxContext - estimatedPromptTokens(messages) - responseReserve - safetyReserve);
+    // HAYAKU's injected contract is predominantly English. Three chars/token stays
+    // conservative while letting verified provider headroom, rather than raw prompt
+    // character count, decide whether the atomic packet contract can safely fit.
+    return Math.max(0, Math.floor(remainingTokens * 3));
+  };
+  const adaptiveVariableInjectionCap = (mode, messages = [], contextBudget = null) => {
+    // HAYAKU v2.4.6: adaptive mode pressure applies only to optional/variable
+    // continuity data. The packet-writing contract is mandatory core and is
+    // budgeted separately against verified physical host headroom.
+    const configuredCap = modeInjectionCap(mode);
+    const pressure = promptPressureDecision(messages, contextBudget).pressure;
+    const pressureRatio = ({ normal: 1, medium: 0.72, high: 0.46, extreme: 0.24 })[pressure] || 1;
+    return Math.max(0, Math.floor(configuredCap * pressureRatio));
+  };
+  const adaptiveInjectionCap = (mode, messages = [], contextBudget = null) => (
+    adaptiveVariableInjectionCap(mode, messages, contextBudget)
+  );
   const stateViewCharBudgetForMode = mode => {
     const normalized = normalizedInjectionMode(mode);
     const cap = modeInjectionCap(normalized);
@@ -21262,10 +21284,8 @@ const MODE_PROFILES = Object.freeze({
         return result.message;
       }));
       const requestCharsBeforeInjection = requestPayloadChars(budgetMessages);
-      const requestPressure = higherPromptPressure(
-        requestPromptPressure(requestCharsBeforeInjection),
-        hostBudgetPromptPressure(budgetMessages, hostContextBudget)
-      );
+      const requestPressureDecision = promptPressureDecision(budgetMessages, hostContextBudget);
+      const requestPressure = requestPressureDecision.pressure;
       const promptSettings = {
         ...settings,
         packetCoreOnly: true,
@@ -21284,34 +21304,132 @@ const MODE_PROFILES = Object.freeze({
       const fullLineageInstruction = fullRuntimeSkeletonInstruction;
       const fullTerminalSeal = stage('buildPacketTerminalSeal', () => buildPacketTerminalCompletionSeal(promptSettings));
       const selfAnchorChars = 0;
-      const adaptiveCapChars = adaptiveInjectionCap(promptMode, budgetMessages, hostContextBudget);
-      const injectionCapChars = adaptiveCapChars;
+      // HAYAKU v2.4.6 — packet writing is mandatory core, not a consumer of the
+      // adaptive HAYAKU continuity/recall budget. Pressure can shrink optional
+      // recall/scene data to zero, but it cannot turn packet authoring off.
+      const adaptiveCapChars = adaptiveVariableInjectionCap(promptMode, budgetMessages, hostContextBudget);
+      const configuredVariableCapChars = modeInjectionCap(promptMode);
+      const hostBudgetAuthoritative = hostContextBudgetAuthoritative(hostContextBudget);
+      const hostSafeCapChars = hostBudgetAuthoritative
+        ? hostSafeInjectionCapacityChars(budgetMessages, hostContextBudget)
+        : 0;
+      const criticalStaticWrite = stage('buildPacketCoreCriticalStaticWrite', () => promptCacheModeOf(promptSettings) === 'off'
+        ? buildPacketCoreCompactWriteInstruction(promptSettings, { critical: true })
+        : packetCacheStaticContract(promptSettings, CACHE_STATIC_PROFILE_CRITICAL).text);
+      const criticalTerminalSeal = stage('buildPacketCriticalTerminalSeal', () => buildPacketTerminalCompletionSeal(promptSettings, { critical: true }));
+      const mandatoryFullCoreChars = packetCoreJoinLength([
+        fullStaticWrite,
+        fullHealthRepairHint,
+        fullRuntimeSkeletonInstruction,
+        fullTerminalSeal
+      ]);
+      const mandatoryAtomicMinimumChars = packetCoreWriteSuppressed(promptSettings)
+        ? 0
+        : packetCoreJoinLength([
+            criticalStaticWrite,
+            fullHealthRepairHint,
+            fullRuntimeSkeletonInstruction,
+            criticalTerminalSeal
+          ]);
+      const hardContextExhaustion = !packetCoreWriteSuppressed(promptSettings)
+        && hostBudgetAuthoritative
+        && mandatoryAtomicMinimumChars > 0
+        && hostSafeCapChars < mandatoryAtomicMinimumChars;
+      // Without authoritative host limits we cannot truthfully declare hard
+      // exhaustion, so the mandatory full core remains protected and only the
+      // optional budget follows the conservative character heuristic.
+      const mandatoryCoreTargetChars = hardContextExhaustion
+        ? 0
+        : (hostBudgetAuthoritative && hostSafeCapChars < mandatoryFullCoreChars
+            ? mandatoryAtomicMinimumChars
+            : mandatoryFullCoreChars);
+      const optionalHostHeadroomChars = hostBudgetAuthoritative
+        ? Math.max(0, hostSafeCapChars - mandatoryCoreTargetChars)
+        : adaptiveCapChars;
+      const optionalInjectionBudgetChars = hardContextExhaustion
+        ? 0
+        : Math.max(0, Math.min(adaptiveCapChars, optionalHostHeadroomChars));
+      // This is a physical total ceiling only. It equals mandatory core + optional
+      // continuity allowance; the mandatory core is not charged against the
+      // configured/adaptive HAYAKU recall budget.
+      let injectionCapChars = hardContextExhaustion
+        ? Math.max(0, hostSafeCapChars)
+        : Math.max(0, mandatoryCoreTargetChars + optionalInjectionBudgetChars);
       const recallBudgetPolicy = stage('planRecallDataBudgetPolicy', () => dynamicRecallDataBudget(
         query,
         selectedForContext,
         { packetRecovery, requestPressure }
       ));
-      const packetBudgetPlan = stage('buildAtomicPacketCoreBudgetPlan', () => buildAtomicPacketCoreBudgetPlan({
+      let packetBudgetPlan = stage('buildAtomicPacketCoreBudgetPlan', () => buildAtomicPacketCoreBudgetPlan({
         settings: promptSettings,
         selected: selectedForContext,
         query,
         sceneBaton,
         capChars: injectionCapChars,
+        recallCapChars: optionalInjectionBudgetChars,
         recallBudgetPolicy
       }));
-      const recallDataBudget = packetBudgetPlan.recallDataBudget || recallBudgetPolicy;
+      if (hardContextExhaustion) {
+        packetBudgetPlan = {
+          ...packetBudgetPlan,
+          active: false,
+          reason: 'hard_context_exhaustion',
+          hardContextExhaustion: true,
+          mandatoryCoreTargetChars: 0,
+          optionalInjectionBudgetChars: 0
+        };
+      }
       const packetWriteActive = packetBudgetPlan.active === true;
-      if (!packetWriteActive && packetBudgetPlan.reason === 'insufficient_context_budget') {
+      const atomicPacketReservationApplied = packetWriteActive && mandatoryCoreTargetChars > 0;
+      const atomicPacketReservationCapChars = mandatoryCoreTargetChars;
+      if (packetWriteActive
+        && hostBudgetAuthoritative
+        && mandatoryFullCoreChars > mandatoryCoreTargetChars) {
+        pushOperationLog('packet_core:degraded_for_context', {
+          reason: 'full_mandatory_core_did_not_fit_but_atomic_core_fits',
+          hostSafeCapChars,
+          mandatoryFullCoreChars,
+          mandatoryAtomicMinimumChars,
+          mandatoryCoreTargetChars,
+          staticProfile: packetBudgetPlan.staticProfile || '',
+          scopeKey: requestScope.key || ''
+        }, 'warn');
+      }
+      if (!packetWriteActive && packetBudgetPlan.reason === 'hard_context_exhaustion') {
         const detail = {
-          reason: 'packet_write_suppressed_insufficient_context',
-          injectionCapChars,
-          atomicMinimumChars: packetBudgetPlan.atomicMinimumChars,
+          reason: 'packet_write_suppressed_hard_context_exhaustion',
+          hostSafeCapChars,
+          mandatoryAtomicMinimumChars,
+          mandatoryFullCoreChars,
+          estimatedRequestTokens: estimatedPromptTokens(budgetMessages),
+          maxContext: Number(hostContextBudget?.maxContext || 0),
+          maxResponse: Number(hostContextBudget?.maxResponse || 0),
           requestPressure,
+          requestPressureSource: requestPressureDecision.source,
           scopeKey: requestScope.key || ''
         };
         Memory.lastWarnings = [...ensureArray(Memory.lastWarnings), detail.reason].slice(-20);
-        pushOperationLog('packet_write:suppressed', detail, 'warn');
+        pushOperationLog('packet_write:hard_context_exhaustion', detail, 'warn');
+      } else if (!packetWriteActive && packetBudgetPlan.reason === 'insufficient_context_budget') {
+        // This should now be unreachable for a normal model request. Keep a loud
+        // diagnostic instead of silently treating an internal packing failure as
+        // genuine host exhaustion.
+        const detail = {
+          reason: 'packet_write_internal_budget_invariant_failed',
+          injectionCapChars,
+          adaptiveCapChars,
+          optionalInjectionBudgetChars,
+          mandatoryCoreTargetChars,
+          mandatoryAtomicMinimumChars,
+          mandatoryFullCoreChars,
+          hostSafeCapChars,
+          hostBudgetAuthoritative,
+          scopeKey: requestScope.key || ''
+        };
+        Memory.lastWarnings = [...ensureArray(Memory.lastWarnings), detail.reason].slice(-20);
+        pushOperationLog('packet_write:budget_invariant_failed', detail, 'error');
       }
+      const recallDataBudget = packetBudgetPlan.recallDataBudget || recallBudgetPolicy;
       const captureOrigin = packetWriteActive && requestLineage && chatScope?.confident
         ? stage('registerCaptureOrigin', () => registerPendingCapture(
           chatScope,
@@ -21529,8 +21647,16 @@ const MODE_PROFILES = Object.freeze({
         variableStateViewChars: variableChars,
         maxVariableStateViewChars: variableBudget,
         injectionCapMode: promptMode,
-        maxInjectedCharsModeCap: injectionCapChars,
-        configuredMaxInjectedCharsModeCap: modeInjectionCap(promptMode),
+        // Legacy names retained for compatibility: these now describe the
+        // optional/variable HAYAKU budget, not the mandatory packet core.
+        maxInjectedCharsModeCap: optionalInjectionBudgetChars,
+        configuredMaxInjectedCharsModeCap: configuredVariableCapChars,
+        totalHayakuSafetyCapChars: injectionCapChars,
+        mandatoryPacketCoreTargetChars: mandatoryCoreTargetChars,
+        mandatoryPacketCoreFullChars: mandatoryFullCoreChars,
+        mandatoryPacketCoreMinimumChars: mandatoryAtomicMinimumChars,
+        optionalInjectionBudgetChars,
+        configuredOptionalInjectionBudgetChars: configuredVariableCapChars,
         requestCharsBeforeInjection,
         estimatedRequestTokensBeforeInjection: estimatedPromptTokens(budgetMessages),
         budgetPacketCharsRemoved,
@@ -21563,14 +21689,27 @@ const MODE_PROFILES = Object.freeze({
         }, {}),
         packetAuthoringBudget: {
           separated: true,
+          priority: 'mandatory_core_first',
+          chargedAgainstOptionalBudget: false,
           actualChars: Number(packetBudgetPlan.packetAuthoringChars || 0),
-          atomicMinimumChars: Number(packetBudgetPlan.atomicMinimumChars || 0),
-          contextSafetyCapChars: injectionCapChars
+          atomicMinimumChars: Number(packetBudgetPlan.atomicMinimumChars || mandatoryAtomicMinimumChars || 0),
+          fullCoreChars: mandatoryFullCoreChars,
+          mandatoryCoreTargetChars,
+          optionalBudgetChars: optionalInjectionBudgetChars,
+          configuredOptionalBudgetChars: configuredVariableCapChars,
+          totalContextSafetyCapChars: injectionCapChars,
+          adaptiveOptionalCapChars: adaptiveCapChars,
+          hostSafeCapChars,
+          hostBudgetAuthoritative,
+          hardContextExhaustion,
+          atomicReservationApplied: atomicPacketReservationApplied,
+          atomicReservationCapChars: atomicPacketReservationCapChars
         },
         completionSealPreserved: packetCoreWriteSuppressed(promptSettings) || packetWriteActive,
         packetWriteActive,
         packetWriteSuppressionReason: packetWriteActive ? '' : packetBudgetPlan.reason,
-        packetWriteSuppressedInsufficientContext: !packetWriteActive && packetBudgetPlan.reason === 'insufficient_context_budget',
+        packetWriteSuppressedInsufficientContext: !packetWriteActive && /^(?:insufficient_context_budget|hard_context_exhaustion)$/.test(packetBudgetPlan.reason),
+        packetWriteSuppressedHardContextExhaustion: !packetWriteActive && packetBudgetPlan.reason === 'hard_context_exhaustion',
         atomicPacketContractMinChars: Number(packetBudgetPlan.atomicMinimumChars || 0),
         atomicPacketContractPreserved: packetBudgetPlan.atomicContractPreserved === true,
         cacheSafety,
@@ -21590,12 +21729,26 @@ const MODE_PROFILES = Object.freeze({
         packetCoreOnly: true,
         budgetSafeFallbackApplied,
         blockBudgetChars,
-        adaptiveInjectionCapApplied: injectionCapChars < modeInjectionCap(promptMode),
+        adaptiveInjectionCapApplied: optionalInjectionBudgetChars < configuredVariableCapChars,
         requestPressure,
-        injectionOverModeCap: Math.max(0, totalInjectedChars - injectionCapChars),
+        requestPressureSource: requestPressureDecision.source,
+        requestPressureCharHeuristic: requestPressureDecision.charPressure,
+        requestPressureHostBudget: requestPressureDecision.hostPressure,
+        requestPressureHostAuthoritative: requestPressureDecision.hostAuthoritative,
+        hostSafeInjectionCapacityChars: hostSafeCapChars,
+        hostBudgetAuthoritative,
+        hardContextExhaustion,
+        mandatoryPacketCoreTargetChars: mandatoryCoreTargetChars,
+        mandatoryPacketCoreFullChars: mandatoryFullCoreChars,
+        mandatoryPacketCoreMinimumChars: mandatoryAtomicMinimumChars,
+        optionalInjectionBudgetChars,
+        configuredOptionalInjectionBudgetChars: configuredVariableCapChars,
+        atomicPacketReservationApplied,
+        atomicPacketReservationCapChars,
+        injectionOverModeCap: Math.max(0, continuityChars - optionalInjectionBudgetChars),
         continuityChars,
         fixedChars: Math.max(0, totalInjectedChars - continuityChars),
-        maxContinuityChars: injectionCapChars,
+        maxContinuityChars: optionalInjectionBudgetChars,
         recallDataBudgetTier: recallDataBudget.tier,
         recallDataBudgetRequestedChars: recallDataBudget.targetChars,
         recallDataBudgetAppliedChars: memoryBudgetChars,
@@ -30417,6 +30570,11 @@ ${sourceChatId}`)}`;
         fitPacketCoreStaticWriteInstructionToBudget,
         fitPacketTerminalCompletionSealToBudget,
         buildAtomicPacketCoreBudgetPlan,
+        promptPressureDecision,
+        hostSafeInjectionCapacityChars,
+        adaptiveVariableInjectionCap,
+        adaptiveInjectionCap,
+        packetCoreJoinLength,
         buildPacketCoreWriteInstruction,
         hasChatProvenance,
         findHayakuTerminalAssistantPrefillIndex,
