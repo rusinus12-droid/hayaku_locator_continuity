@@ -1,9 +1,17 @@
 //@name hayaku_locator_continuity
-//@display-name HAYAKU · Locator Continuity v2.4.7
+//@display-name HAYAKU · Locator Continuity v2.4.14
 //@author rusinus12@gmail.com
 //@api 3.0
-//@version 2.4.7
+//@version 2.4.14
+//@allowed-ipc flashback_hayaku_bridge
 
+/* v2.4.14 accepts both memory-session-bridge-v1 and v2 RE:TRACE handoff markers, repairs already-created v2 target sessions on startup by durably adopting their immutable HAYAKU archive, and exposes the accepted marker/source/count identity in diagnostics. Source HAYAKU storage remains read-only and fingerprint-verified. */
+/* v2.4.13 fixes the v2.4.12 native-copy recovery migration false-negative: before deciding that a copied chat has no RE:TRACE recovery snapshots, HAYAKU now hydrates the source's incremental-recovery capsule into an in-memory source ledger, accepts authoritative bridge_incremental_recovery slot-head records, retries instead of permanently completing the migration when expected recovery records are present but target identity is not stable yet, and exposes source/examined/rejected counts in debug state. The source ledger and recovery capsule remain read-only; shared archives, cold-start history, predecessor-session history, unbound recovery, and unrelated source storage remain excluded. */
+/* v2.4.12 preserves verified RE:TRACE incremental-recovery snapshots across ordinary RisuAI native chat copies without restoring the v2.4.8 over-copy bug: only active bridge_incremental_recovery records whose U+A content hashes exactly match a real pair in the copied transcript are rebound to the copied chat's new worldline/message IDs; shared archives, cold-start material, predecessor history, unbound recovery, and unrelated source storage remain excluded. Existing v2.4.9-v2.4.11 copied chats receive the same one-time verified recovery migration. */
+/* v2.4.11 registers the RE:TRACE owner IPC listener immediately after runtime ownership is claimed, before slower settings/storage initialization can delay discovery; it also publishes a readback-verified shared pluginStorage compatibility beacon so isolated API-v3 peers can identify the installed contract without relying on cross-iframe globals. */
+/* v2.4.10 moves the existing RE:TRACE allowed-ipc declaration into the primary metadata block and exposes the peer-compatibility contract directly on the public HAYAKU runtime API; packet capture, native-copy isolation, and immutable handoff semantics are unchanged. */
+/* v2.4.9 isolates ordinary RisuAI native chat copies from source-only HAYAKU storage: copied chats rebuild only current_snapshot packets physically present in the copied transcript, never inherit source shared archives/cold-start/incremental-recovery records, and automatically detach legacy copied_chat_clone/archive contamination while preserving RE:TRACE immutable handoff behavior. */
+/* v2.4.8 aligns HAYAKU with the RE:TRACE peer-compatibility v1 contract and makes next-session handoff strictly source-immutable: the source ledger is no longer rewritten into an archive-only form, target sessions reference a detached immutable archive, source fingerprints are persisted in the target handoff proof, and future plugin versions are negotiated by protocol/features instead of exact version numbers. */
 /* v2.4.7 prevents internal runtime packet-authoring instructions from leaking into visible chat: prompt-echo blocks are excluded from packet capture before parsing, scrubbed from hook returns only after capture/binding observation, hidden again at display time as a final guard, and recorded with deduplicated diagnostics without weakening the mandatory packet core. */
 /* v2.4.6 makes packet authoring a mandatory core outside HAYAKU optional continuity/recall budgets: adaptive pressure can reduce recall and scene data to zero but cannot suppress the packet contract; only verified physical host headroom below the atomic minimum triggers hard_context_exhaustion with an explicit operation log. */
 /* v2.4.5 makes host token context budgets authoritative over raw-character pressure heuristics, prevents false extreme-pressure suppression on large multilingual prompts, and restores the atomic packet-writing minimum when verified host headroom can safely fit it before allocating recall evidence. */
@@ -147,7 +155,7 @@
   };
 
   const PLUGIN_NAME = 'HAYAKU';
-  const PLUGIN_VERSION = '2.4.7';
+  const PLUGIN_VERSION = '2.4.14';
   const REQUEST_LINEAGE_IDENTITY_VERSION = 2;
   const REQUEST_LINEAGE_SCHEMA_V2 = 'hayaku_request_lineage_v2';
   const HAYAKU_PACKET_AUTHORING_PROFILE_SCHEMA = 'hayaku-packet-authoring-profile-v1';
@@ -182,7 +190,8 @@
   const HAYAKU_ARCHIVE_KEY_PREFIX = 'hayaku.v2.shared_archive.';
   const HAYAKU_ARCHIVE_META_KEY_PREFIX = 'hayaku.v2.shared_archive_meta.';
   const HAYAKU_ARCHIVE_MAX_DEPTH = 256;
-  const MEMORY_SESSION_BRIDGE_SCHEMA = 'memory-session-bridge-v1';
+  const MEMORY_SESSION_BRIDGE_SCHEMA = 'memory-session-bridge-v2';
+  const MEMORY_SESSION_BRIDGE_ACCEPTED_SCHEMAS = new Set(['memory-session-bridge-v1', MEMORY_SESSION_BRIDGE_SCHEMA]);
   const MEMORY_SESSION_BRIDGE_COLD_START_SCHEMA = 'memory-session-bridge-hayaku-cold-start-v1';
   const MEMORY_SESSION_BRIDGE_COLD_START_PREFIX = 'memory_session_bridge:hayaku_cold_start:';
   const MEMORY_SESSION_BRIDGE_INCREMENTAL_RECOVERY_SCHEMA = 'memory-session-bridge-hayaku-incremental-recovery-v1';
@@ -192,6 +201,12 @@
   const MEMORY_SESSION_BRIDGE_HAYAKU_IPC_SCHEMA = 'hayaku-memory-bridge-ipc-v1';
   const MEMORY_SESSION_BRIDGE_HAYAKU_REQUEST_CHANNEL = 'hayaku_memory_bridge_request_v1';
   const MEMORY_SESSION_BRIDGE_HAYAKU_RESPONSE_CHANNEL = 'hayaku_memory_bridge_response_v1';
+  const RETRACE_PEER_COMPATIBILITY_SCHEMA = 'retrace.peer_compatibility.v1';
+  const RETRACE_PEER_PROTOCOL_MAJOR = 1;
+  const HAYAKU_SESSION_HANDOFF_CONTRACT = 'hayaku.handoff_immutable_source.v1';
+  const HAYAKU_SESSION_HANDOFF_RECEIPT_SCHEMA = 'hayaku.session_handoff.receipt.v1';
+  const HAYAKU_RETRACE_COMPATIBILITY_BEACON_SCHEMA = 'hayaku.retrace_compatibility_beacon.v1';
+  const HAYAKU_RETRACE_COMPATIBILITY_BEACON_KEY = 'hayaku.v2.retrace_compatibility.v1';
   // v2.3.33 capacity-only expansion. Ledger schema, keys, lifecycle, recall,
   // rollback/reroll handling, and packet semantics remain unchanged.
   const STORAGE_LEDGER_MAX_RECORDS = 1024;
@@ -513,6 +528,7 @@
   const COPIED_CHAT_SOURCE_CACHE_POSITIVE_TTL_MS = 60000;
   const COPIED_CHAT_SOURCE_CACHE_NEGATIVE_TTL_MS = 5000;
   const COPIED_CHAT_SOURCE_CACHE_MAX_ENTRIES = 32;
+  const NATIVE_CHAT_COPY_RECOVERY_MIGRATION_VERSION = 2;
   // Response hooks are part of RisuAI's sequential post-processing chain. Give
   // fast storage enough time to preserve the clean-body contract, but never
   // make downstream modules wait for the full storage timeout/queue backlog.
@@ -2322,7 +2338,8 @@ const MODE_PROFILES = Object.freeze({
         ? chat.memorySessionBridge
         : null;
       if (!marker) return { present: false, valid: false, reason: 'bridge_marker_absent', marker: null };
-      if (marker.schema !== MEMORY_SESSION_BRIDGE_SCHEMA) {
+      const markerSchema = text(marker.schema || '').trim();
+      if (!MEMORY_SESSION_BRIDGE_ACCEPTED_SCHEMAS.has(markerSchema)) {
         return { present: true, valid: false, reason: 'bridge_schema_invalid', marker };
       }
       if (marker.includeHayaku !== true) {
@@ -2345,7 +2362,10 @@ const MODE_PROFILES = Object.freeze({
         marker,
         sourceChatId,
         targetChatId,
-        transferId
+        transferId,
+        markerSchema,
+        sourceHayakuScopeKey: text(marker.sourceHayakuScopeKey || '').trim(),
+        expectedRecords: Math.max(0, Number(marker.hayakuRecordCount || 0) || 0)
       };
     };
     const inferCopiedChatSource = async (character, chat, options = {}) => {
@@ -2618,6 +2638,9 @@ const MODE_PROFILES = Object.freeze({
           chatId: compact(chatId, 160),
           bridgeHandoffSourceChatId: compact(bridgeHandoffSourceChatId, 160),
           bridgeHandoffTransferId: compact(bridgeMarkerState.valid ? bridgeMarkerState.transferId : '', 160),
+          bridgeHandoffSourceScopeKey: compact(bridgeMarkerState.valid ? bridgeMarkerState.sourceHayakuScopeKey : '', 196),
+          bridgeHandoffExpectedRecords: bridgeMarkerState.valid ? Math.max(0, Number(bridgeMarkerState.expectedRecords || 0) || 0) : 0,
+          bridgeHandoffMarkerSchema: compact(bridgeMarkerState.valid ? bridgeMarkerState.markerSchema : '', 64),
           bridgeHandoffValid: bridgeMarkerState.valid === true,
           bridgeHandoffValidationReason: compact(bridgeMarkerState.reason, 64),
           copiedFromChatId: compact(copiedFromChatId, 160),
@@ -21087,7 +21110,7 @@ const MODE_PROFILES = Object.freeze({
               : bridgeIncrementalRecoveryImport.changed
                 ? 'bridge_incremental_recovery'
               : storageLedger.copiedChatRepair === true
-                ? 'copied_chat_history_reclassified_live'
+                ? storageLedger.adoptionReason || 'copied_chat_repair'
                 : storageLedger.copiedChatAdoption === true
                 ? storageLedger.adoptionReason || 'copied_chat_adoption'
                 : storageMigration.fullMigration ? 'legacy_migration' : 'topology_reconcile';
@@ -22569,7 +22592,19 @@ const MODE_PROFILES = Object.freeze({
     scopeKey: compact(scope?.key || '', 160),
     updatedAt: 0,
     chatTopologyHash: '',
-    migration: { complete: false, importedAt: 0, importedRecords: 0, chatSnapshotHash: '' },
+    migration: {
+      complete: false,
+      importedAt: 0,
+      importedRecords: 0,
+      chatSnapshotHash: '',
+      nativeCopyRecoveryVersion: 0,
+      nativeCopyRecoverySourceRecords: 0,
+      nativeCopyRecoveryExamined: 0,
+      nativeCopyRecoveryRejected: 0,
+      nativeCopyRecoveryRejectionReasons: {},
+      nativeCopyRecoveryHydrationReason: '',
+      nativeCopyRecoveryLastCheckedAt: 0
+    },
     coldStart: {
       activeEpochId: '',
       transferId: '',
@@ -22590,6 +22625,16 @@ const MODE_PROFILES = Object.freeze({
     archiveId: '',
     archiveGeneration: 0,
     archiveDigest: '',
+    sessionHandoff: {
+      schema: HAYAKU_SESSION_HANDOFF_RECEIPT_SCHEMA,
+      transferId: '',
+      sourceScopeKey: '',
+      sourceFingerprintBefore: '',
+      sourceFingerprintAfter: '',
+      sourcePreserved: false,
+      verified: false,
+      adoptedAt: 0
+    },
     records: [],
     slotHeads: [],
     tombstones: []
@@ -23143,7 +23188,16 @@ const MODE_PROFILES = Object.freeze({
         complete: parsed?.migration?.complete === true,
         importedAt: finiteNonNegativeInteger(parsed?.migration?.importedAt, 0),
         importedRecords: finiteNonNegativeInteger(parsed?.migration?.importedRecords, 0),
-        chatSnapshotHash: compact(parsed?.migration?.chatSnapshotHash || '', 96)
+        chatSnapshotHash: compact(parsed?.migration?.chatSnapshotHash || '', 96),
+        nativeCopyRecoveryVersion: finiteNonNegativeInteger(parsed?.migration?.nativeCopyRecoveryVersion, 0),
+        nativeCopyRecoverySourceRecords: finiteNonNegativeInteger(parsed?.migration?.nativeCopyRecoverySourceRecords, 0),
+        nativeCopyRecoveryExamined: finiteNonNegativeInteger(parsed?.migration?.nativeCopyRecoveryExamined, 0),
+        nativeCopyRecoveryRejected: finiteNonNegativeInteger(parsed?.migration?.nativeCopyRecoveryRejected, 0),
+        nativeCopyRecoveryRejectionReasons: objectish(parsed?.migration?.nativeCopyRecoveryRejectionReasons)
+          ? { ...parsed.migration.nativeCopyRecoveryRejectionReasons }
+          : {},
+        nativeCopyRecoveryHydrationReason: compact(parsed?.migration?.nativeCopyRecoveryHydrationReason || '', 96),
+        nativeCopyRecoveryLastCheckedAt: finiteNonNegativeInteger(parsed?.migration?.nativeCopyRecoveryLastCheckedAt, 0)
       },
       coldStart: {
         activeEpochId: compact(parsed?.coldStart?.activeEpochId || '', 128),
@@ -23167,6 +23221,16 @@ const MODE_PROFILES = Object.freeze({
       archiveId: compact(parsed.archiveId || '', 128),
       archiveGeneration: finiteNonNegativeInteger(parsed.archiveGeneration, 0),
       archiveDigest: compact(parsed.archiveDigest || '', 96),
+      sessionHandoff: {
+        schema: compact(parsed?.sessionHandoff?.schema || HAYAKU_SESSION_HANDOFF_RECEIPT_SCHEMA, 96),
+        transferId: compact(parsed?.sessionHandoff?.transferId || '', 160),
+        sourceScopeKey: compact(parsed?.sessionHandoff?.sourceScopeKey || '', 196),
+        sourceFingerprintBefore: compact(parsed?.sessionHandoff?.sourceFingerprintBefore || '', 96),
+        sourceFingerprintAfter: compact(parsed?.sessionHandoff?.sourceFingerprintAfter || '', 96),
+        sourcePreserved: parsed?.sessionHandoff?.sourcePreserved === true,
+        verified: parsed?.sessionHandoff?.verified === true,
+        adoptedAt: finiteNonNegativeInteger(parsed?.sessionHandoff?.adoptedAt, 0)
+      },
       records: Array.from(byId.values()),
       slotHeads: Array.from(headsBySlot.values()).slice(-STORAGE_LEDGER_MAX_SLOT_HEADS),
       tombstones: Array.from(tombstonesBySlot.values()).slice(-STORAGE_LEDGER_MAX_TOMBSTONES)
@@ -23223,6 +23287,102 @@ const MODE_PROFILES = Object.freeze({
     if (!archiveRef) return localEffective;
     const overlap = Math.min(localEffective, Math.max(0, Number(archiveRef.localOverlapCount || 0) || 0));
     return Math.max(0, Number(archiveRef.recordCount || 0) || 0) + localEffective - overlap;
+  };
+  const isVerifiedNativeChatCopyScope = scope => Boolean(
+    scope?.bridgeHandoffValid !== true
+    && compact(scope?.copiedFromChatId || '', 160)
+    && text(scope?.copiedChatDetectionReason || '').trim() === 'risu_native_chat_copy'
+  );
+  const nativeChatCopyTranscriptPacketAllowed = (scope, packet) => {
+    if (!isVerifiedNativeChatCopyScope(scope)) return true;
+    const packetType = compact(
+      packet?.packetType
+      || packet?.parsed?.meta?.packet_type
+      || packet?.parsed?.meta?.packetType
+      || 'current_snapshot',
+      48
+    ).toLowerCase();
+    return packetType === 'current_snapshot';
+  };
+  const nativeChatCopySourceCloneCapture = value => [
+    'copied_chat_clone',
+    'copied_chat_clone_repair',
+    'copied_chat_history_clone',
+    'copied_chat_adoption'
+  ].includes(compact(value || '', 64));
+  const detachNativeChatCopySourceStorageArtifacts = (ledger, scope) => {
+    if (!isVerifiedNativeChatCopyScope(scope)) {
+      return { ledger, changed: false, reason: 'not_native_chat_copy', removedRecords: 0, removedRecoveryRecords: 0, removedHistoryRecords: 0, removedSlotHeads: 0, detachedArchiveRecords: 0 };
+    }
+    const records = ensureArray(ledger?.records).map(normalizeStorageRecord).filter(Boolean);
+    const archiveRef = normalizeHayakuArchiveRef(ledger?.archiveRef);
+    const removed = records.filter(record => (
+      record?.archiveReferenceOnly === true
+      || compact(record?.captureSource || '', 64) === 'shared_archive_layer'
+      || nativeChatCopySourceCloneCapture(record?.captureSource)
+    ));
+    const removedIds = new Set(removed.map(record => compact(record?.recordId || '', 196)).filter(Boolean));
+    const removedHashes = new Set(removed.map(record => compact(record?.hash || '', 96)).filter(Boolean));
+    const keptRecords = records.filter(record => !removedIds.has(compact(record?.recordId || '', 196)));
+    const slotHeads = ensureArray(ledger?.slotHeads).map(normalizeStorageSlotHead).filter(Boolean);
+    const keptSlotHeads = slotHeads.filter(head => !(
+      removedIds.has(compact(head?.selectedRecordId || '', 196))
+      || (nativeChatCopySourceCloneCapture(head?.selectedSource)
+        && removedHashes.has(compact(head?.selectedVariantHash || '', 96)))
+    ));
+    const handoff = ledger?.sessionHandoff || {};
+    const staleHandoffProof = Boolean(
+      compact(handoff?.transferId || '', 160)
+      || compact(handoff?.sourceScopeKey || '', 196)
+      || compact(handoff?.sourceFingerprintBefore || '', 96)
+      || compact(handoff?.sourceFingerprintAfter || '', 96)
+      || handoff?.sourcePreserved === true
+      || handoff?.verified === true
+      || finiteNonNegativeInteger(handoff?.adoptedAt, 0) > 0
+    );
+    const changed = removed.length > 0
+      || Boolean(archiveRef)
+      || ledger?.archiveOwner === true
+      || Boolean(compact(ledger?.archiveId || '', 128))
+      || finiteNonNegativeInteger(ledger?.archiveGeneration, 0) > 0
+      || Boolean(compact(ledger?.archiveDigest || '', 96))
+      || staleHandoffProof
+      || keptSlotHeads.length !== slotHeads.length;
+    if (!changed) {
+      return { ledger, changed: false, reason: 'native_copy_source_storage_clean', removedRecords: 0, removedRecoveryRecords: 0, removedHistoryRecords: 0, removedSlotHeads: 0, detachedArchiveRecords: 0 };
+    }
+    const empty = emptyStorageLedger(scope);
+    const removedRecoveryRecords = removed.filter(record => (
+      compact(record?.packetType || '', 48).toLowerCase() === 'recovery_snapshot'
+      || Boolean(compact(record?.incrementalRecoveryId || '', 128))
+      || Boolean(compact(record?.incrementalRecoveryRunId || '', 128))
+    )).length;
+    const removedHistoryRecords = removed.filter(record => (
+      record?.inheritedSessionHistory === true
+      || record?.memoryClass === 'historical'
+      || record?.recordState === 'historical'
+      || record?.permanentSessionHistory === true
+    )).length;
+    return {
+      ledger: {
+        ...ledger,
+        archiveRef: null,
+        archiveOwner: false,
+        archiveId: '',
+        archiveGeneration: 0,
+        archiveDigest: '',
+        sessionHandoff: empty.sessionHandoff,
+        records: keptRecords,
+        slotHeads: keptSlotHeads
+      },
+      changed: true,
+      reason: 'native_copy_source_storage_detached',
+      removedRecords: removed.length,
+      removedRecoveryRecords,
+      removedHistoryRecords,
+      removedSlotHeads: Math.max(0, slotHeads.length - keptSlotHeads.length),
+      detachedArchiveRecords: Math.max(0, Number(archiveRef?.recordCount || 0) || 0)
+    };
   };
   const nativeCopiedStorageRecord = (record, scope, sourceScopeKey, index, options = {}) => {
     const sourceHistorical = record?.inheritedSessionHistory === true
@@ -23403,101 +23563,390 @@ const MODE_PROFILES = Object.freeze({
     targetWorldline = reconcileTurnWorldline(targetWorldline, snapshot, scope);
     return targetWorldline;
   };
+  const hayakuSourceLedgerStorageFingerprint = async sourceScopeKey => {
+    const key = compact(sourceScopeKey || '', 196);
+    if (!key) return { scopeKey: '', storageKey: '', present: false, fingerprint: '' };
+    const storageKey = `${STORAGE_LEDGER_KEY_PREFIX}${key}`;
+    const raw = await RisuCompat.getStorageItem(storageKey, null);
+    const serialized = typeof raw === 'string' ? raw : JSON.stringify(raw ?? null);
+    return {
+      scopeKey: key,
+      storageKey,
+      present: raw != null && raw !== '',
+      fingerprint: stableHash64(serialized)
+    };
+  };
+
+
+  const verifiedNativeChatCopyRecoveryRecords = (sourceLedger, targetLedger, scope, targetSnapshot, targetWorldline, sourceScopeKey) => {
+    if (!isVerifiedNativeChatCopyScope(scope)) return { records: [], examined: 0, rejected: 0, sourceRecoveryRecords: 0, rejectionReasons: {} };
+    const sourceRecords = ensureArray(sourceLedger?.records).map(normalizeStorageRecord).filter(Boolean);
+    const sourceHeads = ensureArray(sourceLedger?.slotHeads).map(normalizeStorageSlotHead).filter(Boolean);
+    const authoritativeRecoveryRecordIds = new Set(sourceHeads.filter(head => (
+      head?.packetType === 'recovery_snapshot'
+      && head?.state === 'active'
+      && head?.selectedSource === 'bridge_incremental_recovery'
+      && compact(head?.selectedRecordId || '', 196)
+    )).map(head => compact(head.selectedRecordId, 196)));
+    const sourceNodesById = new Map(normalizeTurnWorldline(sourceLedger?.worldline).nodes.map(node => [node.turnNodeId, node]));
+    const targetPairsByIndex = new Map(ensureArray(targetSnapshot?.conversationPairs)
+      .map(pair => [Number(pair?.pairIndex || 0), pair])
+      .filter(([pairIndex]) => pairIndex > 0));
+    const targetActiveNodesByPairIndex = worldlineNodesByPairIndex(targetWorldline, { activeOnly: true });
+    const existing = new Set(ensureArray(targetLedger?.records).map(normalizeStorageRecord).filter(Boolean).map(record => [
+      compact(record?.incrementalRecoveryId || '', 128),
+      compact(record?.hash || '', 96),
+      Number(record?.targetPairIndex || 0)
+    ].join('\u0001')));
+    const records = [];
+    let examined = 0;
+    let rejected = 0;
+    const rejectionReasons = {};
+    const reject = reason => {
+      rejected += 1;
+      rejectionReasons[reason] = Math.max(0, Number(rejectionReasons[reason] || 0) || 0) + 1;
+    };
+    const sourceRecoveryRecords = sourceRecords.filter(sourceRecord => (
+      sourceRecord?.packetType === 'recovery_snapshot'
+      && sourceRecord?.recordState === 'active'
+      && sourceRecord?.memoryClass === 'live'
+      && sourceRecord?.inheritedSessionHistory !== true
+      && Boolean(sourceRecord?.ownerTurnNodeId)
+      && Boolean(sourceRecord?.incrementalRecoveryId)
+      && (
+        sourceRecord?.captureSource === 'bridge_incremental_recovery'
+        || authoritativeRecoveryRecordIds.has(compact(sourceRecord?.recordId || '', 196))
+      )
+    ));
+    for (const sourceRecord of sourceRecoveryRecords) {
+      examined += 1;
+      const pairIndex = Number(sourceRecord.targetPairIndex || 0);
+      const targetPair = targetPairsByIndex.get(pairIndex) || null;
+      const sourceOwner = sourceNodesById.get(sourceRecord.ownerTurnNodeId) || null;
+      const targetOwner = targetPair
+        ? activeWorldlineNodeForPair(targetWorldline, targetPair, targetActiveNodesByPairIndex)
+        : null;
+      // Native-copy safety is content-authoritative. Message ids commonly change on
+      // copy, so require the stable visible U+A hashes and then bind fresh target ids.
+      const contentMatches = Boolean(
+        targetPair?.userHash
+        && targetPair?.assistantVisibleHash
+        && sourceRecord.userHash
+        && sourceRecord.assistantVisibleHash
+        && sourceRecord.userHash === targetPair.userHash
+        && sourceRecord.assistantVisibleHash === targetPair.assistantVisibleHash
+      );
+      const sourceOwnerMatches = Boolean(
+        sourceOwner
+        && sourceOwner.status === 'active'
+        && Number(sourceOwner.pairIndex || 0) === pairIndex
+        && sourceOwner.userHash === sourceRecord.userHash
+        && sourceOwner.assistantVisibleHash === sourceRecord.assistantVisibleHash
+      );
+      if (!contentMatches) {
+        reject('target_pair_content_mismatch');
+        continue;
+      }
+      if (!sourceOwnerMatches) {
+        reject('source_owner_identity_mismatch');
+        continue;
+      }
+      if (!targetOwner) {
+        reject('target_owner_unavailable');
+        continue;
+      }
+      const duplicateKey = [
+        compact(sourceRecord.incrementalRecoveryId || '', 128),
+        compact(sourceRecord.hash || '', 96),
+        pairIndex
+      ].join('\u0001');
+      if (existing.has(duplicateKey)) continue;
+      const requestNonce = stableHash64([
+        'native_copy_verified_recovery',
+        compact(scope?.key || '', 196),
+        compact(sourceScopeKey || '', 196),
+        compact(sourceRecord.incrementalRecoveryId || '', 128),
+        compact(sourceRecord.hash || '', 96),
+        pairIndex
+      ].join('\u0001'));
+      const cloned = normalizeStorageRecord({
+        ...sourceRecord,
+        recordId: `copyrecovery:${requestNonce}:recovery_snapshot`,
+        userHash: compact(targetPair.userHash || '', 96),
+        userMessageIdHash: compact(targetPair.userMessageIdHash || '', 96),
+        userMessageIdentityStable: targetPair.userMessageIdentityStable === true,
+        assistantVisibleHash: compact(targetPair.assistantVisibleHash || '', 96),
+        assistantMessageIdHash: compact(targetPair.assistantMessageIdHash || '', 96),
+        parentTurnNodeId: compact(targetOwner.parentTurnNodeId || '', 96),
+        logicalTurnId: compact(targetOwner.logicalTurnId || '', 96),
+        ownerTurnNodeId: compact(targetOwner.turnNodeId || '', 96),
+        recordState: 'active',
+        memoryClass: 'live',
+        requestNonce,
+        identityVersion: 0,
+        lineageSchema: '',
+        turnOwnerKey: '',
+        generationAttemptId: '',
+        requestSequence: Math.max(1, pairIndex),
+        boundAt: now(),
+        captureSource: 'bridge_incremental_recovery',
+        sourcePriority: Math.max(1, Number(sourceRecord.sourcePriority || 0) || 0),
+        inheritedSessionHistory: false,
+        inheritedFromScopeKey: '',
+        inheritedViaScopeKey: '',
+        inheritedAt: 0,
+        historicalOrdinal: 0,
+        permanentSessionHistory: false,
+        historicalProtection: '',
+        permanentHistoryId: '',
+        orphanExempt: false,
+        retentionProtected: false,
+        deletionProtected: false,
+        archiveReferenceOnly: false,
+        archiveId: '',
+        archiveSourceKey: '',
+        archiveCanonicalId: ''
+      });
+      if (!cloned) {
+        reject('clone_normalization_failed');
+        continue;
+      }
+      records.push(cloned);
+      existing.add(duplicateKey);
+    }
+    return { records, examined, rejected, sourceRecoveryRecords: sourceRecoveryRecords.length, rejectionReasons };
+  };
+  const syncVerifiedNativeChatCopyRecovery = async (ledger, scope, options = {}) => {
+    if (!isVerifiedNativeChatCopyScope(scope)) {
+      return { ledger, changed: false, reason: 'not_native_chat_copy', records: 0, sourceRecoveryRecords: 0, examined: 0, rejected: 0, rejectionReasons: {} };
+    }
+    const currentVersion = finiteNonNegativeInteger(ledger?.migration?.nativeCopyRecoveryVersion, 0);
+    if (currentVersion >= NATIVE_CHAT_COPY_RECOVERY_MIGRATION_VERSION) {
+      return {
+        ledger,
+        changed: false,
+        reason: 'native_copy_recovery_already_verified',
+        records: 0,
+        sourceRecoveryRecords: Math.max(0, Number(ledger?.migration?.nativeCopyRecoverySourceRecords || 0) || 0),
+        examined: Math.max(0, Number(ledger?.migration?.nativeCopyRecoveryExamined || 0) || 0),
+        rejected: Math.max(0, Number(ledger?.migration?.nativeCopyRecoveryRejected || 0) || 0),
+        rejectionReasons: objectish(ledger?.migration?.nativeCopyRecoveryRejectionReasons) ? ledger.migration.nativeCopyRecoveryRejectionReasons : {}
+      };
+    }
+    const sourceChatId = compact(scope?.copiedFromChatId || '', 160);
+    const characterId = compact(scope?.characterId || '', 160);
+    if (!sourceChatId || !characterId) return { ledger, changed: false, reason: 'native_copy_source_marker_absent', records: 0, sourceRecoveryRecords: 0 };
+    const sourceScopeKey = `chat_${stableHash64(`${characterId}\n${sourceChatId}`)}`;
+    if (!sourceScopeKey || sourceScopeKey === scope?.key) return { ledger, changed: false, reason: 'native_copy_source_scope_invalid', records: 0, sourceRecoveryRecords: 0 };
+    const sourceStored = await RisuCompat.getStorageItem(`${STORAGE_LEDGER_KEY_PREFIX}${sourceScopeKey}`, null);
+    if (sourceStored == null || sourceStored === '') {
+      return { ledger, changed: false, reason: 'native_copy_source_storage_unavailable', records: 0, sourceRecoveryRecords: 0, sourceScopeKey };
+    }
+
+    // v2.4.13: a RE:TRACE incremental-recovery capsule can be durable even when
+    // its packet records have not yet been materialized into the source ledger.
+    // Hydrate it into a detached in-memory ledger only. Never persist this source
+    // copy from the target chat: native-copy synchronization must remain source-read-only.
+    const sourceLocalLedger = normalizeStorageLedger(sourceStored, { key: sourceScopeKey });
+    let effectiveSourceLedger = sourceLocalLedger;
+    let sourceRecoveryHydrationReason = '';
+    try {
+      const hydrated = await importBridgeIncrementalRecoveryIntoStorageLedger(
+        sourceLocalLedger,
+        { key: sourceScopeKey }
+      );
+      if (hydrated?.ledger) effectiveSourceLedger = hydrated.ledger;
+      sourceRecoveryHydrationReason = compact(hydrated?.reason || '', 96);
+    } catch (error) {
+      return {
+        ledger,
+        changed: false,
+        reason: 'native_copy_source_recovery_hydration_failed',
+        records: 0,
+        sourceRecoveryRecords: 0,
+        sourceScopeKey,
+        sourceRecoveryHydrationReason: compact(error?.message || error, 160)
+      };
+    }
+
+    const chatMessages = ensureArray(scope?.chatMessages);
+    const targetSnapshot = objectish(options?.authoritativeSnapshot)
+      && Array.isArray(options.authoritativeSnapshot?.conversationPairs)
+      ? options.authoritativeSnapshot
+      : (chatMessages.length ? authoritativeChatSnapshot(chatMessages, scope) : null);
+    if (!targetSnapshot || !ensureArray(targetSnapshot?.conversationPairs).length) {
+      return {
+        ledger,
+        changed: false,
+        reason: 'native_copy_transcript_unavailable',
+        records: 0,
+        sourceRecoveryRecords: 0,
+        sourceScopeKey,
+        sourceRecoveryHydrationReason
+      };
+    }
+
+    let targetWorldline = normalizeTurnWorldline(ledger?.worldline);
+    if (!ensureArray(targetWorldline.nodes).length) {
+      targetWorldline = nativeCopiedWorldlineWithFinalizedBindingRejections(
+        effectiveSourceLedger.worldline,
+        scope,
+        targetSnapshot
+      );
+    } else {
+      targetWorldline = reconcileTurnWorldline(targetWorldline, targetSnapshot, scope);
+    }
+
+    const verified = verifiedNativeChatCopyRecoveryRecords(
+      effectiveSourceLedger,
+      ledger,
+      scope,
+      targetSnapshot,
+      targetWorldline,
+      sourceScopeKey
+    );
+
+    // Never seal a zero-result migration while the source demonstrably contains
+    // active authoritative recovery records. That was the v2.4.12 bug: one early
+    // identity miss became permanent. Leave the migration open so the steady-state
+    // topology observer can retry after the copied chat and source data stabilize.
+    const sourceHasExpectedRecovery = Math.max(0, Number(verified.sourceRecoveryRecords || 0) || 0) > 0;
+    const complete = !sourceHasExpectedRecovery
+      || (verified.records.length > 0 && verified.rejected === 0 && verified.records.length === verified.sourceRecoveryRecords);
+
+    const migration = {
+      ...(ledger?.migration || {}),
+      ...(complete ? { nativeCopyRecoveryVersion: NATIVE_CHAT_COPY_RECOVERY_MIGRATION_VERSION } : {}),
+      nativeCopyRecoverySourceRecords: Math.max(0, Number(verified.sourceRecoveryRecords || 0) || 0),
+      nativeCopyRecoveryExamined: Math.max(0, Number(verified.examined || 0) || 0),
+      nativeCopyRecoveryRejected: Math.max(0, Number(verified.rejected || 0) || 0),
+      nativeCopyRecoveryRejectionReasons: objectish(verified.rejectionReasons) ? verified.rejectionReasons : {},
+      nativeCopyRecoveryHydrationReason: sourceRecoveryHydrationReason,
+      nativeCopyRecoveryLastCheckedAt: now()
+    };
+    const nextLedger = {
+      ...ledger,
+      migration,
+      worldline: targetWorldline,
+      records: [...ensureArray(ledger?.records), ...verified.records]
+    };
+
+    const reason = verified.records.length
+      ? (complete ? 'native_copy_verified_recovery_adopted' : 'native_copy_verified_recovery_partially_adopted_retry_pending')
+      : (sourceHasExpectedRecovery
+        ? 'native_copy_verified_recovery_identity_retry_pending'
+        : 'native_copy_verified_recovery_none_at_source');
+
+    return {
+      ledger: nextLedger,
+      changed: true,
+      reason,
+      records: verified.records.length,
+      sourceRecoveryRecords: verified.sourceRecoveryRecords,
+      examined: verified.examined,
+      rejected: verified.rejected,
+      rejectionReasons: verified.rejectionReasons,
+      sourceScopeKey,
+      sourceRecoveryHydrationReason,
+      complete
+    };
+  };
+
   const inheritStorageLedgerForCopiedChat = async (ledger, scope, options = {}) => {
     if (ensureArray(ledger?.records).length > 0 || normalizeHayakuArchiveRef(ledger?.archiveRef)) {
       return { ledger, changed: false, reason: 'target_not_empty' };
     }
     const bridgeHandoff = scope?.bridgeHandoffValid === true
       && Boolean(compact(scope?.bridgeHandoffSourceChatId || '', 160));
+    if (!bridgeHandoff && isVerifiedNativeChatCopyScope(scope) && ledger?.migration?.complete === true) {
+      return { ledger, changed: false, reason: 'native_copy_transcript_already_initialized' };
+    }
     const sourceChatId = compact(bridgeHandoff ? scope?.bridgeHandoffSourceChatId : scope?.copiedFromChatId, 160);
     const characterId = compact(scope?.characterId || '', 160);
     if (!sourceChatId || !characterId) return { ledger, changed: false, reason: 'copy_marker_absent' };
-    const sourceScopeKey = `chat_${stableHash64(`${characterId}
-${sourceChatId}`)}`;
+    const sourceScopeKey = `chat_${stableHash64(`${characterId}\n${sourceChatId}`)}`;
     if (sourceScopeKey === scope.key) return { ledger, changed: false, reason: 'same_scope' };
     const sourceStorageKey = `${STORAGE_LEDGER_KEY_PREFIX}${sourceScopeKey}`;
     const sourceStored = await RisuCompat.getStorageItem(sourceStorageKey, null);
-    let sourceLocalLedger = normalizeStorageLedger(sourceStored, { key: sourceScopeKey });
-    const sourceColdStart = await importBridgeColdStartIntoStorageLedger(sourceLocalLedger, { key: sourceScopeKey });
-    sourceLocalLedger = sourceColdStart.ledger;
-    const sourceIncrementalRecovery = await importBridgeIncrementalRecoveryIntoStorageLedger(sourceLocalLedger, { key: sourceScopeKey });
-    sourceLocalLedger = sourceIncrementalRecovery.ledger;
-    const sourceArchiveRef = normalizeHayakuArchiveRef(sourceLocalLedger.archiveRef);
-    const archiveSummary = sourceArchiveRef ? await readHayakuSharedArchiveSummary(sourceArchiveRef) : null;
-    if (sourceArchiveRef && archiveSummary?.verified !== true) throw new Error('hayaku_source_archive_meta_invalid');
-    const archiveIdentities = new Set(archiveSummary?.memberIds || []);
-    const localEligible = storageRecordsEligibleForHandoff(
-      { ...sourceLocalLedger, archiveRef: null },
-      { includeSelectedUnbound: !bridgeHandoff }
-    ).filter(record => !archiveIdentities.has(hayakuArchiveRecordIdentity(record)));
-    const sourceLogicalCount = normalizeHayakuArchiveMemberIds([
-      ...(archiveSummary?.memberIds || []),
-      ...localEligible.map(hayakuArchiveRecordIdentity)
-    ]).length;
-    if (!sourceLogicalCount) return { ledger, changed: false, reason: 'source_empty', sourceScopeKey };
+    const sourceLocalLedger = normalizeStorageLedger(sourceStored, { key: sourceScopeKey });
+
     if (!bridgeHandoff) {
-      const inheritedAt = now();
-      const rejectionExpectedNonces = new Set(normalizeTurnWorldline(sourceLocalLedger.worldline).nodes
-        .flatMap(node => normalizeFinalizedBindingRejections(node.finalizedBindingRejections))
-        .map(entry => entry.expectedRequestNonce)
-        .filter(Boolean));
-      const records = localEligible.map((record, index) => nativeCopiedStorageRecord(
-        record,
-        scope,
-        sourceScopeKey,
-        index,
-        { preserveRequestNonce: rejectionExpectedNonces.has(compact(record?.requestNonce || '', 96)) }
-      )).filter(Boolean);
+      // Ordinary RisuAI copy remains transcript-first. The copied chat already contains
+      // its physical current_snapshot sidecars. Source archives, cold-start material,
+      // predecessor history and generic source storage never cross this boundary.
+      // A separate one-time migration may add only RE:TRACE incremental-recovery
+      // records whose stable visible U+A hashes exactly match a real copied pair.
+      // Preserve finalized-binding rejection audit as well so a packet rejected in
+      // the source cannot become active simply
+      // because the host cloned the assistant message into a new chat id.
       const worldline = nativeCopiedWorldlineWithFinalizedBindingRejections(
         sourceLocalLedger.worldline,
         scope,
         options?.authoritativeSnapshot || null
       );
-      const targetArchiveRef = sourceArchiveRef ? normalizeHayakuArchiveRef({ ...sourceArchiveRef, localOverlapCount: 0 }) : null;
-      const logicalRecords = normalizeHayakuArchiveMemberIds([
-        ...(archiveSummary?.memberIds || []),
-        ...records.map(hayakuArchiveRecordIdentity)
-      ]).length;
-      if (!logicalRecords) return { ledger, changed: false, reason: 'source_invalid', sourceScopeKey };
+      const copiedTranscriptPresent = ensureArray(scope?.chatMessages).length > 0
+        || ensureArray(options?.authoritativeSnapshot?.conversationPairs).length > 0;
+      if (!copiedTranscriptPresent) {
+        return { ledger, changed: false, reason: 'native_copy_transcript_unavailable', sourceScopeKey };
+      }
       return {
         ledger: {
           ...emptyStorageLedger(scope),
-          migration: { complete: false, importedAt: inheritedAt, importedRecords: logicalRecords, chatSnapshotHash: '' },
-          archiveRef: targetArchiveRef,
+          migration: { complete: false, importedAt: 0, importedRecords: 0, chatSnapshotHash: '' },
           worldline,
-          records
+          archiveRef: null,
+          records: []
         },
         changed: true,
-        reason: 'copied_chat_live_clone',
+        reason: 'copied_chat_transcript_only',
         sourceScopeKey,
-        records: logicalRecords,
-        physicalRecords: records.length,
-        archiveRecords: Math.max(0, Number(targetArchiveRef?.recordCount || 0) || 0)
+        records: 0,
+        physicalRecords: 0,
+        archiveRecords: 0
       };
     }
-    const archive = await ensureHayakuSharedArchive(sourceLocalLedger, sourceScopeKey);
-    const archivedIdentities = new Set(archive.memberIds || []);
-    const remainingLocalRecords = ensureArray(sourceLocalLedger.records).map(normalizeStorageRecord).filter(Boolean)
-      .filter(record => !archivedIdentities.has(hayakuArchiveRecordIdentity(record)));
-    const nextSourceArchiveRef = normalizeHayakuArchiveRef({ ...archive.archiveRef, localOverlapCount: 0 });
+
+    // RE:TRACE handoff is the only path allowed to inherit source-only HAYAKU
+    // memory. Fold source bridge recovery/cold-start material into the detached
+    // immutable archive, then verify the source storage key did not change.
+    let sourceHandoffLedger = sourceLocalLedger;
+    const sourceColdStart = await importBridgeColdStartIntoStorageLedger(sourceHandoffLedger, { key: sourceScopeKey });
+    sourceHandoffLedger = sourceColdStart.ledger;
+    const sourceIncrementalRecovery = await importBridgeIncrementalRecoveryIntoStorageLedger(sourceHandoffLedger, { key: sourceScopeKey });
+    sourceHandoffLedger = sourceIncrementalRecovery.ledger;
+    const sourceIntegrityBefore = await hayakuSourceLedgerStorageFingerprint(sourceScopeKey);
+    const archive = await ensureHayakuSharedArchive(sourceHandoffLedger, sourceScopeKey);
     const targetArchiveRef = normalizeHayakuArchiveRef({ ...archive.archiveRef, localOverlapCount: 0 });
-    const sourceWithRef = { ...sourceLocalLedger, archiveRef: nextSourceArchiveRef, records: remainingLocalRecords };
-    const sourceSerialized = JSON.stringify(sourceWithRef);
-    const sourceSaved = await RisuCompat.setStorageItem(sourceStorageKey, sourceSerialized);
-    const sourceReadback = sourceSaved ? await RisuCompat.getStorageItem(sourceStorageKey, null) : null;
-    if (!sourceSaved || typeof sourceReadback !== 'string' || stableHash64(sourceReadback) !== stableHash64(sourceSerialized)) {
-      throw new Error('hayaku_source_archive_ref_write_failed');
+    const sourceIntegrityAfter = await hayakuSourceLedgerStorageFingerprint(sourceScopeKey);
+    if (!sourceIntegrityBefore.fingerprint
+      || sourceIntegrityBefore.fingerprint !== sourceIntegrityAfter.fingerprint) {
+      const error = new Error('hayaku_source_mutation_detected_during_handoff_archive');
+      error.code = 'SOURCE_MUTATION_DETECTED';
+      throw error;
     }
     return {
       ledger: {
         ...emptyStorageLedger(scope),
         migration: { complete: true, importedAt: now(), importedRecords: archive.recordCount, chatSnapshotHash: '' },
         archiveRef: targetArchiveRef,
+        sessionHandoff: {
+          schema: HAYAKU_SESSION_HANDOFF_RECEIPT_SCHEMA,
+          transferId: compact(scope?.bridgeHandoffTransferId || '', 160),
+          sourceScopeKey,
+          sourceFingerprintBefore: sourceIntegrityBefore.fingerprint,
+          sourceFingerprintAfter: sourceIntegrityAfter.fingerprint,
+          sourcePreserved: true,
+          verified: false,
+          adoptedAt: 0
+        },
         records: []
       },
       changed: true,
       reason: 'bridge_session_archive_link',
       sourceScopeKey,
+      sourceFingerprintBefore: sourceIntegrityBefore.fingerprint,
+      sourceFingerprintAfter: sourceIntegrityAfter.fingerprint,
+      sourcePreserved: true,
       records: archive.recordCount,
       archiveRef: targetArchiveRef
     };
@@ -24088,26 +24537,54 @@ ${sourceChatId}`)}`;
     if (!RisuCompat.hasPluginStorage()) return { ...emptyStorageLedger(scope), enabled: false, reason: 'plugin_storage_unavailable' };
     const stored = await RisuCompat.getStorageItem(key, null);
     const ledger = normalizeStorageLedger(stored, scope);
-    const adopted = await inheritStorageLedgerForCopiedChat(ledger, scope, options);
-    const copyRepair = repairMisclassifiedCopiedChatLedger(adopted.ledger, scope);
+    const nativeCopyDetach = detachNativeChatCopySourceStorageArtifacts(ledger, scope);
+    const adopted = await inheritStorageLedgerForCopiedChat(nativeCopyDetach.ledger, scope, options);
+    const nativeCopyRecoverySync = await syncVerifiedNativeChatCopyRecovery(adopted.ledger, scope, options);
+    const legacyCopyRepair = repairMisclassifiedCopiedChatLedger(nativeCopyRecoverySync.ledger, scope);
+    const copyRepairChanged = nativeCopyDetach.changed === true || legacyCopyRepair.changed === true;
+    const copyRepairReason = nativeCopyDetach.changed === true
+      ? nativeCopyDetach.reason
+      : (legacyCopyRepair.changed === true ? legacyCopyRepair.reason : '');
     const local = {
-      ...copyRepair.ledger,
+      ...legacyCopyRepair.ledger,
       enabled: true,
-      reason: copyRepair.ledger.records.length || normalizeHayakuArchiveRef(copyRepair.ledger.archiveRef)
-        ? (copyRepair.changed ? copyRepair.reason : (adopted.changed ? adopted.reason : 'loaded'))
-        : 'empty',
+      reason: legacyCopyRepair.ledger.records.length || normalizeHayakuArchiveRef(legacyCopyRepair.ledger.archiveRef)
+        ? (copyRepairChanged ? copyRepairReason : (adopted.changed ? adopted.reason : 'loaded'))
+        : (copyRepairChanged ? copyRepairReason : (adopted.changed ? adopted.reason : 'empty')),
       storageKey: key,
-      copiedChatAdoption: adopted.changed === true,
+      copiedChatAdoption: adopted.changed === true || nativeCopyRecoverySync.changed === true,
       bridgeSessionAdoption: adopted.changed === true && adopted.reason === 'bridge_session_archive_link',
-      copiedChatLiveClone: adopted.changed === true && adopted.reason === 'copied_chat_live_clone',
-      copiedChatRepair: copyRepair.changed === true,
-      copiedChatRepairStats: copyRepair.changed === true ? {
-        convertedRecords: copyRepair.convertedRecords,
-        removedDuplicates: copyRepair.removedDuplicates
+      copiedChatLiveClone: false,
+      nativeCopyTranscriptOnly: isVerifiedNativeChatCopyScope(scope),
+      nativeCopyVerifiedRecoveryRecords: Math.max(0, Number(nativeCopyRecoverySync.records || 0) || 0),
+      nativeCopyRecoverySourceRecords: Math.max(0, Number(nativeCopyRecoverySync.sourceRecoveryRecords ?? legacyCopyRepair.ledger?.migration?.nativeCopyRecoverySourceRecords ?? 0) || 0),
+      nativeCopyRecoveryExamined: Math.max(0, Number(nativeCopyRecoverySync.examined ?? legacyCopyRepair.ledger?.migration?.nativeCopyRecoveryExamined ?? 0) || 0),
+      nativeCopyRecoveryRejected: Math.max(0, Number(nativeCopyRecoverySync.rejected ?? legacyCopyRepair.ledger?.migration?.nativeCopyRecoveryRejected ?? 0) || 0),
+      nativeCopyRecoveryRejectionReasons: objectish(nativeCopyRecoverySync.rejectionReasons)
+        ? clone(nativeCopyRecoverySync.rejectionReasons)
+        : clone(legacyCopyRepair.ledger?.migration?.nativeCopyRecoveryRejectionReasons || {}),
+      nativeCopyRecoveryHydrationReason: compact(nativeCopyRecoverySync.sourceRecoveryHydrationReason ?? legacyCopyRepair.ledger?.migration?.nativeCopyRecoveryHydrationReason ?? '', 96),
+      nativeCopyRecoverySyncReason: compact(nativeCopyRecoverySync.reason || '', 96),
+      nativeCopySourceStorageDetached: nativeCopyDetach.changed === true,
+      copiedChatRepair: copyRepairChanged,
+      copiedChatRepairStats: copyRepairChanged ? {
+        convertedRecords: Math.max(0, Number(legacyCopyRepair.convertedRecords || 0) || 0),
+        removedDuplicates: Math.max(0, Number(legacyCopyRepair.removedDuplicates || 0) || 0),
+        detachedSourceCloneRecords: Math.max(0, Number(nativeCopyDetach.removedRecords || 0) || 0),
+        detachedRecoveryRecords: Math.max(0, Number(nativeCopyDetach.removedRecoveryRecords || 0) || 0),
+        detachedHistoryRecords: Math.max(0, Number(nativeCopyDetach.removedHistoryRecords || 0) || 0),
+        detachedSlotHeads: Math.max(0, Number(nativeCopyDetach.removedSlotHeads || 0) || 0),
+        detachedArchiveRecords: Math.max(0, Number(nativeCopyDetach.detachedArchiveRecords || 0) || 0)
       } : null,
-      adoptionReason: copyRepair.changed === true
-        ? copyRepair.reason
-        : (adopted.changed === true ? adopted.reason : '')
+      adoptionReason: copyRepairChanged
+        ? copyRepairReason
+        : (nativeCopyRecoverySync.changed === true
+          ? nativeCopyRecoverySync.reason
+          : (adopted.changed === true ? adopted.reason : '')),
+      bridgeSourceScopeKey: compact(adopted.sourceScopeKey || legacyCopyRepair.ledger?.sessionHandoff?.sourceScopeKey || '', 196),
+      bridgeSourceFingerprintBefore: compact(adopted.sourceFingerprintBefore || legacyCopyRepair.ledger?.sessionHandoff?.sourceFingerprintBefore || '', 96),
+      bridgeSourceFingerprintAfter: compact(adopted.sourceFingerprintAfter || legacyCopyRepair.ledger?.sessionHandoff?.sourceFingerprintAfter || '', 96),
+      bridgeSourcePreserved: adopted.sourcePreserved === true || legacyCopyRepair.ledger?.sessionHandoff?.sourcePreserved === true
     };
     if (options?.hydrateArchive === false) {
       const archiveRef = normalizeHayakuArchiveRef(local.archiveRef);
@@ -24832,6 +25309,16 @@ ${sourceChatId}`)}`;
       archiveId: compact(ledger.archiveId || '', 128),
       archiveGeneration: finiteNonNegativeInteger(ledger.archiveGeneration, 0),
       archiveDigest: compact(ledger.archiveDigest || '', 96),
+      sessionHandoff: {
+        schema: HAYAKU_SESSION_HANDOFF_RECEIPT_SCHEMA,
+        transferId: compact(ledger?.sessionHandoff?.transferId || '', 160),
+        sourceScopeKey: compact(ledger?.sessionHandoff?.sourceScopeKey || '', 196),
+        sourceFingerprintBefore: compact(ledger?.sessionHandoff?.sourceFingerprintBefore || '', 96),
+        sourceFingerprintAfter: compact(ledger?.sessionHandoff?.sourceFingerprintAfter || '', 96),
+        sourcePreserved: ledger?.sessionHandoff?.sourcePreserved === true,
+        verified: ledger?.sessionHandoff?.verified === true,
+        adoptedAt: finiteNonNegativeInteger(ledger?.sessionHandoff?.adoptedAt, 0)
+      },
       records,
       slotHeads,
       tombstones: ensureArray(reconciled.ledger.tombstones)
@@ -25056,55 +25543,112 @@ ${sourceChatId}`)}`;
   });
   const adoptBridgeSessionHandoff = async (options = {}) => enqueueStorageOperation(async () => {
     const scope = await RisuCompat.currentChatScope();
-    if (!scope?.confident || !scope?.key) return { ok: false, adopted: false, verified: false, durable: false, reason: scope?.reason || 'scope_unavailable', records: 0, physicalCopies: 0 };
+    const base = {
+      schema: HAYAKU_SESSION_HANDOFF_RECEIPT_SCHEMA,
+      handoffContract: HAYAKU_SESSION_HANDOFF_CONTRACT,
+      sourceMutationAllowed: false,
+      sourceCompactionAllowed: false,
+      physicalCopies: 0,
+      sourcePreserved: false
+    };
+    if (!scope?.confident || !scope?.key) return { ...base, ok: false, adopted: false, verified: false, durable: false, reason: scope?.reason || 'scope_unavailable', records: 0 };
     const expectedTargetChatId = compact(options?.targetChatId || '', 160);
     const expectedTransferId = compact(options?.transferId || '', 160);
     const expectedSourceScopeKey = compact(options?.sourceScopeKey || '', 196);
     const hasExpectedRecords = Object.prototype.hasOwnProperty.call(options || {}, 'expectedRecords');
     const expectedRecordsRaw = Number(options?.expectedRecords);
     const expectedRecords = hasExpectedRecords && Number.isInteger(expectedRecordsRaw) && expectedRecordsRaw >= 0 ? expectedRecordsRaw : 0;
-    if (hasExpectedRecords && (!Number.isInteger(expectedRecordsRaw) || expectedRecordsRaw < 0)) return { ok: false, adopted: false, verified: false, durable: false, reason: 'expected_record_count_invalid', records: 0, expectedRecords: 0, physicalCopies: 0 };
-    if (scope.bridgeHandoffValid !== true) return { ok: false, adopted: false, verified: false, durable: false, reason: scope.bridgeHandoffValidationReason || 'bridge_marker_invalid', records: 0, scopeKey: scope.key, physicalCopies: 0 };
-    if (expectedTargetChatId && scope.chatId !== expectedTargetChatId) return { ok: false, adopted: false, verified: false, durable: false, reason: 'expected_target_mismatch', records: 0, scopeKey: scope.key, physicalCopies: 0 };
-    if (expectedTransferId && scope.bridgeHandoffTransferId !== expectedTransferId) return { ok: false, adopted: false, verified: false, durable: false, reason: 'expected_transfer_mismatch', records: 0, scopeKey: scope.key, physicalCopies: 0 };
+    if (hasExpectedRecords && (!Number.isInteger(expectedRecordsRaw) || expectedRecordsRaw < 0)) return { ...base, ok: false, adopted: false, verified: false, durable: false, reason: 'expected_record_count_invalid', records: 0, expectedRecords: 0 };
+    if (scope.bridgeHandoffValid !== true) return { ...base, ok: false, adopted: false, verified: false, durable: false, reason: scope.bridgeHandoffValidationReason || 'bridge_marker_invalid', records: 0, scopeKey: scope.key };
+    if (expectedTargetChatId && scope.chatId !== expectedTargetChatId) return { ...base, ok: false, adopted: false, verified: false, durable: false, reason: 'expected_target_mismatch', records: 0, scopeKey: scope.key };
+    if (expectedTransferId && scope.bridgeHandoffTransferId !== expectedTransferId) return { ...base, ok: false, adopted: false, verified: false, durable: false, reason: 'expected_transfer_mismatch', records: 0, scopeKey: scope.key };
+    const sourceScopeKey = expectedSourceScopeKey || compact(scope.bridgeHandoffSourceScopeKey || '', 196);
+    const sourceBefore = sourceScopeKey ? await hayakuSourceLedgerStorageFingerprint(sourceScopeKey) : { fingerprint: '' };
     let ledger = await loadStorageLedger(scope, { hydrateArchive: false });
-    if (ledger.enabled !== true) return { ok: false, adopted: false, verified: false, durable: false, reason: ledger.reason || 'storage_unavailable', records: 0, scopeKey: scope.key, physicalCopies: 0 };
+    if (ledger.enabled !== true) return { ...base, ok: false, adopted: false, verified: false, durable: false, reason: ledger.reason || 'storage_unavailable', records: 0, scopeKey: scope.key };
     const archiveRef = normalizeHayakuArchiveRef(ledger.archiveRef);
-    if (archiveRef && ledger.archiveVerified === false) return { ok: false, adopted: false, verified: false, durable: false, reason: ledger.archiveReason || 'session_archive_meta_invalid', records: 0, scopeKey: scope.key, physicalCopies: 0 };
+    if (archiveRef && ledger.archiveVerified === false) return { ...base, ok: false, adopted: false, verified: false, durable: false, reason: ledger.archiveReason || 'session_archive_meta_invalid', records: 0, scopeKey: scope.key };
     const logicalRecords = logicalHayakuRecordCount(ledger);
     const expected = hasExpectedRecords ? expectedRecords : logicalRecords;
-    if (logicalRecords !== expected) return { ok: false, adopted: false, verified: false, durable: false, reason: 'expected_record_count_mismatch', records: logicalRecords, expectedRecords: expected, scopeKey: scope.key, physicalCopies: 0 };
+    if (logicalRecords !== expected) return { ...base, ok: false, adopted: false, verified: false, durable: false, reason: 'expected_record_count_mismatch', records: logicalRecords, expectedRecords: expected, scopeKey: scope.key };
+    if (expected > 0 && !sourceScopeKey) return { ...base, ok: false, adopted: false, verified: false, durable: false, reason: 'source_scope_missing', records: logicalRecords, expectedRecords: expected, scopeKey: scope.key };
     if (expected === 0) {
-      const commit = ledger.bridgeSessionAdoption === true ? await writeStorageLedgerDirect(scope, ledger, 'bridge_session_handoff') : { durable: true, saved: false, ledger };
-      return { ok: commit.durable === true, adopted: ledger.bridgeSessionAdoption === true && commit.durable === true, verified: commit.durable === true, durable: commit.durable === true, reason: 'session_handoff_empty', records: 0, expectedRecords: 0, scopeKey: scope.key, targetChatId: scope.chatId, transferId: scope.bridgeHandoffTransferId, physicalCopies: 0 };
+      const sourceAfter = sourceScopeKey ? await hayakuSourceLedgerStorageFingerprint(sourceScopeKey) : sourceBefore;
+      const sourcePreserved = !sourceScopeKey || (!!sourceBefore.fingerprint && sourceBefore.fingerprint === sourceAfter.fingerprint);
+      return {
+        ...base,
+        ok: sourcePreserved,
+        adopted: false,
+        verified: sourcePreserved,
+        durable: sourcePreserved,
+        sourcePreserved,
+        reason: sourcePreserved ? 'session_handoff_empty' : 'SOURCE_MUTATION_DETECTED',
+        records: 0,
+        expectedRecords: 0,
+        scopeKey: scope.key,
+        sourceScopeKey,
+        targetChatId: scope.chatId,
+        transferId: scope.bridgeHandoffTransferId,
+        sourceFingerprintBefore: sourceBefore.fingerprint || '',
+        sourceFingerprintAfter: sourceAfter.fingerprint || ''
+      };
     }
-    if (!archiveRef) return { ok: false, adopted: false, verified: false, durable: false, reason: 'session_archive_ref_missing', records: logicalRecords, expectedRecords: expected, scopeKey: scope.key, physicalCopies: 0 };
+    if (!archiveRef) return { ...base, ok: false, adopted: false, verified: false, durable: false, reason: 'session_archive_ref_missing', records: logicalRecords, expectedRecords: expected, scopeKey: scope.key };
     if (expectedSourceScopeKey && compact(scope.bridgeHandoffSourceScopeKey || '', 196) && expectedSourceScopeKey !== compact(scope.bridgeHandoffSourceScopeKey || '', 196)) {
-      return { ok: false, adopted: false, verified: false, durable: false, reason: 'source_scope_mismatch', records: logicalRecords, expectedRecords: expected, scopeKey: scope.key, physicalCopies: 0 };
+      return { ...base, ok: false, adopted: false, verified: false, durable: false, reason: 'source_scope_mismatch', records: logicalRecords, expectedRecords: expected, scopeKey: scope.key };
     }
+    const proofBefore = compact(ledger.bridgeSourceFingerprintBefore || ledger.sessionHandoff?.sourceFingerprintBefore || sourceBefore.fingerprint || '', 96);
     const newlyAdopted = ledger.bridgeSessionAdoption === true;
     const commit = newlyAdopted ? await writeStorageLedgerDirect(scope, ledger, 'bridge_session_handoff') : { durable: true, saved: false, ledger };
     const durableLocal = normalizeStorageLedger(await RisuCompat.getStorageItem(storageLedgerStorageKey(scope), null), scope);
     const durableRef = normalizeHayakuArchiveRef(durableLocal.archiveRef);
     const archive = await readHayakuSharedArchiveSummary(durableRef);
-    const verified = commit.durable === true && archive.verified === true && archive.records === expected;
+    const sourceAfter = await hayakuSourceLedgerStorageFingerprint(sourceScopeKey);
+    const sourcePreserved = !!proofBefore && proofBefore === sourceAfter.fingerprint
+      && (!ledger.bridgeSourceFingerprintAfter || ledger.bridgeSourceFingerprintAfter === proofBefore);
+    let durableProof = durableLocal;
+    if (commit.durable === true && archive.verified === true && archive.records === expected && sourcePreserved) {
+      durableProof = {
+        ...durableLocal,
+        sessionHandoff: {
+          schema: HAYAKU_SESSION_HANDOFF_RECEIPT_SCHEMA,
+          transferId: expectedTransferId || scope.bridgeHandoffTransferId,
+          sourceScopeKey,
+          sourceFingerprintBefore: proofBefore,
+          sourceFingerprintAfter: sourceAfter.fingerprint,
+          sourcePreserved: true,
+          verified: true,
+          adoptedAt: durableLocal.sessionHandoff?.adoptedAt || now()
+        }
+      };
+      const proofCommit = await writeStorageLedgerDirect(scope, durableProof, 'bridge_session_handoff_proof');
+      if (proofCommit.durable !== true) {
+        return { ...base, ok: false, adopted: false, verified: false, durable: false, sourcePreserved: true, reason: 'session_handoff_proof_not_durable', records: archive.records, expectedRecords: expected, scopeKey: scope.key, sourceScopeKey, targetChatId: scope.chatId, transferId: scope.bridgeHandoffTransferId, sourceFingerprintBefore: proofBefore, sourceFingerprintAfter: sourceAfter.fingerprint };
+      }
+    }
+    const verified = commit.durable === true && archive.verified === true && archive.records === expected && sourcePreserved;
     return {
+      ...base,
       ok: verified,
       adopted: newlyAdopted && verified,
       verified,
       durable: verified,
-      reason: verified ? (newlyAdopted ? 'session_archive_link_adopted' : 'session_archive_link_already_adopted') : 'session_archive_link_verification_failed',
+      sourcePreserved,
+      reason: verified
+        ? (newlyAdopted ? 'session_archive_link_adopted_non_destructive' : 'session_archive_link_already_adopted_non_destructive')
+        : (!sourcePreserved ? 'SOURCE_MUTATION_DETECTED' : 'session_archive_link_verification_failed'),
       records: archive.records,
       expectedRecords: expected,
       scopeKey: scope.key,
-      sourceScopeKey: expectedSourceScopeKey || compact(scope.bridgeHandoffSourceScopeKey || '', 196),
+      sourceScopeKey,
       targetChatId: scope.chatId,
       transferId: scope.bridgeHandoffTransferId,
       archiveId: durableRef?.archiveId || '',
       archiveGeneration: durableRef?.generation || 0,
       archiveDigest: durableRef?.digest || '',
       archiveRecordCount: durableRef?.recordCount || 0,
-      physicalCopies: 0
+      sourceFingerprintBefore: proofBefore,
+      sourceFingerprintAfter: sourceAfter.fingerprint || ''
     };
   });
 
@@ -25576,7 +26120,27 @@ ${sourceChatId}`)}`;
         let result = null;
         let errorText = '';
         try {
-          if (action === 'adopt_cold_start') {
+          if (action === 'ping' || action === 'capabilities') {
+            result = {
+              ...hayakuRetraceCompatibility(),
+              compatibility: hayakuRetraceCompatibility(),
+              ipcCapabilities: {
+                inspect: true,
+                adoptSessionHandoff: true,
+                forget: true,
+                mutationOwner: HAYAKU_PLUGIN_ID,
+                archiveHandoffV1: true,
+                summaryInspect: true,
+                physicalRecordCopyOnHandoff: false,
+                sourcePreservingHandoff: true,
+                handoffContract: HAYAKU_SESSION_HANDOFF_CONTRACT,
+                sourceCompactionOnHandoff: false,
+                retraceCompatibility: hayakuRetraceCompatibility()
+              },
+              ownerPluginId: HAYAKU_PLUGIN_ID,
+              authorizedRequester: sender
+            };
+          } else if (action === 'adopt_cold_start') {
             const adoption = await adoptBridgeColdStartCapsule(request.payload?.capsule || null);
             result = {
               ...adoption,
@@ -25707,7 +26271,11 @@ ${sourceChatId}`)}`;
                   mutationOwner: HAYAKU_PLUGIN_ID,
                   archiveHandoffV1: true,
                   summaryInspect: true,
-                  physicalRecordCopyOnHandoff: false
+                  physicalRecordCopyOnHandoff: false,
+                  sourcePreservingHandoff: true,
+                  handoffContract: HAYAKU_SESSION_HANDOFF_CONTRACT,
+                  sourceCompactionOnHandoff: false,
+                  retraceCompatibility: hayakuRetraceCompatibility()
                 },
                 bridgeSync
               };
@@ -27802,7 +28370,11 @@ ${sourceChatId}`)}`;
         const owner = activeWorldlineNodeForPair(worldline, pair, activeNodesByPairIndex);
         const acceptedPacketHashes = new Set(ensureArray(owner?.packetHashes).filter(Boolean));
       const usablePackets = [...ensureArray(pair?.validPackets), ...ensureArray(pair?.repairablePackets)]
-        .filter((packet, index, rows) => packet?.hash && rows.findIndex(candidate => candidate?.hash === packet.hash) === index);
+        .filter((packet, index, rows) => (
+          packet?.hash
+          && nativeChatCopyTranscriptPacketAllowed(scope, packet)
+          && rows.findIndex(candidate => candidate?.hash === packet.hash) === index
+        ));
       return usablePackets
         .filter(packet => (
           owner
@@ -27932,6 +28504,7 @@ ${sourceChatId}`)}`;
       const usablePackets = [...ensureArray(pair?.validPackets), ...ensureArray(pair?.repairablePackets)]
         .filter((packet, index, rows) => (
           packet?.hash
+          && nativeChatCopyTranscriptPacketAllowed(scope, packet)
           && !finalizedBindingPolicy.exactHashRejected(packet.hash)
           && (!allowedPacketTypes.size
             || allowedPacketTypes.has(compact(packet?.packetType || 'current_snapshot', 48).toLowerCase()))
@@ -28002,6 +28575,7 @@ ${sourceChatId}`)}`;
     }
     const migration = fullMigration
       ? {
+        ...(ledger?.migration || {}),
         complete: true,
         importedAt: now(),
         importedRecords: imported,
@@ -28671,7 +29245,9 @@ ${sourceChatId}`)}`;
         ));
       if (!topologyChanged
         && !pendingRetirementObservation
-        && migration.changed !== true) {
+        && migration.changed !== true
+        && ledger.copiedChatRepair !== true
+        && ledger.copiedChatAdoption !== true) {
         return {
           ok: true,
           durable: true,
@@ -28687,11 +29263,16 @@ ${sourceChatId}`)}`;
       const liveChatRecords = liveChatLedgerRecordsFromSnapshot(snapshot, scope, worldline);
       const slotHeads = reconcileStorageSlotHeads(ledger, binding.activeRecords, liveChatRecords);
       ledger = slotHeads.ledger;
+      const observerCommitReason = ledger.copiedChatRepair === true
+        ? (ledger.adoptionReason || 'native_copy_source_storage_detached')
+        : (ledger.copiedChatAdoption === true
+          ? (ledger.adoptionReason || 'copied_chat_transcript_only')
+          : reason);
       const commit = await writeStorageLedgerDirect(scope, {
         ...ledger,
         chatTopologyHash: topologyHash,
         worldline
-      }, reason);
+      }, observerCommitReason);
       if (commit.durable === true) {
         // A UI-side reroll/unreroll/rollback changes the authoritative branch
         // without entering beforeRequest. Invalidate request RAM so the next
@@ -29041,6 +29622,9 @@ ${sourceChatId}`)}`;
       chatMessagesAvailable: scope.chatMessagesAvailable === true,
       bridgeHandoffSourceChatIdHash: scope.bridgeHandoffSourceChatId ? stableHash64(scope.bridgeHandoffSourceChatId) : '',
       bridgeHandoffTransferId: scope.bridgeHandoffTransferId || '',
+      bridgeHandoffSourceScopeKeyHash: scope.bridgeHandoffSourceScopeKey ? stableHash64(scope.bridgeHandoffSourceScopeKey) : '',
+      bridgeHandoffExpectedRecords: Math.max(0, Number(scope.bridgeHandoffExpectedRecords || 0) || 0),
+      bridgeHandoffMarkerSchema: scope.bridgeHandoffMarkerSchema || '',
       bridgeHandoffValid: scope.bridgeHandoffValid === true,
       bridgeHandoffValidationReason: scope.bridgeHandoffValidationReason || '',
       copiedFromChatIdHash: scope.copiedFromChatId ? stableHash64(scope.copiedFromChatId) : '',
@@ -30263,11 +30847,78 @@ ${sourceChatId}`)}`;
     };
   };
 
+  const hayakuRetraceCompatibility = () => ({
+    schema: RETRACE_PEER_COMPATIBILITY_SCHEMA,
+    protocolMajor: RETRACE_PEER_PROTOCOL_MAJOR,
+    protocolMinor: 0,
+    pluginId: HAYAKU_PLUGIN_ID,
+    pluginVersion: PLUGIN_VERSION,
+    peerRole: 'packet_continuity_memory',
+    features: {
+      inspect: true,
+      nextSessionHandoff: true,
+      sourceImmutableHandoff: true,
+      durableTargetReadback: true,
+      idempotentHandoff: true,
+      inheritedStateUsable: true
+    },
+    handoff: {
+      contract: HAYAKU_SESSION_HANDOFF_CONTRACT,
+      receiptSchemas: [HAYAKU_SESSION_HANDOFF_RECEIPT_SCHEMA],
+      bridgeMarkerSchemas: [...MEMORY_SESSION_BRIDGE_ACCEPTED_SCHEMAS],
+      sourceMutationAllowed: false,
+      sourceCompactionAllowed: false,
+      physicalCopyRequired: false
+    }
+  });
+
+
+  const hayakuRetraceCompatibilityBeacon = (ipcRegistered = memoryBridgeIpcRegistered === true) => ({
+    schema: HAYAKU_RETRACE_COMPATIBILITY_BEACON_SCHEMA,
+    pluginId: HAYAKU_PLUGIN_ID,
+    pluginVersion: PLUGIN_VERSION,
+    active: Memory.settings?.enabled !== false,
+    runtimeGeneration: RUNTIME_GENERATION_EPOCH,
+    writtenAt: now(),
+    compatibility: hayakuRetraceCompatibility(),
+    ownerIpc: {
+      schema: MEMORY_SESSION_BRIDGE_HAYAKU_IPC_SCHEMA,
+      requestChannel: MEMORY_SESSION_BRIDGE_HAYAKU_REQUEST_CHANNEL,
+      responseChannel: MEMORY_SESSION_BRIDGE_HAYAKU_RESPONSE_CHANNEL,
+      authorizedRequester: MEMORY_SESSION_BRIDGE_PLUGIN_ID,
+      registered: ipcRegistered === true
+    }
+  });
+
+  const persistHayakuRetraceCompatibilityBeacon = async (ipcRegistered = memoryBridgeIpcRegistered === true) => {
+    const payload = hayakuRetraceCompatibilityBeacon(ipcRegistered);
+    const serialized = JSON.stringify(payload);
+    const saved = await RisuCompat.setStorageItem(HAYAKU_RETRACE_COMPATIBILITY_BEACON_KEY, serialized);
+    if (!saved) return { ok: false, verified: false, reason: 'beacon_write_failed', payload };
+    const readback = await RisuCompat.getStorageItem(HAYAKU_RETRACE_COMPATIBILITY_BEACON_KEY, null);
+    const parsed = typeof readback === 'string' ? safeJsonParse(readback, null) : readback;
+    const verified = Boolean(
+      parsed
+      && parsed.schema === HAYAKU_RETRACE_COMPATIBILITY_BEACON_SCHEMA
+      && parsed.pluginId === HAYAKU_PLUGIN_ID
+      && parsed.pluginVersion === PLUGIN_VERSION
+      && parsed.runtimeGeneration === RUNTIME_GENERATION_EPOCH
+      && parsed.compatibility?.schema === RETRACE_PEER_COMPATIBILITY_SCHEMA
+      && parsed.compatibility?.handoff?.contract === HAYAKU_SESSION_HANDOFF_CONTRACT
+    );
+    return { ok: verified, verified, reason: verified ? 'beacon_verified' : 'beacon_readback_mismatch', payload: parsed || payload };
+  };
+
   const hayakuRuntimeSnapshot = () => ({
     owner: 'HAYAKU',
     version: PLUGIN_VERSION,
     active: Memory.settings?.enabled !== false,
     capabilities: {
+      retraceCompatibility: hayakuRetraceCompatibility(),
+      sourcePreservingHandoff: true,
+      handoffContract: HAYAKU_SESSION_HANDOFF_CONTRACT,
+      sourceCompactionOnHandoff: false,
+      retraceCompatibilityBeacon: HAYAKU_RETRACE_COMPATIBILITY_BEACON_KEY,
       packetCoreOnly: true,
       visibleResponseControl: false,
       responseImprovement: false,
@@ -30299,6 +30950,9 @@ ${sourceChatId}`)}`;
       standaloneLineageSuppression: true,
       protectedPacketSidecar: true,
       dualLedgerMirror: true,
+      nativeChatCopyTranscriptOnly: false,
+      nativeChatCopyVerifiedIncrementalRecovery: true,
+      nativeChatCopySourceStorageIsolation: true,
       chatPacketPreservationEnabled: CHAT_PACKET_PRESERVATION_ENABLED,
       boundedResponseHookWait: true,
       captureHookBudgetsMs: {
@@ -30367,6 +31021,8 @@ ${sourceChatId}`)}`;
   const exposeApi = () => {
     const exposedApi = {
       version: PLUGIN_VERSION,
+      retraceCompatibility: clone(hayakuRetraceCompatibility(), {}),
+      capabilities: { retraceCompatibility: clone(hayakuRetraceCompatibility(), {}) },
       settings: () => clone(Memory.settings, {}),
       runtime: () => clone(hayakuRuntimeSnapshot(), {}),
       currentTurn: messages => clone(resolveHayakuCurrentTurn(messages), {}),
@@ -30604,7 +31260,12 @@ ${sourceChatId}`)}`;
         copiedChatSourceId: RisuCompat.copiedChatSourceId,
         memorySessionBridgeMarker: RisuCompat.memorySessionBridgeMarker,
         inferCopiedChatSource: RisuCompat.inferCopiedChatSource,
+        isVerifiedNativeChatCopyScope,
+        nativeChatCopyTranscriptPacketAllowed,
+        detachNativeChatCopySourceStorageArtifacts,
         nativeCopiedStorageRecord,
+        verifiedNativeChatCopyRecoveryRecords,
+        syncVerifiedNativeChatCopyRecovery,
         repairMisclassifiedCopiedChatLedger,
         inheritStorageLedgerForCopiedChat,
         inheritStorageLedgerForBridgeSession,
@@ -30844,6 +31505,14 @@ ${sourceChatId}`)}`;
     try {
       Memory.unloaded = false;
       if (!claimRuntimeOwnership()) throw new Error('runtime_ownership_unavailable');
+      // Register the owner channel before slower host/storage initialization. RE:TRACE
+      // can therefore discover HAYAKU even while the rest of install is still warming up.
+      let earlyBridgeIpc = false;
+      try {
+        earlyBridgeIpc = await registerMemoryBridgeIpc();
+      } catch (_) {
+        earlyBridgeIpc = false;
+      }
       await RisuCompat.refreshInfo();
       await loadSettings(true);
       const legacyStorage = await RisuCompat.purgeLegacyHayakuStorage();
@@ -30852,9 +31521,16 @@ ${sourceChatId}`)}`;
       debugLog('install:settings', Memory.settings);
       exposeApi();
       try {
-        const bridgeIpc = await registerMemoryBridgeIpc();
-        debugLog('install:bridge_ipc', { registered: bridgeIpc === true });
+        const bridgeIpc = earlyBridgeIpc === true ? true : await registerMemoryBridgeIpc();
+        const beacon = await persistHayakuRetraceCompatibilityBeacon(bridgeIpc === true);
+        debugLog('install:bridge_ipc', {
+          registered: bridgeIpc === true,
+          earlyRegistration: earlyBridgeIpc === true,
+          beaconVerified: beacon.verified === true,
+          beaconReason: beacon.reason
+        });
       } catch (error) {
+        try { await persistHayakuRetraceCompatibilityBeacon(false); } catch (_) {}
         debugError('install:bridge_ipc_failed', error);
       }
       try {
@@ -30876,6 +31552,34 @@ ${sourceChatId}`)}`;
         }
       } catch (error) {
         debugError('install:bridge_incremental_recovery_adoption_failed', error);
+      }
+      try {
+        // RE:TRACE may already have created the target chat before this HAYAKU
+        // build was installed. A valid immutable marker is sufficient for the owner
+        // to complete its own durable archive link without asking the user to
+        // recreate the target session.
+        const handoffScope = await RisuCompat.currentChatScope();
+        if (handoffScope?.bridgeHandoffValid === true) {
+          const computedSourceScopeKey = handoffScope.bridgeHandoffSourceChatId && handoffScope.characterId
+            ? `chat_${stableHash64(`${handoffScope.characterId}\n${handoffScope.bridgeHandoffSourceChatId}`)}`
+            : '';
+          const sourceScopeKey = compact(handoffScope.bridgeHandoffSourceScopeKey || computedSourceScopeKey, 196);
+          const handoffOptions = {
+            targetChatId: compact(handoffScope.chatId || '', 160),
+            transferId: compact(handoffScope.bridgeHandoffTransferId || '', 160),
+            sourceScopeKey
+          };
+          const markerExpectedRecords = Math.max(0, Number(handoffScope.bridgeHandoffExpectedRecords || 0) || 0);
+          if (markerExpectedRecords > 0) handoffOptions.expectedRecords = markerExpectedRecords;
+          const sessionAdoption = await adoptBridgeSessionHandoff(handoffOptions);
+          if (sessionAdoption?.verified === true && sessionAdoption?.durable === true) {
+            debugLog('install:bridge_session_handoff_adopted', sessionAdoption);
+          } else {
+            debugError('install:bridge_session_handoff_adoption_pending', new Error(sessionAdoption?.reason || 'session_handoff_adoption_pending'));
+          }
+        }
+      } catch (error) {
+        debugError('install:bridge_session_handoff_adoption_failed', error);
       }
       try {
         const unboundRepair = await repairCurrentSelectedUnboundLedger();
@@ -30967,6 +31671,7 @@ ${sourceChatId}`)}`;
           if (ownsRuntime()) delete globalThis[RUNTIME_OWNER_KEY];
         } catch (_) {}
       });
+      try { await persistHayakuRetraceCompatibilityBeacon(memoryBridgeIpcRegistered === true); } catch (_) {}
       debugLog('ready', { version: PLUGIN_VERSION, compat: RisuCompat.snapshot() });
     } catch (error) {
       const detail = debugError('install_failed', error, { version: PLUGIN_VERSION });
