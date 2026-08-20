@@ -1,10 +1,26 @@
 //@name hayaku_locator_continuity
-//@display-name HAYAKU · Locator Continuity v2.4.14
+//@display-name HAYAKU · Locator Continuity v2.4.28
 //@author rusinus12@gmail.com
 //@api 3.0
-//@version 2.4.14
+//@version 2.4.28
+/* v2.4.28 binds Recovery Vault debt and RE:TRACE repair packets to exact active worldline variants, mirrors reroll/rollback lifecycle into debt and packet state, adds branch-safe repair leases plus authenticated debt IPC/events, suspends candidates during first-observation rollback quarantine, reactivates the exact branch without another LLM call, and rejects superseded/orphaned repairs before canonical adoption. */
+/* v2.4.27 reinforces the v2.4.24-v2.4.26 memory stack as one integrated pipeline: a global packet routing catalog now runs before bounded full/light ingest; hierarchical parents route recursively through child episodes instead of flattened truncated L1 keys; hierarchy capacity is reserved across levels; current-state conflict collapse cannot be undone by closure coverage; derived-index cache keys include graph/episode compiler profiles; packet-debt raw evidence carries epistemic caution and is copied source-immutably during RE:TRACE handoff; and pre-build budget guards can fail soft before expensive graph/episode construction. */
+/* v2.4.26 adds a deterministic Typed Memory Graph, query-directed Graph Closure Evidence Bundles, and a router-only Hierarchical Episode Memory index. Explicit and conservative inferred SUPERSEDES/CONTRADICTS/RESOLVES/FULFILLS/VIOLATES/CAUSES/DEPENDS_ON/CONTINUES edges enrich the existing associative graph; closure can preserve the relevant change chain after the evidence gate; scene/turn clusters and recursively grouped parent episodes route broad or old-memory queries back down to exact L1 packet rows without adding an LLM, embedding provider, durable memory schema, or new handoff authority. */
+/* v2.4.25 adds a packet-debt Recovery Vault and embedding-free Raw Passage Recall. Only finalized active-worldline U+A turns whose current packet is missing or unusable retain exact visible text; request-local exact/phrase, BM25, rare-term, proximity, character n-gram and RRF passage retrieval returns offset-sliced verbatim evidence without changing packet, ledger, worldline, archive, reroll/rollback, or RE:TRACE handoff schemas. */
+/* v2.4.24 adds a protected adaptive recall controller: the current input remains the primary retrieval authority while a separately derived recent-context focus, relevance-versus-recency preference mixing, context-aware full/light packet selection, multi-topic support, contradiction-transition pairing, and scene-stability diagnostics strengthen continuity recall without changing packet schema, ledger keys, worldline, reroll/rollback, archive, or handoff semantics. */
+/* v2.4.23 formalizes the existing live-chat identity contract: msg.chatId is explicitly authoritative when present, fallback source/quality is exposed to lineage diagnostics, and no ledger key, packet schema, reroll, rollback, or worldline semantics are changed. */
+/* v2.4.22 adds current-scope Memory Suite server diagnostics to HAYAKU debug JSON. Server events, namespace integrity, protocol/version and offline state are exported through the shared privacy-scrubbed diagnostics contract while live-chat packet authority and ledger contents remain unchanged. */
+/* v2.4.21 makes Memory Suite mode chat-scope-specific. Each HAYAKU ledger scope can independently use pluginStorage, mirror, or server-only while new chats default to pluginStorage; shared immutable archive metadata remains safely mirrored only when a server-backed scope exists. Server outages no longer prevent the ledger GUI/server page from registering. */
+/* v2.4.20 adds the shared Memory Suite background-sync progress UI. Initial server seeding, mirror synchronization, and restore expose live phase/count/bytes/timing/retry diagnostics while keeping HAYAKU packet authority and existing ledger semantics unchanged; the active storage mode is not committed until server baseline verification finishes. */
+/* v2.4.19 adds a first-class 서버 연결 page to the HAYAKU side panel with storage-mode selection, loopback URL editing, connection testing, server/protocol status, synchronization, recovery, and guarded pluginStorage deletion. Packet capture, binding, recall, and the live-chat-primary dual-ledger contract are unchanged. */
+/* v2.4.18 adds the RE:TRACE server-scope deletion owner proof while preserving HAYAKU's live-chat-primary dual-ledger contract. Active server-scope deletion first verifies/restores the exact ledger data in pluginStorage and switches durably to plugin_only; packet capture, binding, recall, and archive semantics are unchanged. */
 //@allowed-ipc flashback_hayaku_bridge
+//@arg memory_suite_server_mode string Legacy 0.2.6 migration only; current scope modes are stored in the routing registry
+//@arg memory_suite_server_url string Memory Suite Server URL; blank uses http://127.0.0.1:47630
 
+/* v2.4.18 adds RE:TRACE/Memory Suite handoff synchronization: mirror/server storage is verified around owner-led session adoption without changing live-chat packet authority or source-immutable handoff semantics. */
+/* v2.4.16 adds three Memory Suite storage modes with plugin-only as the default, live pluginStorage+server mirroring, server-only storage, verified server-to-pluginStorage recovery, and guarded deletion of only server-backed HAYAKU pluginStorage data after server integrity/coverage proof. Mirror-mode deletion switches automatically to server-only; live-chat packet authority and RE:TRACE compatibility beacons remain untouched. */
+/* v2.4.15 routes HAYAKU's durable v2 packet ledger and immutable shared-archive bodies/meta through the shared Memory Suite server. Live-chat packet authority, shared RE:TRACE bridge markers/beacons, packet capture, rollback/reroll binding and source-immutable handoff are unchanged. Existing pluginStorage remains a lazy, non-destructive migration source. */
 /* v2.4.14 accepts both memory-session-bridge-v1 and v2 RE:TRACE handoff markers, repairs already-created v2 target sessions on startup by durably adopting their immutable HAYAKU archive, and exposes the accepted marker/source/count identity in diagnostics. Source HAYAKU storage remains read-only and fingerprint-verified. */
 /* v2.4.13 fixes the v2.4.12 native-copy recovery migration false-negative: before deciding that a copied chat has no RE:TRACE recovery snapshots, HAYAKU now hydrates the source's incremental-recovery capsule into an in-memory source ledger, accepts authoritative bridge_incremental_recovery slot-head records, retries instead of permanently completing the migration when expected recovery records are present but target identity is not stable yet, and exposes source/examined/rejected counts in debug state. The source ledger and recovery capsule remain read-only; shared archives, cold-start history, predecessor-session history, unbound recovery, and unrelated source storage remain excluded. */
 /* v2.4.12 preserves verified RE:TRACE incremental-recovery snapshots across ordinary RisuAI native chat copies without restoring the v2.4.8 over-copy bug: only active bridge_incremental_recovery records whose U+A content hashes exactly match a real pair in the copied transcript are rebound to the copied chat's new worldline/message IDs; shared archives, cold-start material, predecessor history, unbound recovery, and unrelated source storage remain excluded. Existing v2.4.9-v2.4.11 copied chats receive the same one-time verified recovery migration. */
@@ -58,6 +74,25 @@
 //@arg hayaku_packet_coverage_audit string true|false
 //@arg hayaku_packet_coverage_fallback_recall string true|false
 //@arg hayaku_display_scrubber string true|false
+//@arg hayaku_recall_relatedness_weight string 0-100 relevance preference after retrieval gate; blank uses 70
+//@arg hayaku_recall_recency_weight string 0-100 story-turn recency preference after retrieval gate; blank uses 30
+//@arg hayaku_recall_context_messages string Maximum recent user/assistant messages used as separate context focus; blank uses 5
+//@arg hayaku_adaptive_context_window string true|false; blank uses true
+//@arg hayaku_multi_query_recall string true|false; blank uses true
+//@arg hayaku_contradiction_bundle string true|false; blank uses true
+//@arg hayaku_multi_resolution_recall string true|false; blank uses true
+//@arg hayaku_recall_stability string true|false; blank uses true
+//@arg hayaku_recall_stability_boost string 0.0-0.08 request-local scene persistence boost; blank uses 0.025
+//@arg hayaku_recovery_vault string true|false; store exact visible U+A only for finalized turns whose packet is missing or unusable; blank uses true
+//@arg hayaku_raw_passage_recall string true|false; search Recovery Vault with exact/BM25/trigram/proximity passage retrieval; blank uses true
+//@arg hayaku_raw_recall_max_items string Maximum verbatim recovery passages injected per request; blank uses 3
+//@arg hayaku_raw_recall_max_chars string Maximum total verbatim recovery evidence characters; blank uses 2400
+//@arg hayaku_raw_recall_min_score string 0.0-1.0 minimum gated raw passage score; blank uses 0.16
+//@arg hayaku_typed_memory_graph string true|false; derive deterministic typed relations between packet memory rows; blank uses true
+//@arg hayaku_graph_closure_recall string true|false; admit bounded typed-neighbor evidence after the normal retrieval gate; blank uses true
+//@arg hayaku_graph_closure_max_nodes string Maximum typed graph closure rows kept per request; blank uses 8
+//@arg hayaku_hierarchical_episode_memory string true|false; build router-only scene/turn episode hierarchy from L1 rows; blank uses true
+//@arg hayaku_episode_router_max_hits string Maximum episode routers activated per request; blank uses 3
 
 /*
  * HAYAKU · Locator Continuity Plugin
@@ -155,7 +190,7 @@
   };
 
   const PLUGIN_NAME = 'HAYAKU';
-  const PLUGIN_VERSION = '2.4.14';
+  const PLUGIN_VERSION = '2.4.28';
   const REQUEST_LINEAGE_IDENTITY_VERSION = 2;
   const REQUEST_LINEAGE_SCHEMA_V2 = 'hayaku_request_lineage_v2';
   const HAYAKU_PACKET_AUTHORING_PROFILE_SCHEMA = 'hayaku-packet-authoring-profile-v1';
@@ -170,6 +205,28 @@
   const STORAGE_LEDGER_VERSION = 'hayaku_storage_ledger_v2';
   const STORAGE_LEDGER_COMPAT_VERSIONS = new Set(['hayaku_storage_ledger_v1', STORAGE_LEDGER_VERSION]);
   const STORAGE_LEDGER_KEY_PREFIX = 'hayaku.v2.ledger.';
+  const RECOVERY_VAULT_SCHEMA = 'hayaku.recovery_vault.v1';
+  const RECOVERY_VAULT_VERSION = 2;
+  const RECOVERY_VAULT_KEY_PREFIX = 'hayaku.v2.recovery_vault.';
+  const RECOVERY_VAULT_MAX_RECORDS = 1024;
+  const RECOVERY_VAULT_MAX_TOTAL_CHARS = 12_000_000;
+  const RECOVERY_VAULT_MAX_TURN_CHARS = 240_000;
+  const RECOVERY_VAULT_CACHE_TTL_MS = 30_000;
+  const RAW_RECOVERY_RECALL_VERSION = 'hayaku_raw_passage_recall_v1';
+  const RAW_RECOVERY_ANCHOR_VERSION = 'hayaku_raw_anchor_stub_v1';
+  const RAW_RECOVERY_PASSAGE_MAX_CHARS = 1100;
+  const RAW_RECOVERY_PASSAGE_MIN_CHARS = 16;
+  const RAW_RECOVERY_CANDIDATE_LIMIT = 96;
+  const RAW_RECOVERY_RRF_K = 48;
+  const RECOVERY_VAULT_HANDOFF_VERSION = 'hayaku_recovery_vault_handoff_v1';
+  const RECOVERY_DEBT_WORLDLINE_VERSION = 'hayaku_recovery_debt_worldline_v1';
+  const RECOVERY_DEBT_EVENT_SCHEMA = 'hayaku-retrace-event-v1';
+  const RECOVERY_DEBT_EVENT_CHANNEL = 'hayaku_retrace_event_v1';
+  const RECOVERY_DEBT_LEASE_TTL_MS = 10 * 60 * 1000;
+  const RECOVERY_DEBT_MAX_AUTO_ATTEMPTS = 3;
+  const RECOVERY_DEBT_RETRY_DELAYS_MS = Object.freeze([30_000, 2 * 60_000, 10 * 60_000]);
+  const RECOVERY_DEBT_ACTIVE_STATUSES = new Set(['deterministic_fallback', 'repair_pending']);
+  const RECOVERY_DEBT_TERMINAL_STATUSES = new Set(['superseded', 'orphaned', 'detached']);
   const HAYAKU_ARCHIVE_REF_SCHEMA = 'hayaku.shared_archive_ref.v1';
   const HAYAKU_ARCHIVE_SCHEMA = 'hayaku.shared_archive.v1';
   const HAYAKU_ARCHIVE_META_SCHEMA = 'hayaku.shared_archive_meta.v1';
@@ -201,6 +258,7 @@
   const MEMORY_SESSION_BRIDGE_HAYAKU_IPC_SCHEMA = 'hayaku-memory-bridge-ipc-v1';
   const MEMORY_SESSION_BRIDGE_HAYAKU_REQUEST_CHANNEL = 'hayaku_memory_bridge_request_v1';
   const MEMORY_SESSION_BRIDGE_HAYAKU_RESPONSE_CHANNEL = 'hayaku_memory_bridge_response_v1';
+  const MEMORY_SESSION_BRIDGE_HAYAKU_EVENT_CHANNEL = RECOVERY_DEBT_EVENT_CHANNEL;
   const RETRACE_PEER_COMPATIBILITY_SCHEMA = 'retrace.peer_compatibility.v1';
   const RETRACE_PEER_PROTOCOL_MAJOR = 1;
   const HAYAKU_SESSION_HANDOFF_CONTRACT = 'hayaku.handoff_immutable_source.v1';
@@ -289,7 +347,8 @@
   const PACKET_CORE_RECALL_CANDIDATE_LIMIT = 48;
   const PACKET_CORE_MIN_MEMORY_CHARS = 900;
   const PACKET_OBSERVATION_LIMIT = 360;
-  const PROJECTION_CACHE_VERSION = 'hayaku_projection_cache_v1';
+  const PROJECTION_CACHE_VERSION = 'hayaku_projection_cache_v2';
+  const DERIVED_ROUTING_COMPILER_VERSION = 'hayaku_derived_routing_compiler_v2';
   const PROJECTION_CACHE_LIMIT = 2;
   const PACKET_COVERAGE_MIN_SCORE = 0.68;
   const PACKET_COVERAGE_MAX_MISSING_SIGNALS = 8;
@@ -405,6 +464,86 @@
       summary: 0.30
     })
   });
+  const TYPED_MEMORY_GRAPH_VERSION = 'hayaku_typed_memory_graph_v1';
+  const TYPED_MEMORY_GRAPH_EDGE_TYPES = Object.freeze([
+    'SUPERSEDES', 'SUPERSEDED_BY', 'CONTRADICTS',
+    'RESOLVES', 'RESOLVED_BY', 'FULFILLS', 'FULFILLED_BY',
+    'VIOLATES', 'VIOLATED_BY', 'CAUSES', 'CAUSED_BY', 'RESULT_OF',
+    'DEPENDS_ON', 'PREREQUISITE_OF', 'CONTINUES'
+  ]);
+  const TYPED_MEMORY_GRAPH_EDGE_SET = new Set(TYPED_MEMORY_GRAPH_EDGE_TYPES);
+  const TYPED_MEMORY_GRAPH_TUNING = Object.freeze({
+    maxTypedEdgesPerRow: 16,
+    maxTopicBucket: 14,
+    maxInferredTurnGap: 96,
+    closureMaxSeeds: 5,
+    closureMaxHops: 2,
+    closureMinEdgeWeight: 0.15,
+    closureMinSignal: 0.022,
+    closureMinTargetEvidence: 0.006,
+    closureMaxBundles: 4,
+    closureMaxMembersPerBundle: 4,
+    relationWeights: Object.freeze({
+      SUPERSEDES: 0.46,
+      SUPERSEDED_BY: 0.46,
+      CONTRADICTS: 0.43,
+      RESOLVES: 0.42,
+      RESOLVED_BY: 0.42,
+      FULFILLS: 0.43,
+      FULFILLED_BY: 0.43,
+      VIOLATES: 0.45,
+      VIOLATED_BY: 0.45,
+      CAUSES: 0.36,
+      CAUSED_BY: 0.36,
+      RESULT_OF: 0.36,
+      DEPENDS_ON: 0.34,
+      PREREQUISITE_OF: 0.34,
+      CONTINUES: 0.23
+    })
+  });
+  const GLOBAL_PACKET_ROUTING_VERSION = 'hayaku_global_packet_routing_catalog_v1';
+  const GLOBAL_PACKET_ROUTING_TUNING = Object.freeze({
+    maxPacketsPerEpisode: 40,
+    minScenePackets: 4,
+    sceneGapMessages: 18,
+    parentFanIn: 4,
+    maxLeafEpisodes: 96,
+    maxParentEpisodes: 32,
+    routeTopLeaves: 4,
+    routeTopParents: 2,
+    routePacketsPerEpisode: 6,
+    routeMinScore: 0.12,
+    maxSummaryFragments: 8,
+    maxSummaryChars: 1400,
+    eagerParsePacketLimit: 160,
+    eagerParseRecentPackets: 48,
+    cacheEntries: 4
+  });
+  const GLOBAL_PACKET_ROUTING_QUERY_RE = /(?:전체\s*흐름|오래된\s*대화|에피소드|구간|시기|장기\s*흐름|요약|처음부터|지금까지|overview|episode|arc|long[- ]term|whole\s*story|timeline|history|全体|流れ|エピソード|要約)/i;
+  const GLOBAL_PACKET_ROUTING_GENERIC_TERM_RE = /^(?:그때|그거|그건|그게|그일|일|사건|장면|이야기|기억|기억나|예전|과거|이전|때|전체|흐름|요약|what|happened|thing|event|scene|story|remember|memory|before|past|overview|episode|arc|それ|あれ|その時|出来事|場面|物語|記憶|過去|全体|流れ|要約|那时|那件事|事情|事件|场景|故事|记忆|过去|整体|流程|摘要)$/i;
+  const GLOBAL_PACKET_ROUTING_GENERIC_CANONICAL_RE = /^(?:info:memory|time:(?:past|recent|now)|intent:ask_memory|narrative:(?:story|scene)|story:(?:overview|memory))$/i;
+  const HIERARCHICAL_EPISODE_MEMORY_VERSION = 'hayaku_hierarchical_episode_memory_v2';
+  const HIERARCHICAL_EPISODE_TUNING = Object.freeze({
+    leafMaxTurnSpan: 40,
+    leafSoftTargetTurns: 18,
+    maxTurnGap: 3,
+    minLeafRows: 3,
+    maxLeafRows: 72,
+    parentFanIn: 4,
+    maxLevels: 4,
+    maxStoredEpisodes: 1024,
+    maxRoutingEpisodes: 128,
+    maxParentRoutingEpisodes: 64,
+    maxLeafRoutingEpisodes: 64,
+    maxMemoryKeysPerEpisode: 72,
+    maxFeatureValues: 48,
+    maxRouterRowsPerEpisode: 14,
+    maxDescendedLeavesPerHit: 4,
+    routerMinScore: 0.075,
+    routerMaxSignal: 0.30,
+    routerDirectFloor: 0.008
+  });
+
   const LATENT_EPISODIC_REACTIVATION_VERSION = 'latent_episodic_reactivation_v1';
   const LATENT_EPISODIC_REACTIVATION_TUNING = Object.freeze({
     maxActivated: 1,
@@ -465,7 +604,26 @@
     packetRecovery: true,
     packetCoverageAudit: true,
     packetCoverageFallbackRecall: true,
-    displayScrubber: true
+    displayScrubber: true,
+    recallRelatednessWeight: 70,
+    recallRecencyWeight: 30,
+    recallContextMessages: 5,
+    adaptiveContextWindow: true,
+    multiQueryRecall: true,
+    contradictionBundleEnabled: true,
+    multiResolutionRecallEnabled: true,
+    recallStabilityEnabled: true,
+    recallStabilityBoost: 0.025,
+    recoveryVaultEnabled: true,
+    rawPassageRecallEnabled: true,
+    rawRecallMaxItems: 3,
+    rawRecallMaxChars: 2400,
+    rawRecallMinScore: 0.16,
+    typedMemoryGraphEnabled: true,
+    graphClosureRecallEnabled: true,
+    graphClosureMaxNodes: 8,
+    hierarchicalEpisodeMemoryEnabled: true,
+    episodeRouterMaxHits: 3
   });
   // Performance guard profiles. HAYAKU rebuilds a request-local index from visible
   // chat packets plus a bounded compact ledger; without an ingest cap, long chats can
@@ -1772,15 +1930,47 @@ const MODE_PROFILES = Object.freeze({
     lastBeforeRequest: null,
     lastViewerRecall: null,
     lastLatentEpisodicRecall: null,
+    lastRecallSelection: null,
+    lastRecentContextFocus: null,
+    lastRecallController: null,
+    lastGlobalRoutingCatalog: null,
+    lastDerivedIndexBuild: null,
+    lastRecoveryVaultHandoff: null,
+    lastRecoveryVault: null,
+    lastRawRecoveryRecall: null,
+    lastRawAnchorIntegration: null,
+    lastTypedMemoryGraph: null,
+    lastGraphClosure: null,
+    lastEpisodeIndex: null,
+    lastEpisodeRouting: null,
+    recoveryVaultCache: new Map(),
+    recoveryVaultStats: {
+      reads: 0,
+      writes: 0,
+      cacheHits: 0,
+      upserts: 0,
+      discharges: 0,
+      stalePrunes: 0,
+      handoffCopies: 0,
+      handoffRecords: 0,
+      handoffFailures: 0,
+      failures: 0,
+      storedRecords: 0,
+      storedChars: 0,
+      lastError: ''
+    },
     lastWarnings: [],
     packetScanCache: new Map(),
     packetScanScopeKey: '',
     packetScanStats: null,
     projectionCache: new Map(),
     projectionCacheScopeKey: '',
-    projectionCacheStats: { hits: 0, misses: 0, writes: 0, evictions: 0 },
+    projectionCacheStats: { hits: 0, misses: 0, writes: 0, evictions: 0, degradedSkips: 0 },
+    globalRoutingCatalogCache: new Map(),
+    globalRoutingCatalogStats: { builds: 0, cacheHits: 0, routes: 0, routedPackets: 0, evictions: 0, failures: 0, lastError: '' },
     authoritativeLedgerCache: null,
     pendingCaptures: [],
+    recoveryDebtInBandReservations: new Map(),
     captureSequence: 0,
     generationAttemptSequence: 0,
     finalizedCaptureMonitors: new Map(),
@@ -2018,6 +2208,3839 @@ const MODE_PROFILES = Object.freeze({
     const numeric = Math.floor(Number(value));
     return Number.isSafeInteger(numeric) && numeric > 0 ? numeric : fallback;
   };
+/* MEMORY SUITE STORAGE SDK v1.8.1
+ * Scope-routed durable storage client shared by Flashback, HAYAKU, LIBRA, GRADIA, LIA and RE:TRACE.
+ * The server stores opaque values. Each plugin keeps ownership of its own data schema.
+ */
+const createMemorySuiteStorageBridge = (rawOptions = {}) => {
+  const options = rawOptions && typeof rawOptions === 'object' ? rawOptions : {};
+  const namespace = String(options.namespace || '').trim().toLowerCase();
+  const pluginId = String(options.pluginId || namespace || 'plugin').trim();
+  const pluginVersion = String(options.pluginVersion || '').trim();
+  const defaultUrl = String(options.defaultUrl || 'http://127.0.0.1:47630').replace(/\/+$/, '');
+  const pluginPrefixes = Array.isArray(options.pluginPrefixes) ? options.pluginPrefixes.map(String) : [];
+  const pluginKeys = new Set(Array.isArray(options.pluginKeys) ? options.pluginKeys.map(String) : []);
+  const localPrefixes = Array.isArray(options.localPrefixes) ? options.localPrefixes.map(String) : [];
+  const localKeys = new Set(Array.isArray(options.localKeys) ? options.localKeys.map(String) : []);
+  const excludedKeys = new Set(Array.isArray(options.excludedKeys) ? options.excludedKeys.map(value => String(value).toLowerCase()) : []);
+  const excludedPrefixes = Array.isArray(options.excludedPrefixes) ? options.excludedPrefixes.map(value => String(value).toLowerCase()) : [];
+  const excludedContains = Array.isArray(options.excludedContains) ? options.excludedContains.map(value => String(value).toLowerCase()).filter(Boolean) : [];
+  const modeArguments = [...new Set(['memory_suite_server_mode', ...(Array.isArray(options.modeArguments) ? options.modeArguments : [])].map(String))];
+  const urlArguments = [...new Set(['memory_suite_server_url', ...(Array.isArray(options.urlArguments) ? options.urlArguments : [])].map(String))];
+  const requiredCapabilities = ['kv.v1', 'keys.v1', 'revision.v1', 'digest.v1', 'idempotency.v1', 'tombstone.v1', 'readback.v1', 'namespace-integrity.v1'];
+  const MODE_PLUGIN_ONLY = 'plugin_only';
+  const MODE_MIRROR = 'mirror';
+  const MODE_SERVER_ONLY = 'server_only';
+  const VALID_MODES = new Set([MODE_PLUGIN_ONLY, MODE_MIRROR, MODE_SERVER_ONLY]);
+  const displayName = String(options.displayName || pluginId || namespace || 'Plugin').trim();
+  const managementButtonEnabled = options.managementButton !== false;
+  const requestTimeoutMs = Math.max(5000, Math.min(120000, Number(options.requestTimeoutMs || 30000) || 30000));
+  const configCacheMs = 30000;
+  const bootstrapCacheMs = 30000;
+  const proxyCache = new WeakMap();
+  const localProxyCache = new WeakMap();
+  const migrationStateByLegacy = new WeakMap();
+  const mutationTails = new Map();
+  const autoMigratePlugin = options.autoMigratePlugin !== false;
+  const autoMigrateLocal = options.autoMigrateLocal !== false;
+  const migrationConcurrency = Math.max(1, Math.min(4, Number(options.migrationConcurrency || 2) || 2));
+  const migrationRetryMs = Math.max(5000, Math.min(10 * 60 * 1000, Number(options.migrationRetryMs || 30000) || 30000));
+  const currentScopeProvider = typeof options.currentScopeProvider === 'function' ? options.currentScopeProvider : null;
+  const resolveKeyScopeProvider = typeof options.resolveKeyScope === 'function' ? options.resolveKeyScope : null;
+  const scopeRoutingEnabled = options.scopeRouting !== false;
+  const scopeCacheMs = Math.max(0, Math.min(10000, Number(options.scopeCacheMs || 0) || 0));
+  const sharedRouteModeRaw = String(options.sharedRouteMode || MODE_MIRROR);
+  const namespaceDelaySeed = Array.from(namespace).reduce((sum, char) => sum + char.charCodeAt(0), 0);
+  const migrationDelayMs = Math.max(250, Math.min(10000, Number(options.migrationDelayMs || (700 + (namespaceDelaySeed % 7) * 240)) || 700));
+  const state = {
+    config: { at: 0, mode: MODE_PLUGIN_ONLY, url: defaultUrl },
+    bootstrap: { at: 0, baseUrl: '', value: null, pending: null },
+    status: { state: 'idle', at: 0, reason: '', serverVersion: '', url: defaultUrl, namespace },
+    migration: {
+      plugin: { state: 'idle', scanned: 0, migrated: 0, skipped: 0, failed: 0, at: 0, reason: '' },
+      local: { state: 'idle', scanned: 0, migrated: 0, skipped: 0, failed: 0, at: 0, reason: '' }
+    },
+    warned: new Set(),
+    legacy: { plugin: null, local: null },
+    management: { registered: false, registering: false, handle: null, timer: null, root: null, lastResult: null },
+    syncJob: { current: null, promise: null, retryTimer: null, persistTimer: null, loaded: false, listeners: new Set() },
+    transientMode: '',
+    diagnostics: { value: null, at: 0, pending: null, timer: null },
+    scopeRouting: {
+      current: null,
+      currentAt: 0,
+      registry: null,
+      registryLoaded: false,
+      registryLoading: null,
+      transientModes: new Map(),
+      routeCache: new Map(),
+      lastLegacyImport: null
+    }
+  };
+  const SYNC_JOB_SCHEMA = 'memory-suite.sync-job.v1';
+  const SYNC_JOB_STORAGE_KEY = `__memory_suite_internal_sync_job_v1__:${namespace}`;
+  const SYNC_JOB_RETRY_DELAYS_MS = Object.freeze([3000, 5000, 10000, 20000, 30000]);
+  const SCOPE_ROUTING_SCHEMA = 'memory-suite.scope-routing.v1';
+  const SCOPE_ROUTING_LOCAL_KEY = `__memory_suite_internal_scope_routes_v1__:${namespace}`;
+  const SCOPE_ROUTING_SERVER_KEY = `__memory_suite_scope_routes_v1__:${namespace}`;
+  const SCOPED_REMOTE_KEY_MARKER = '::memory-suite-scope:v1:';
+
+  const safeText = value => String(value == null ? '' : value);
+  const compact = (value, max = 500) => safeText(value).replace(/\s+/g, ' ').trim().slice(0, max);
+  const jsonComparable = value => {
+    try { return JSON.stringify(value); }
+    catch (_) { return '__MEMORY_SUITE_UNSERIALIZABLE__'; }
+  };
+  const setStatus = (next, reason = '', extra = {}) => {
+    state.status = { ...state.status, state: String(next || 'unknown'), reason: compact(reason), at: Date.now(), ...extra };
+  };
+  const warnOnce = (code, error) => {
+    const key = String(code || 'warning');
+    if (state.warned.has(key)) return;
+    state.warned.add(key);
+    try { console.warn(`[Memory Suite/${pluginId}] ${key}:`, error?.message || error || 'unknown'); } catch (_) {}
+  };
+
+  const storageValueBytes = value => {
+    let serialized = '';
+    try { serialized = JSON.stringify(value); } catch (_) { serialized = safeText(value); }
+    if (serialized == null) serialized = '';
+    try { if (typeof TextEncoder === 'function') return new TextEncoder().encode(String(serialized)).byteLength; } catch (_) {}
+    return String(serialized).length * 2;
+  };
+
+  const syncJobTerminal = status => ['completed', 'failed', 'cancelled'].includes(String(status || ''));
+  const cloneSyncJob = value => {
+    if (!value || typeof value !== 'object') return null;
+    try { return JSON.parse(JSON.stringify(value)); } catch (_) { return { ...value }; }
+  };
+  const notifySyncJob = () => {
+    const snapshot = cloneSyncJob(state.syncJob.current);
+    for (const listener of Array.from(state.syncJob.listeners)) {
+      try { listener(snapshot); } catch (_) {}
+    }
+  };
+  const persistSyncJobNow = async () => {
+    if (state.syncJob.persistTimer) { clearTimeout(state.syncJob.persistTimer); state.syncJob.persistTimer = null; }
+    const legacy = state.legacy.plugin;
+    const job = state.syncJob.current;
+    if (!legacy || typeof legacy.setItem !== 'function' || !job) return false;
+    try {
+      const payload = JSON.stringify({ ...cloneSyncJob(job), persistedAt: Date.now() });
+      const result = await legacy.setItem(SYNC_JOB_STORAGE_KEY, payload);
+      return result !== false;
+    } catch (_) { return false; }
+  };
+  const scheduleSyncJobPersist = (immediate = false) => {
+    if (immediate) { void persistSyncJobNow(); return; }
+    if (state.syncJob.persistTimer) return;
+    state.syncJob.persistTimer = setTimeout(() => {
+      state.syncJob.persistTimer = null;
+      void persistSyncJobNow();
+    }, 650);
+    try { state.syncJob.persistTimer?.unref?.(); } catch (_) {}
+  };
+  const updateSyncJob = (patch = {}, options = {}) => {
+    if (!state.syncJob.current) return null;
+    const now = Date.now();
+    state.syncJob.current = {
+      ...state.syncJob.current,
+      ...(patch && typeof patch === 'object' ? patch : {}),
+      updatedAt: now,
+      lastActivityAt: options.activity === false ? Number(state.syncJob.current.lastActivityAt || now) : now
+    };
+    scheduleSyncJobPersist(options.persist === 'immediate');
+    notifySyncJob();
+    return cloneSyncJob(state.syncJob.current);
+  };
+  const aggregateSyncJobSpaces = (spaces, completedPasses = {}) => {
+    const values = [
+      ...Object.values(spaces && typeof spaces === 'object' ? spaces : {}),
+      ...Object.values(completedPasses && typeof completedPasses === 'object' ? completedPasses : {})
+    ];
+    const sum = key => values.reduce((total, row) => total + Math.max(0, Number(row?.[key] || 0) || 0), 0);
+    return {
+      totalItems: sum('totalItems'), processedItems: sum('processedItems'), processedBytes: sum('processedBytes'),
+      transferredBytes: sum('transferredBytes'), uploaded: sum('uploaded'), restored: sum('restored'), matched: sum('matched'),
+      removedByTombstone: sum('removedByTombstone'), failures: sum('failureCount'), conflicts: sum('conflictCount')
+    };
+  };
+  const applySyncProgressToJob = progress => {
+    const job = state.syncJob.current;
+    if (!job || !progress || typeof progress !== 'object') return;
+    const space = String(progress.space || job.currentSpace || 'plugin');
+    const spaces = { ...(job.spaces || {}) };
+    const completedPasses = { ...(job.completedPasses || {}) };
+    const previous = spaces[space] || null;
+    if (previous && Number(previous.startedAt || 0) > 0 && Number(progress.startedAt || 0) > 0
+      && Number(previous.startedAt) !== Number(progress.startedAt)) {
+      const prior = completedPasses[space] || {};
+      completedPasses[space] = {
+        totalItems: Number(prior.totalItems || 0) + Number(previous.totalItems || 0),
+        processedItems: Number(prior.processedItems || 0) + Number(previous.processedItems || 0),
+        processedBytes: Number(prior.processedBytes || 0) + Number(previous.processedBytes || 0),
+        transferredBytes: Number(prior.transferredBytes || 0) + Number(previous.transferredBytes || 0),
+        uploaded: Number(prior.uploaded || 0) + Number(previous.uploaded || 0),
+        restored: Number(prior.restored || 0) + Number(previous.restored || 0),
+        matched: Number(prior.matched || 0) + Number(previous.matched || 0),
+        removedByTombstone: Number(prior.removedByTombstone || 0) + Number(previous.removedByTombstone || 0),
+        failureCount: Number(prior.failureCount || 0) + Number(previous.failureCount || 0),
+        conflictCount: Number(prior.conflictCount || 0) + Number(previous.conflictCount || 0),
+        passCount: Number(prior.passCount || 0) + 1
+      };
+      spaces[space] = {};
+    }
+    spaces[space] = { ...(spaces[space] || {}), ...progress, space };
+    const totals = aggregateSyncJobSpaces(spaces, completedPasses);
+    updateSyncJob({
+      spaces,
+      completedPasses,
+      ...totals,
+      phase: String(progress.phase || job.phase || 'running'),
+      currentSpace: space,
+      currentKey: compact(progress.currentKey || '', 220),
+      currentAction: String(progress.currentAction || progress.action || ''),
+      status: job.status === 'paused' ? 'running' : job.status,
+      message: String(progress.message || job.message || '')
+    });
+  };
+  const subscribeSyncJob = listener => {
+    if (typeof listener !== 'function') return () => {};
+    state.syncJob.listeners.add(listener);
+    try { listener(cloneSyncJob(state.syncJob.current)); } catch (_) {}
+    return () => state.syncJob.listeners.delete(listener);
+  };
+  const getSyncJob = () => cloneSyncJob(state.syncJob.current);
+  const loadPersistedSyncJob = async () => {
+    if (state.syncJob.loaded) return getSyncJob();
+    const legacy = state.legacy.plugin;
+    if (!legacy || typeof legacy.getItem !== 'function') return null;
+    state.syncJob.loaded = true;
+    try {
+      const raw = await legacy.getItem(SYNC_JOB_STORAGE_KEY);
+      if (!raw) return null;
+      const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      if (!parsed || parsed.schema !== SYNC_JOB_SCHEMA || parsed.namespace !== namespace) return null;
+      const age = Date.now() - Math.max(0, Number(parsed.updatedAt || parsed.startedAt || 0) || 0);
+      if (age > 24 * 60 * 60 * 1000) return null;
+      if (!syncJobTerminal(parsed.status)) {
+        parsed.status = 'paused';
+        parsed.phase = 'resume_pending';
+        parsed.message = '이전 동기화 작업을 다시 연결하고 있습니다.';
+        parsed.nextRetryAt = 0;
+      }
+      state.syncJob.current = parsed;
+      notifySyncJob();
+      return getSyncJob();
+    } catch (_) { return null; }
+  };
+  const clearPersistedSyncJob = async () => {
+    const legacy = state.legacy.plugin;
+    if (!legacy) return false;
+    try {
+      if (typeof legacy.removeItem === 'function') return (await legacy.removeItem(SYNC_JOB_STORAGE_KEY)) !== false;
+      if (typeof legacy.setItem === 'function') return (await legacy.setItem(SYNC_JOB_STORAGE_KEY, null)) !== false;
+    } catch (_) {}
+    return false;
+  };
+  const retryableSyncError = error => {
+    const message = String(error?.message || error || '').toLowerCase();
+    const code = String(error?.code || '').toUpperCase();
+    return ['TIMEOUT', 'NETWORK_ERROR', 'ECONNRESET', 'ECONNREFUSED', 'MEMORY_SUITE_SERVER_UNAVAILABLE'].includes(code)
+      || /fetch|network|timeout|timed out|econn|connection|server_unavailable|bootstrap|http_50[0234]|503|socket|temporar/.test(message);
+  };
+
+  const apiCandidates = () => {
+    const out = [];
+    const add = value => {
+      if (value && (typeof value === 'object' || typeof value === 'function') && !out.includes(value)) out.push(value);
+    };
+    try { if (typeof risuai !== 'undefined') add(risuai); } catch (_) {}
+    try { if (typeof risuApi !== 'undefined') add(risuApi); } catch (_) {}
+    try { if (typeof risuAPI !== 'undefined') add(risuAPI); } catch (_) {}
+    try { if (typeof Risuai !== 'undefined') add(Risuai); } catch (_) {}
+    try { if (typeof RisuAI !== 'undefined') add(RisuAI); } catch (_) {}
+    try {
+      if (typeof globalThis !== 'undefined') {
+        add(globalThis.risuai);
+        add(globalThis.risuApi);
+        add(globalThis.risuAPI);
+        add(globalThis.Risuai);
+        add(globalThis.RisuAI);
+        add(globalThis.__pluginApis__);
+      }
+    } catch (_) {}
+    return out;
+  };
+
+  const getArgumentValue = async (names, fallback = '') => {
+    for (const name of names) {
+      for (const api of apiCandidates()) {
+        try {
+          let value;
+          if (typeof api?.getArgument === 'function') value = await api.getArgument(name);
+          else if (typeof api?.getArg === 'function') value = await api.getArg(name);
+          if (value !== undefined && value !== null && String(value).trim() !== '') return String(value).trim();
+        } catch (_) {}
+      }
+    }
+    return fallback;
+  };
+
+  const setArgumentValue = async (name, value) => {
+    let lastError = null;
+    for (const api of apiCandidates()) {
+      try {
+        const fn = typeof api?.setArgument === 'function' ? api.setArgument : (typeof api?.setArg === 'function' ? api.setArg : null);
+        if (!fn) continue;
+        const result = await fn.call(api, name, value);
+        if (result === false) throw new Error('argument_write_rejected');
+        return true;
+      } catch (error) { lastError = error; }
+    }
+    const error = new Error(`memory_suite_argument_persistence_unavailable:${compact(lastError?.message || lastError || 'setArgument unavailable', 180)}`);
+    error.code = 'MEMORY_SUITE_ARGUMENT_PERSISTENCE_UNAVAILABLE';
+    throw error;
+  };
+
+  const normalizeMode = raw => {
+    const value = String(raw || '').trim().toLowerCase().replace(/[ -]+/g, '_');
+    if (['off', 'plugin', 'plugin_only', 'standalone', 'local', 'local_only'].includes(value)) return MODE_PLUGIN_ONLY;
+    if (['mirror', 'dual', 'coexist', 'coexistence', 'plugin_server', 'plugin+server', 'plugin_and_server'].includes(value)) return MODE_MIRROR;
+    if (['required', 'server', 'server_only', 'remote', 'remote_only'].includes(value)) return MODE_SERVER_ONLY;
+    return MODE_PLUGIN_ONLY;
+  };
+
+  const modeLabel = mode => mode === MODE_MIRROR
+    ? '플러그인 + 서버 병존'
+    : (mode === MODE_SERVER_ONLY ? '서버 단독' : '플러그인 단독');
+
+  const normalizeServerUrl = rawValue => {
+    const raw = String(rawValue || defaultUrl).trim().replace(/\/+$/, '') || defaultUrl;
+    try {
+      const parsed = new URL(raw);
+      const host = String(parsed.hostname || '').toLowerCase();
+      if (parsed.protocol !== 'http:' || !['127.0.0.1', 'localhost', '::1'].includes(host)) {
+        throw new Error('server_url_must_be_loopback_http');
+      }
+      return parsed.origin;
+    } catch (error) {
+      const wrapped = new Error(`invalid_memory_suite_server_url:${compact(error?.message || error, 180)}`);
+      wrapped.code = 'MEMORY_SUITE_INVALID_SERVER_URL';
+      throw wrapped;
+    }
+  };
+
+  const resetBootstrapCache = () => {
+    state.bootstrap = { at: 0, baseUrl: '', value: null, pending: null };
+  };
+
+  const readConfig = async (force = false) => {
+    if (!force && state.transientMode && VALID_MODES.has(state.transientMode)) return { ...state.config, mode: state.transientMode };
+    if (!force && Date.now() - Number(state.config.at || 0) < configCacheMs) return state.config;
+    const rawMode = (await getArgumentValue(modeArguments, MODE_PLUGIN_ONLY)).trim().toLowerCase();
+    const mode = state.transientMode && VALID_MODES.has(state.transientMode) ? state.transientMode : normalizeMode(rawMode);
+    const rawUrl = await getArgumentValue(urlArguments, defaultUrl);
+    const url = normalizeServerUrl(rawUrl);
+    state.config = { at: Date.now(), mode, url };
+    return state.config;
+  };
+
+  const persistMode = async modeValue => {
+    const mode = normalizeMode(modeValue);
+    state.transientMode = mode;
+    try {
+      await setArgumentValue(modeArguments[0] || 'memory_suite_server_mode', mode);
+      state.config.at = 0;
+      state.transientMode = '';
+      const verified = await readConfig(true);
+      if (verified.mode !== mode) throw new Error(`memory_suite_mode_readback_mismatch:${verified.mode}->${mode}`);
+      setStatus('mode_changed', '', { mode, modeLabel: modeLabel(mode) });
+      return verified;
+    } catch (error) {
+      state.transientMode = '';
+      state.config.at = 0;
+      throw error;
+    }
+  };
+
+  const persistServerUrl = async urlValue => {
+    const url = normalizeServerUrl(urlValue);
+    await setArgumentValue(urlArguments[0] || 'memory_suite_server_url', url);
+    state.config.at = 0;
+    resetBootstrapCache();
+    const verified = await readConfig(true);
+    if (verified.url !== url) throw new Error(`memory_suite_url_readback_mismatch:${verified.url}->${url}`);
+    setStatus('url_changed', '', { url });
+    return verified;
+  };
+
+  const excluded = key => {
+    const lower = String(key || '').toLowerCase();
+    // Legacy chunk artifacts belong to the old storage adapter. The server stores
+    // the hydrated logical record and must never promote individual chunk pieces.
+    if (lower.includes('::chunk:v1:')) return true;
+    if (excludedKeys.has(lower)) return true;
+    if (excludedPrefixes.some(prefix => lower.startsWith(prefix))) return true;
+    if (excludedContains.some(part => lower.includes(part))) return true;
+    return false;
+  };
+
+  const matchesRoute = (space, key) => {
+    const normalized = String(key || '');
+    if (!normalized || excluded(normalized)) return false;
+    const prefixes = space === 'local' ? localPrefixes : pluginPrefixes;
+    const exact = space === 'local' ? localKeys : pluginKeys;
+    return exact.has(normalized) || prefixes.some(prefix => normalized.startsWith(prefix));
+  };
+
+  const fetchApi = (url, init = {}) => {
+    const requestInit = {
+      ...init,
+      networkRoute: 'local_network',
+      requestTimeoutMs,
+      logFetch: false
+    };
+    for (const api of apiCandidates()) {
+      if (typeof api?.nativeFetch === 'function') return api.nativeFetch(url, requestInit);
+      if (typeof api?.risuFetch === 'function') return api.risuFetch(url, requestInit);
+    }
+    if (typeof fetch === 'function') return fetch(url, requestInit);
+    throw new Error('memory_suite_server_fetch_unavailable');
+  };
+
+  const withTimeout = async (promise, label) => {
+    let timer = null;
+    try {
+      return await Promise.race([
+        Promise.resolve(promise),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => {
+            const error = new Error(`${label || 'Memory Suite request'} timed out after ${requestTimeoutMs}ms`);
+            error.code = 'MEMORY_SUITE_TIMEOUT';
+            reject(error);
+          }, requestTimeoutMs);
+        })
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  };
+
+  const responseText = async (response, label) => {
+    if (typeof response?.text === 'function') return await withTimeout(response.text(), `${label} response`);
+    if (typeof response?.json === 'function') return JSON.stringify(await withTimeout(response.json(), `${label} response`));
+    if (typeof response === 'string') return response;
+    if (response && typeof response === 'object' && Object.prototype.hasOwnProperty.call(response, 'data')) {
+      return typeof response.data === 'string' ? response.data : JSON.stringify(response.data);
+    }
+    return JSON.stringify(response || {});
+  };
+
+  const fetchJson = async (url, init = {}, label = 'Memory Suite request') => {
+    const response = await withTimeout(fetchApi(url, init), label);
+    const raw = await responseText(response, label);
+    let payload = null;
+    try { payload = raw ? JSON.parse(raw) : {}; }
+    catch (_) { throw new Error('memory_suite_server_invalid_json'); }
+    const status = Number(response?.status || payload?.status || 0);
+    const ok = typeof response?.ok === 'boolean' ? response.ok : (status ? status >= 200 && status < 300 : payload?.ok === true);
+    if (!ok || payload?.ok !== true) {
+      const error = new Error(payload?.error || `memory_suite_server_http_${status || 'unknown'}`);
+      error.status = status;
+      error.payload = payload;
+      throw error;
+    }
+    return payload;
+  };
+
+  const validateBootstrapPayload = (payload, requestedUrl = '') => {
+    if (payload?.schema !== 'memory-suite.storage.bootstrap.v1' || !payload?.token || !payload?.url) {
+      throw new Error('memory_suite_bootstrap_contract_mismatch');
+    }
+    if (Number(payload.protocol?.major || 0) !== 1) throw new Error('memory_suite_protocol_major_incompatible');
+    if (!Array.isArray(payload.namespaces) || !payload.namespaces.includes(namespace)) {
+      throw new Error(`memory_suite_namespace_not_supported:${namespace}`);
+    }
+    for (const capability of requiredCapabilities) {
+      if (payload.capabilities?.[capability] !== true) throw new Error(`memory_suite_capability_missing:${capability}`);
+    }
+    return {
+      requestedUrl: requestedUrl || '',
+      url: String(payload.url).replace(/\/+$/, ''),
+      token: String(payload.token),
+      version: String(payload.version || ''),
+      protocol: payload.protocol || {},
+      capabilities: payload.capabilities || {},
+      namespaces: Array.isArray(payload.namespaces) ? payload.namespaces.slice() : []
+    };
+  };
+
+  const bootstrapAtUrl = async urlValue => {
+    const url = normalizeServerUrl(urlValue);
+    const payload = await fetchJson(`${url}/bootstrap`, {
+      method: 'GET',
+      headers: {
+        'X-Memory-Suite-Plugin': pluginId,
+        'X-Memory-Suite-Plugin-Version': pluginVersion
+      }
+    }, 'Memory Suite connection test');
+    return validateBootstrapPayload(payload, url);
+  };
+
+  const testConnection = async urlValue => {
+    const config = await readConfig(true).catch(() => ({ mode: MODE_PLUGIN_ONLY, url: defaultUrl }));
+    const url = normalizeServerUrl(urlValue || config.url || defaultUrl);
+    const startedAt = Date.now();
+    try {
+      const connection = await bootstrapAtUrl(url);
+      const integrityPayload = await fetchJson(`${connection.url}/v1/integrity?namespace=${encodeURIComponent(namespace)}`, {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${connection.token}`,
+          'X-Memory-Suite-Plugin': pluginId,
+          'X-Memory-Suite-Plugin-Version': pluginVersion
+        }
+      }, 'Memory Suite namespace integrity');
+      const integrity = integrityPayload?.result || null;
+      if (integrity?.ok !== true) throw new Error(`memory_suite_namespace_integrity_failed:${integrity?.result || 'unknown'}`);
+      const result = {
+        ok: true,
+        url,
+        serverUrl: connection.url,
+        serverVersion: connection.version,
+        protocol: connection.protocol,
+        namespaces: connection.namespaces,
+        integrity,
+        records: Math.max(0, Number(integrity?.records || 0) || 0),
+        liveRecords: Math.max(0, Number(integrity?.liveRecords || 0) || 0),
+        tombstones: Math.max(0, Number(integrity?.tombstones || 0) || 0),
+        fileBytes: Math.max(0, Number(integrity?.fileBytes || 0) || 0),
+        durationMs: Date.now() - startedAt
+      };
+      if (url === config.url) {
+        state.bootstrap = { at: Date.now(), baseUrl: config.url, value: connection, pending: null };
+        setStatus('connected', '', { serverVersion: connection.version, url: connection.url, protocol: connection.protocol });
+      }
+      return result;
+    } catch (error) {
+      const result = { ok: false, url, error: compact(error?.message || error, 700), durationMs: Date.now() - startedAt };
+      if (url === config.url) setStatus('unavailable', result.error, { url });
+      return result;
+    }
+  };
+
+  const bootstrap = async (force = false, allowPluginOnly = false) => {
+    const config = await readConfig();
+    if (config.mode === MODE_PLUGIN_ONLY && allowPluginOnly !== true) return null;
+    const cached = state.bootstrap;
+    if (!force && cached.value && cached.baseUrl === config.url && Date.now() - Number(cached.at || 0) < bootstrapCacheMs) return cached.value;
+    if (!force && cached.pending && cached.baseUrl === config.url) return await cached.pending;
+    const pending = (async () => {
+      const payload = await fetchJson(`${config.url}/bootstrap`, {
+        method: 'GET',
+        headers: {
+          'X-Memory-Suite-Plugin': pluginId,
+          'X-Memory-Suite-Plugin-Version': pluginVersion
+        }
+      }, 'Memory Suite bootstrap');
+      const value = validateBootstrapPayload(payload, config.url);
+      state.bootstrap = { at: Date.now(), baseUrl: config.url, value, pending: null };
+      setStatus('connected', '', { serverVersion: value.version, url: value.url });
+      return value;
+    })();
+    state.bootstrap = { at: 0, baseUrl: config.url, value: null, pending };
+    try {
+      return await pending;
+    } catch (error) {
+      state.bootstrap = { at: 0, baseUrl: config.url, value: null, pending: null };
+      setStatus('unavailable', error?.message || error, { url: config.url });
+      warnOnce(`server_unavailable_${compact(error?.message || error, 120)}`, error);
+      throw error;
+    }
+  };
+
+  const request = async (method, route, body = null, requestOptions = {}) => {
+    const connection = await bootstrap(requestOptions.forceBootstrap === true, requestOptions.allowPluginOnly === true);
+    if (!connection) throw new Error('memory_suite_server_not_enabled');
+    const requestScope = requestOptions.scope && typeof requestOptions.scope === 'object'
+      ? requestOptions.scope
+      : state.scopeRouting.current;
+    const requestScopeId = String(requestOptions.scopeId || requestScope?.scopeId || '').trim();
+    const registeredMode = requestScopeId ? state.scopeRouting.registry?.entries?.[requestScopeId]?.mode : '';
+    const transientMode = requestScopeId ? state.scopeRouting.transientModes.get(requestScopeId) : '';
+    const requestMode = normalizeMode(requestOptions.storageMode || transientMode || registeredMode || state.config.mode || MODE_PLUGIN_ONLY);
+    const init = {
+      method,
+      headers: {
+        Authorization: `Bearer ${connection.token}`,
+        'X-Memory-Suite-Plugin': pluginId,
+        'X-Memory-Suite-Plugin-Version': pluginVersion,
+        ...(requestScopeId ? { 'X-Memory-Suite-Scope-Id': encodeURIComponent(requestScopeId) } : {}),
+        'X-Memory-Suite-Storage-Mode': requestMode,
+        ...(requestOptions.extraHeaders && typeof requestOptions.extraHeaders === 'object' ? requestOptions.extraHeaders : {}),
+        ...(body == null ? {} : { 'Content-Type': 'application/json' })
+      },
+      ...(body == null ? {} : { body: JSON.stringify(body) })
+    };
+    try {
+      return await fetchJson(`${connection.url}${route}`, init, `Memory Suite ${method} ${route}`);
+    } catch (error) {
+      if (error?.status === 403 && requestOptions.authRetry !== false) {
+        await bootstrap(true, requestOptions.allowPluginOnly === true);
+        return await request(method, route, body, { ...requestOptions, authRetry: false });
+      }
+      setStatus('request_failed', error?.message || error, { route, method });
+      throw error;
+    }
+  };
+
+  const operationId = kind => {
+    let unique = '';
+    try { unique = globalThis?.crypto?.randomUUID?.() || ''; } catch (_) {}
+    if (!unique) unique = `${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}_${Math.random().toString(36).slice(2)}`;
+    const prefix = `${namespace}_${kind}_${pluginId}`.replace(/[^A-Za-z0-9._:-]/g, '_').slice(0, 80);
+    return `${prefix}_${unique.replace(/[^A-Za-z0-9._:-]/g, '')}`.slice(0, 238);
+  };
+
+  const verifyReceipt = (payload, expectedId, expectedSpace, expectedKey) => {
+    const receipt = payload?.result || {};
+    if (receipt.schema !== 'memory-suite.storage.receipt.v1'
+      || receipt.namespace !== namespace
+      || receipt.operationId !== expectedId
+      || receipt.space !== expectedSpace
+      || receipt.key !== expectedKey
+      || receipt.durable !== true
+      || receipt.verified !== true
+      || !receipt.digest
+      || Number(receipt.revision || 0) < 1) {
+      throw new Error('memory_suite_durable_receipt_invalid');
+    }
+    return receipt;
+  };
+
+  const statusReadback = async (id, requestOptions = {}) => {
+    try {
+      return await request('GET', `/v1/operations/${encodeURIComponent(namespace)}/${encodeURIComponent(id)}`, null, { authRetry: true, allowPluginOnly: requestOptions.allowPluginOnly === true });
+    } catch (error) {
+      if (error?.status === 404) return null;
+      throw error;
+    }
+  };
+
+  const remoteGet = async (space, key, requestOptions = {}) => {
+    const payload = await request(
+      'GET',
+      `/v1/kv/get?namespace=${encodeURIComponent(namespace)}&space=${encodeURIComponent(space)}&key=${encodeURIComponent(key)}`,
+      null,
+      { allowPluginOnly: requestOptions.allowPluginOnly === true }
+    );
+    return payload?.result || {};
+  };
+
+  const remoteGetMany = async (space, keys = [], requestOptions = {}) => {
+    const list = Array.isArray(keys) ? keys.map(value => String(value || '')).filter(Boolean).slice(0, 512) : [];
+    if (!list.length) return { values: {} };
+    const payload = await request(
+      'POST',
+      '/v1/kv/get-many',
+      { namespace, space, keys: list },
+      { allowPluginOnly: requestOptions.allowPluginOnly === true }
+    );
+    return payload?.result || { values: {} };
+  };
+
+  const remoteKeys = async (space, prefix = '', requestOptions = {}) => {
+    const payload = await request(
+      'GET',
+      `/v1/kv/keys?namespace=${encodeURIComponent(namespace)}&space=${encodeURIComponent(space)}&prefix=${encodeURIComponent(prefix)}`,
+      null,
+      { allowPluginOnly: requestOptions.allowPluginOnly === true }
+    );
+    return payload?.result || { keys: [], tombstones: [] };
+  };
+
+  const remoteIntegrity = async (requestOptions = {}) => {
+    const payload = await request(
+      'GET',
+      `/v1/integrity?namespace=${encodeURIComponent(namespace)}`,
+      null,
+      { allowPluginOnly: requestOptions.allowPluginOnly === true }
+    );
+    const result = payload?.result || {};
+    if (result.ok !== true || String(result.result || '') !== 'ok') {
+      const error = new Error(`memory_suite_namespace_integrity_failed:${result.result || 'unknown'}`);
+      error.code = 'MEMORY_SUITE_INTEGRITY_FAILED';
+      throw error;
+    }
+    return result;
+  };
+
+  const remoteMutate = async (kind, space, key, value, mutateOptions = {}) => {
+    const id = operationId(kind);
+    const expectedRevision = Number.isInteger(Number(mutateOptions.expectedRevision))
+      ? Math.max(0, Number(mutateOptions.expectedRevision))
+      : null;
+    const body = {
+      namespace,
+      operationId: id,
+      space,
+      key,
+      ...(kind === 'set' ? { value } : {}),
+      ...(expectedRevision == null ? {} : { expectedRevision })
+    };
+    const verifyStored = async receipt => {
+      const stored = await remoteGet(space, key, { allowPluginOnly: mutateOptions.allowPluginOnly === true });
+      const valueMatches = kind === 'remove'
+        ? stored.exists === false && stored.tombstone === true
+        : stored.exists === true && jsonComparable(stored.value) === jsonComparable(value);
+      if (!valueMatches
+        || Number(stored.revision || 0) !== Number(receipt.revision || 0)
+        || String(stored.digest || '') !== String(receipt.digest || '')) {
+        throw new Error('memory_suite_end_to_end_readback_mismatch');
+      }
+      setStatus('durable', '', { operationId: id, revision: receipt.revision, key: compact(key, 180), space });
+      return { ...receipt, endToEndVerified: true };
+    };
+    try {
+      const payload = await request('POST', `/v1/kv/${kind}`, body, { allowPluginOnly: mutateOptions.allowPluginOnly === true });
+      return await verifyStored(verifyReceipt(payload, id, space, key));
+    } catch (error) {
+      try {
+        const status = await statusReadback(id, { allowPluginOnly: mutateOptions.allowPluginOnly === true });
+        if (status) return await verifyStored(verifyReceipt(status, id, space, key));
+      } catch (_) {}
+      error.storageMutationIndeterminate = true;
+      error.storageMutationKey = key;
+      error.storageOperationId = id;
+      throw error;
+    }
+  };
+
+  const serializeMutation = async (space, key, factory) => {
+    const lockKey = `${space}\n${key}`;
+    const previous = mutationTails.get(lockKey) || Promise.resolve();
+    const operation = Promise.resolve(previous).catch(() => undefined).then(factory);
+    const tail = operation.then(() => undefined, () => undefined);
+    mutationTails.set(lockKey, tail);
+    tail.then(() => {
+      if (mutationTails.get(lockKey) === tail) mutationTails.delete(lockKey);
+    });
+    return await operation;
+  };
+
+  const isNullishStorageValue = value => value === null || value === undefined || value === '';
+
+  const legacyRead = async (legacy, key) => {
+    if (!legacy || typeof legacy.getItem !== 'function') return null;
+    return await legacy.getItem(key);
+  };
+
+  const legacyWriteVerified = async (legacy, key, value) => {
+    if (!legacy || typeof legacy.setItem !== 'function') return false;
+    const result = await legacy.setItem(key, value);
+    if (result === false) return false;
+    if (typeof legacy.getItem === 'function') {
+      const readback = await legacy.getItem(key);
+      if (jsonComparable(readback) !== jsonComparable(value)) {
+        const error = new Error(`memory_suite_pluginstorage_readback_mismatch:${compact(key, 160)}`);
+        error.code = 'MEMORY_SUITE_LOCAL_READBACK_MISMATCH';
+        throw error;
+      }
+    }
+    return true;
+  };
+
+  const legacyRemoveVerified = async (legacy, key) => {
+    if (!legacy) return false;
+    let result = false;
+    if (typeof legacy.removeItem === 'function') result = (await legacy.removeItem(key)) !== false;
+    else if (typeof legacy.setItem === 'function') result = (await legacy.setItem(key, null)) !== false;
+    if (!result) return false;
+    if (typeof legacy.getItem === 'function') {
+      const readback = await legacy.getItem(key);
+      if (!isNullishStorageValue(readback)) {
+        const error = new Error(`memory_suite_pluginstorage_remove_readback_mismatch:${compact(key, 160)}`);
+        error.code = 'MEMORY_SUITE_LOCAL_REMOVE_READBACK_MISMATCH';
+        throw error;
+      }
+    }
+    return true;
+  };
+
+  const legacyKeys = async legacy => {
+    if (!legacy || typeof legacy.keys !== 'function') return null;
+    const listed = await legacy.keys();
+    return Array.isArray(listed) ? [...new Set(listed.map(String).filter(Boolean))] : [];
+  };
+
+  const chunkOwnerKey = key => {
+    const raw = String(key || '');
+    const marker = '::chunk:v1:';
+    const index = raw.indexOf(marker);
+    return index > 0 ? raw.slice(0, index) : '';
+  };
+
+  const isOwnedChunkArtifact = (space, key) => {
+    const owner = chunkOwnerKey(key);
+    return !!owner && matchesRoute(space, owner);
+  };
+
+  const listRoutedLegacyKeys = async (legacy, space, includeArtifacts = false) => {
+    const listed = await legacyKeys(legacy);
+    if (listed == null) {
+      const error = new Error('memory_suite_pluginstorage_key_enumeration_required');
+      error.code = 'MEMORY_SUITE_KEYS_UNAVAILABLE';
+      throw error;
+    }
+    return listed.filter(key => matchesRoute(space, key) || (includeArtifacts && isOwnedChunkArtifact(space, key)));
+  };
+
+  const migrateFromLegacy = async (space, key, legacyGet = null) => {
+    if (typeof legacyGet !== 'function') return { state: 'missing', value: null };
+    return await serializeMutation(space, key, async () => {
+      const current = await remoteGet(space, key);
+      if (current.exists === true) return { state: 'server', value: current.value };
+      if (current.tombstone === true) return { state: 'tombstone', value: null };
+      const legacy = await legacyGet();
+      if (legacy === null || legacy === undefined) return { state: 'missing', value: null };
+      try {
+        await remoteMutate('set', space, key, legacy, { expectedRevision: 0 });
+        return { state: 'migrated', value: legacy };
+      } catch (error) {
+        if (error?.status === 409) {
+          const afterConflict = await remoteGet(space, key);
+          if (afterConflict.exists === true) return { state: 'server', value: afterConflict.value };
+          if (afterConflict.tombstone === true) return { state: 'tombstone', value: null };
+        }
+        throw error;
+      }
+    });
+  };
+
+  const synchronizeLegacyWithServer = async (legacy, space = 'plugin', options = {}) => {
+    if (!legacy) throw new Error('memory_suite_pluginstorage_unavailable');
+    const config = await readConfig(true);
+    if (config.mode === MODE_PLUGIN_ONLY && options.allowPluginOnly !== true) {
+      throw new Error('memory_suite_server_mode_required_for_sync');
+    }
+    const onProgress = typeof options.onProgress === 'function' ? options.onProgress : null;
+    const allowPluginOnly = options.allowPluginOnly === true;
+    const progress = {
+      schema: 'memory-suite.sync-progress.v1', namespace, space,
+      phase: 'integrity_before', currentAction: '서버 무결성 확인', currentKey: '',
+      totalItems: 0, processedItems: 0, processedBytes: 0, transferredBytes: 0,
+      uploaded: 0, restored: 0, matched: 0, removedByTombstone: 0,
+      failureCount: 0, conflictCount: 0, startedAt: Date.now(), lastActivityAt: Date.now()
+    };
+    const report = (phase, patch = {}) => {
+      Object.assign(progress, patch || {}, { phase: String(phase || progress.phase), lastActivityAt: Date.now() });
+      try { onProgress?.({ ...progress }); } catch (_) {}
+    };
+    report('integrity_before', { message: '서버 DATA 무결성을 확인하고 있습니다.' });
+    const integrityBefore = await remoteIntegrity({ allowPluginOnly });
+    report('inventory', { currentAction: '데이터 목록 조사', message: 'pluginStorage와 서버의 데이터 목록을 비교하고 있습니다.' });
+    const localLogicalKeys = (await listRoutedLegacyKeys(legacy, space, false)).slice().sort();
+    const serverListing = await remoteKeys(space, '', { allowPluginOnly });
+    const serverKeys = new Set((serverListing.keys || []).map(String));
+    const serverTombstones = new Set((serverListing.tombstones || []).map(String));
+    const serverRecordBytes = new Map((Array.isArray(serverListing.records) ? serverListing.records : []).map(row => [String(row?.key || ''), Math.max(0, Number(row?.valueBytes || 0) || 0)]));
+    const localSet = new Set(localLogicalKeys);
+    const missingServerKeys = options.restoreMissingLocal === true
+      ? Array.from(serverKeys).filter(key => matchesRoute(space, key) && !localSet.has(key)).sort()
+      : [];
+    progress.totalItems = localLogicalKeys.length + missingServerKeys.length;
+    report('inventory_complete', {
+      currentAction: '목록 조사 완료',
+      localKeys: localLogicalKeys.length,
+      serverKeys: serverKeys.size,
+      serverTombstones: serverTombstones.size,
+      message: `처리 대상 ${progress.totalItems.toLocaleString()}개를 확인했습니다.`
+    });
+    const result = {
+      schema: 'memory-suite.sync.v1', namespace, space, startedAt: progress.startedAt,
+      localKeys: localLogicalKeys.length, uploaded: 0, restored: 0, removedByTombstone: 0,
+      matched: 0, conflicts: [], failures: [], integrityBefore, integrityAfter: null,
+      totalItems: progress.totalItems, processedItems: 0, processedBytes: 0, transferredBytes: 0
+    };
+    // A failed plugin_only -> mirror transition must never consume the only local
+    // copy merely because the server carries a deliberate scope-deletion tombstone.
+    const protectedConflictKeys = new Set();
+
+    for (const key of localLogicalKeys) {
+      let localBytes = 0;
+      let action = '비교';
+      try {
+        report('sync_local', { currentAction: 'pluginStorage → 서버 비교', currentKey: key });
+        const localValue = await legacyRead(legacy, key);
+        localBytes = isNullishStorageValue(localValue) ? 0 : storageValueBytes(localValue);
+        if (isNullishStorageValue(localValue)) {
+          action = '빈 값 건너뜀';
+        } else {
+          const remote = await remoteGet(space, key, { allowPluginOnly });
+          if (remote.exists === true && jsonComparable(remote.value) === jsonComparable(localValue)) {
+            result.matched += 1;
+            action = '일치 확인';
+          } else if (remote.tombstone === true && options.resurrectTombstones !== true) {
+            if (options.allowOverwrite === false) {
+              result.conflicts.push({ key, serverState: 'tombstone', localPreserved: true });
+              protectedConflictKeys.add(key);
+              action = '삭제 충돌 보존';
+            } else if (options.restoreMissingLocal === true) {
+              const removed = await legacyRemoveVerified(legacy, key);
+              if (!removed) throw new Error('pluginstorage_tombstone_apply_failed');
+              result.removedByTombstone += 1;
+              action = '서버 삭제 상태 반영';
+            } else {
+              result.conflicts.push({ key, serverState: 'tombstone' });
+              action = '삭제 충돌';
+            }
+          } else if (options.allowOverwrite === false && remote.exists === true) {
+            result.conflicts.push({ key, serverState: 'value' });
+            action = '기존 서버 값 충돌';
+          } else {
+            await remoteMutate('set', space, key, localValue, { allowPluginOnly });
+            const verified = await remoteGet(space, key, { allowPluginOnly });
+            if (verified.exists !== true || jsonComparable(verified.value) !== jsonComparable(localValue)) {
+              throw new Error('post_sync_server_readback_mismatch');
+            }
+            result.uploaded += 1;
+            progress.transferredBytes += localBytes;
+            action = '업로드·검증';
+          }
+        }
+      } catch (error) {
+        result.failures.push({ key, error: compact(error?.message || error, 220) });
+        action = '실패';
+      } finally {
+        result.processedItems += 1;
+        result.processedBytes += localBytes;
+        progress.processedItems = result.processedItems;
+        progress.processedBytes = result.processedBytes;
+        progress.uploaded = result.uploaded;
+        progress.restored = result.restored;
+        progress.matched = result.matched;
+        progress.removedByTombstone = result.removedByTombstone;
+        progress.failureCount = result.failures.length;
+        progress.conflictCount = result.conflicts.length;
+        report('sync_local', { currentAction: action, currentKey: key });
+      }
+    }
+
+    if (options.restoreMissingLocal === true) {
+      for (const key of missingServerKeys) {
+        const remoteBytes = Math.max(0, Number(serverRecordBytes.get(key) || 0) || 0);
+        let action = '서버 → pluginStorage 복구';
+        try {
+          report('restore_missing_local', { currentAction: action, currentKey: key });
+          const remote = await remoteGet(space, key, { allowPluginOnly });
+          if (remote.exists !== true) {
+            action = '서버 값 없음';
+          } else {
+            const ok = await legacyWriteVerified(legacy, key, remote.value);
+            if (!ok) throw new Error('pluginstorage_restore_write_failed');
+            result.restored += 1;
+            progress.transferredBytes += remoteBytes || storageValueBytes(remote.value);
+            action = '복구·검증';
+          }
+        } catch (error) {
+          result.failures.push({ key, error: compact(error?.message || error, 220) });
+          action = '복구 실패';
+        } finally {
+          result.processedItems += 1;
+          result.processedBytes += remoteBytes;
+          progress.processedItems = result.processedItems;
+          progress.processedBytes = result.processedBytes;
+          progress.uploaded = result.uploaded;
+          progress.restored = result.restored;
+          progress.matched = result.matched;
+          progress.removedByTombstone = result.removedByTombstone;
+          progress.failureCount = result.failures.length;
+          progress.conflictCount = result.conflicts.length;
+          report('restore_missing_local', { currentAction: action, currentKey: key });
+        }
+      }
+      // Tombstones for keys that were already present locally are handled in the
+      // local-key pass above. Re-check only for values that survived unexpectedly.
+      for (const key of serverTombstones) {
+        if (!matchesRoute(space, key) || !localSet.has(key) || protectedConflictKeys.has(key)) continue;
+        try {
+          const current = await legacyRead(legacy, key);
+          if (!isNullishStorageValue(current)) {
+            const ok = await legacyRemoveVerified(legacy, key);
+            if (!ok) throw new Error('pluginstorage_tombstone_apply_failed');
+            result.removedByTombstone += 1;
+          }
+        } catch (error) {
+          result.failures.push({ key, error: compact(error?.message || error, 220) });
+        }
+      }
+    }
+
+    report('integrity_after', { currentAction: '최종 무결성 확인', currentKey: '', message: '동기화 후 서버 DATA 무결성을 확인하고 있습니다.' });
+    result.integrityAfter = await remoteIntegrity({ allowPluginOnly });
+    result.finishedAt = Date.now();
+    result.ok = result.failures.length === 0 && result.conflicts.length === 0;
+    progress.failureCount = result.failures.length;
+    progress.conflictCount = result.conflicts.length;
+    progress.uploaded = result.uploaded;
+    progress.restored = result.restored;
+    progress.matched = result.matched;
+    progress.removedByTombstone = result.removedByTombstone;
+    report(result.ok ? 'space_complete' : 'space_incomplete', {
+      currentAction: result.ok ? '공간 동기화 완료' : '동기화 확인 필요', currentKey: '',
+      message: result.ok ? `${space} 저장소 동기화를 완료했습니다.` : `충돌 ${result.conflicts.length}건 · 실패 ${result.failures.length}건`
+    });
+    state.management.lastResult = result;
+    if (!result.ok) {
+      const error = new Error(`memory_suite_sync_incomplete:conflicts=${result.conflicts.length},failures=${result.failures.length}`);
+      error.code = 'MEMORY_SUITE_SYNC_INCOMPLETE';
+      error.result = result;
+      throw error;
+    }
+    return result;
+  };
+
+  const verifyServerPreservation = async (legacy = state.legacy.plugin) => {
+    if (!legacy) throw new Error('memory_suite_pluginstorage_unavailable');
+    const config = await readConfig(true);
+    if (config.mode === MODE_PLUGIN_ONLY) {
+      const error = new Error('plugin_only_mode_has_no_verified_server_copy');
+      error.code = 'MEMORY_SUITE_SERVER_COPY_NOT_ACTIVE';
+      throw error;
+    }
+    if (config.mode === MODE_MIRROR) {
+      await synchronizeLegacyWithServer(legacy, 'plugin', { allowOverwrite: true, restoreMissingLocal: true });
+    }
+    const integrity = await remoteIntegrity();
+    const keys = await listRoutedLegacyKeys(legacy, 'plugin', false);
+    const result = { schema: 'memory-suite.server-preservation.v1', namespace, mode: config.mode, integrity, checked: 0, exact: 0, covered: 0, unsafe: [] };
+    for (const key of keys) {
+      const localValue = await legacyRead(legacy, key);
+      if (isNullishStorageValue(localValue)) continue;
+      const remote = await remoteGet('plugin', key);
+      result.checked += 1;
+      if (config.mode === MODE_MIRROR) {
+        if (remote.exists === true && jsonComparable(remote.value) === jsonComparable(localValue)) result.exact += 1;
+        else result.unsafe.push({ key, reason: remote.tombstone === true ? 'server_tombstone' : (remote.exists === true ? 'value_mismatch' : 'server_missing') });
+      } else {
+        if (remote.exists === true || remote.tombstone === true) result.covered += 1;
+        else result.unsafe.push({ key, reason: 'server_has_no_record_or_tombstone' });
+      }
+    }
+    result.ok = integrity.ok === true && result.unsafe.length === 0;
+    if (!result.ok) {
+      const error = new Error(`memory_suite_server_preservation_verification_failed:${result.unsafe.length}`);
+      error.code = 'MEMORY_SUITE_SERVER_PRESERVATION_FAILED';
+      error.result = result;
+      throw error;
+    }
+    state.management.lastResult = result;
+    return result;
+  };
+
+  const restoreServerSpaceToLegacy = async (legacy, space = 'plugin', options = {}) => {
+    if (!legacy) throw new Error(`memory_suite_${space}_storage_unavailable`);
+    const normalizedSpace = String(space || 'plugin') === 'local' ? 'local' : 'plugin';
+    const onProgress = typeof options.onProgress === 'function' ? options.onProgress : null;
+    const progress = {
+      schema: 'memory-suite.restore-progress.v1', namespace, space: normalizedSpace,
+      phase: 'integrity_before', currentAction: '서버 무결성 확인', currentKey: '', totalItems: 0, processedItems: 0,
+      processedBytes: 0, transferredBytes: 0, restored: 0, removed: 0, verified: 0, failureCount: 0,
+      startedAt: Date.now(), lastActivityAt: Date.now()
+    };
+    const report = (phase, patch = {}) => {
+      Object.assign(progress, patch || {}, { phase, lastActivityAt: Date.now() });
+      try { onProgress?.({ ...progress }); } catch (_) {}
+    };
+    report('integrity_before', { message: '서버 DATA 무결성을 확인하고 있습니다.' });
+    const integrity = await remoteIntegrity({ allowPluginOnly: options.allowPluginOnly === true });
+    report('inventory', { currentAction: '복구 대상 조사', message: '서버 DATA와 pluginStorage를 비교하고 있습니다.' });
+    const listing = await remoteKeys(normalizedSpace, '', { allowPluginOnly: options.allowPluginOnly === true });
+    const serverKeys = (listing.keys || []).map(String).filter(key => matchesRoute(normalizedSpace, key)).sort();
+    const tombstones = (listing.tombstones || []).map(String).filter(key => matchesRoute(normalizedSpace, key)).sort();
+    const recordBytes = new Map((Array.isArray(listing.records) ? listing.records : []).map(row => [String(row?.key || ''), Math.max(0, Number(row?.valueBytes || 0) || 0)]));
+    const localKeys = await listRoutedLegacyKeys(legacy, normalizedSpace, false);
+    const represented = new Set([...serverKeys, ...tombstones]);
+    const untracked = localKeys.filter(key => !represented.has(key));
+    const pruneKeys = options.pruneUntracked === true ? untracked.slice().sort() : [];
+    progress.totalItems = pruneKeys.length + serverKeys.length + tombstones.length;
+    report('inventory_complete', { currentAction: '복구 대상 조사 완료', message: `복구·검증 대상 ${progress.totalItems.toLocaleString()}개를 확인했습니다.` });
+    const result = {
+      schema: 'memory-suite.restore-to-legacy-storage.v1', namespace, space: normalizedSpace,
+      restored: 0, removed: 0, verified: 0, pruned: 0, failures: [],
+      untrackedLocalKeys: untracked.slice(), integrity,
+      totalItems: progress.totalItems, processedItems: 0, processedBytes: 0, transferredBytes: 0
+    };
+
+    if (options.pruneUntracked === true) {
+      for (const key of pruneKeys) {
+        let action = '추적되지 않은 로컬 값 정리';
+        try {
+          report('prune_local', { currentAction: action, currentKey: key });
+          const ok = await legacyRemoveVerified(legacy, key);
+          if (!ok) throw new Error('untracked_local_prune_failed');
+          result.pruned += 1;
+          action = '정리 완료';
+        } catch (error) {
+          result.failures.push({ key, error: compact(error?.message || error, 220) }); action = '정리 실패';
+        } finally {
+          result.processedItems += 1; progress.processedItems = result.processedItems; progress.failureCount = result.failures.length;
+          report('prune_local', { currentAction: action, currentKey: key });
+        }
+      }
+      result.untrackedLocalKeys = [];
+    }
+
+    for (let offset = 0; offset < serverKeys.length; offset += 256) {
+      const batchKeys = serverKeys.slice(offset, offset + 256);
+      let values = {};
+      try { values = (await remoteGetMany(normalizedSpace, batchKeys, { allowPluginOnly: options.allowPluginOnly === true }))?.values || {}; }
+      catch (_) {}
+      for (const key of batchKeys) {
+        const bytes = Math.max(0, Number(recordBytes.get(key) || 0) || 0);
+        let action = '서버 → pluginStorage 복구';
+        try {
+          report('restore_values', { currentAction: action, currentKey: key });
+          const remote = values[key] || await remoteGet(normalizedSpace, key, { allowPluginOnly: options.allowPluginOnly === true });
+          if (remote.exists !== true) throw new Error('server_key_disappeared_during_restore');
+          const ok = await legacyWriteVerified(legacy, key, remote.value);
+          if (!ok) throw new Error('legacy_restore_write_failed');
+          result.restored += 1; result.verified += 1; result.transferredBytes += bytes || storageValueBytes(remote.value);
+          action = '복구·readback 검증';
+        } catch (error) {
+          result.failures.push({ key, error: compact(error?.message || error, 220) }); action = '복구 실패';
+        } finally {
+          result.processedItems += 1; result.processedBytes += bytes;
+          progress.processedItems = result.processedItems; progress.processedBytes = result.processedBytes; progress.transferredBytes = result.transferredBytes;
+          progress.restored = result.restored; progress.verified = result.verified; progress.failureCount = result.failures.length;
+          report('restore_values', { currentAction: action, currentKey: key });
+        }
+      }
+    }
+    for (const key of tombstones) {
+      let action = '서버 tombstone 반영';
+      try {
+        report('restore_tombstones', { currentAction: action, currentKey: key });
+        const current = await legacyRead(legacy, key);
+        if (!isNullishStorageValue(current)) {
+          const ok = await legacyRemoveVerified(legacy, key);
+          if (!ok) throw new Error('legacy_restore_tombstone_failed');
+          result.removed += 1;
+        }
+        action = '삭제 상태 검증';
+      } catch (error) {
+        result.failures.push({ key, error: compact(error?.message || error, 220) }); action = 'tombstone 반영 실패';
+      } finally {
+        result.processedItems += 1; progress.processedItems = result.processedItems; progress.removed = result.removed; progress.failureCount = result.failures.length;
+        report('restore_tombstones', { currentAction: action, currentKey: key });
+      }
+    }
+    result.ok = result.failures.length === 0 && (options.requireFullCoverage !== true || result.untrackedLocalKeys.length === 0);
+    report(result.ok ? 'space_complete' : 'space_incomplete', {
+      currentAction: result.ok ? '복구 완료' : '복구 확인 필요', currentKey: '',
+      message: result.ok ? `${normalizedSpace} 저장소 복구를 완료했습니다.` : `실패 ${result.failures.length}건 · 추적되지 않은 값 ${result.untrackedLocalKeys.length}건`
+    });
+    if (!result.ok) {
+      const error = new Error(`memory_suite_legacy_restore_incomplete:space=${normalizedSpace},failures=${result.failures.length},untracked=${result.untrackedLocalKeys.length}`);
+      error.code = 'MEMORY_SUITE_RESTORE_INCOMPLETE';
+      error.result = result;
+      throw error;
+    }
+    state.management.lastResult = result;
+    return result;
+  };
+
+  const restoreServerToPluginStorage = async (options = {}) => await restoreServerSpaceToLegacy(
+    options.legacy || state.legacy.plugin,
+    'plugin',
+    options
+  );
+
+  const verifyScopedLegacyPreservation = async (legacy, space, keys = []) => {
+    const normalizedSpace = String(space || 'plugin') === 'local' ? 'local' : 'plugin';
+    const requested = [...new Set((Array.isArray(keys) ? keys : []).map(String).filter(key => matchesRoute(normalizedSpace, key)))];
+    const result = { schema: 'memory-suite.scoped-legacy-preservation.v1', namespace, space: normalizedSpace, requested: requested.length, exact: 0, tombstones: 0, failures: [] };
+    if (!requested.length) return { ...result, ok: true };
+    const values = (await remoteGetMany(normalizedSpace, requested, { allowPluginOnly: true }))?.values || {};
+    for (const key of requested) {
+      try {
+        const remote = values[key] || await remoteGet(normalizedSpace, key, { allowPluginOnly: true });
+        const local = await legacyRead(legacy, key);
+        if (remote.tombstone === true || remote.exists === false) {
+          if (!isNullishStorageValue(local)) throw new Error('local_value_survives_server_tombstone');
+          result.tombstones += 1;
+        } else if (remote.exists === true && jsonComparable(local) === jsonComparable(remote.value)) {
+          result.exact += 1;
+        } else {
+          throw new Error(remote.exists === true ? 'local_value_mismatch' : 'server_record_missing');
+        }
+      } catch (error) { result.failures.push({ key, error: compact(error?.message || error, 220) }); }
+    }
+    result.ok = result.failures.length === 0;
+    if (!result.ok) {
+      const error = new Error(`memory_suite_scoped_legacy_preservation_failed:${normalizedSpace}:${result.failures.length}`);
+      error.code = 'MEMORY_SUITE_SCOPE_PRESERVATION_FAILED';
+      error.result = result;
+      throw error;
+    }
+    return result;
+  };
+
+  const setModeSafely = async (requestedMode, operationOptions = {}) => {
+    const target = normalizeMode(requestedMode);
+    const current = await readConfig(true);
+    if (target === current.mode) return { changed: false, from: current.mode, to: target, modeLabel: modeLabel(target) };
+    const legacy = state.legacy.plugin;
+    if (!legacy) throw new Error('memory_suite_pluginstorage_unavailable');
+    const onProgress = typeof operationOptions.onProgress === 'function' ? operationOptions.onProgress : null;
+    try {
+      if (current.mode === MODE_PLUGIN_ONLY && (target === MODE_MIRROR || target === MODE_SERVER_ONLY)) {
+        const synchronized = await synchronizeAllLegacy({
+          allowPluginOnly: true,
+          allowOverwrite: false,
+          restoreMissingLocal: target === MODE_MIRROR,
+          onProgress
+        });
+        if (!synchronized.ok) throw new Error(`memory_suite_mode_seed_sync_failed:${synchronized.failures.length}`);
+        // The first pass proves the existing server contains no conflicting data.
+        // Only after that proof do new writes temporarily mirror to both stores while
+        // a final settle pass closes the race between initial inventory and mode commit.
+        state.transientMode = MODE_MIRROR;
+        const settled = await synchronizeAllLegacy({
+          allowPluginOnly: true,
+          allowOverwrite: true,
+          restoreMissingLocal: target === MODE_MIRROR,
+          onProgress
+        });
+        if (!settled.ok) throw new Error(`memory_suite_mode_settle_sync_failed:${settled.failures.length}`);
+        const integrity = await remoteIntegrity({ allowPluginOnly: true });
+        if (integrity?.ok !== true) throw new Error(`memory_suite_mode_integrity_failed:${integrity?.result || 'unknown'}`);
+      } else if (current.mode === MODE_MIRROR && target === MODE_SERVER_ONLY) {
+        const synchronized = await synchronizeAllLegacy({ allowOverwrite: true, restoreMissingLocal: true, onProgress });
+        if (!synchronized.ok) throw new Error(`memory_suite_mode_final_sync_failed:${synchronized.failures.length}`);
+        const integrity = await remoteIntegrity();
+        if (integrity?.ok !== true) throw new Error(`memory_suite_mode_integrity_failed:${integrity?.result || 'unknown'}`);
+      } else if (current.mode === MODE_SERVER_ONLY && (target === MODE_MIRROR || target === MODE_PLUGIN_ONLY)) {
+        const restored = await restoreAllLegacyFromServer({ pruneUntracked: true, requireFullCoverage: true, onProgress });
+        if (!restored.ok) throw new Error(`memory_suite_mode_restore_failed:${restored.failures.length}`);
+      }
+      const config = await persistMode(target);
+      return { changed: true, from: current.mode, to: target, modeLabel: modeLabel(target), config };
+    } catch (error) {
+      state.transientMode = '';
+      state.config.at = 0;
+      throw error;
+    }
+  };
+
+  const synchronizeAllLegacy = async (options = {}) => {
+    const result = { schema: 'memory-suite.sync-all.v1', namespace, plugin: null, local: null, uploaded: 0, restored: 0, matched: 0, failures: [], totalItems: 0, processedItems: 0, processedBytes: 0, transferredBytes: 0 };
+    const forward = progress => { try { options.onProgress?.(progress); } catch (_) {} };
+    if (state.legacy.plugin) {
+      result.plugin = await synchronizeLegacyWithServer(state.legacy.plugin, 'plugin', {
+        allowPluginOnly: options.allowPluginOnly === true,
+        allowOverwrite: options.allowOverwrite !== false,
+        restoreMissingLocal: options.restoreMissingLocal !== false,
+        onProgress: forward
+      });
+      result.uploaded += Number(result.plugin?.uploaded || 0);
+      result.restored += Number(result.plugin?.restored || 0);
+      result.matched += Number(result.plugin?.matched || 0);
+      result.totalItems += Number(result.plugin?.totalItems || 0);
+      result.processedItems += Number(result.plugin?.processedItems || 0);
+      result.processedBytes += Number(result.plugin?.processedBytes || 0);
+      result.transferredBytes += Number(result.plugin?.transferredBytes || 0);
+      result.failures.push(...(Array.isArray(result.plugin?.failures) ? result.plugin.failures.map(row => ({ space: 'plugin', ...row })) : []));
+    }
+    if (state.legacy.local && typeof state.legacy.local?.keys === 'function') {
+      result.local = await synchronizeLegacyWithServer(state.legacy.local, 'local', {
+        allowPluginOnly: options.allowPluginOnly === true,
+        allowOverwrite: options.allowOverwrite !== false,
+        restoreMissingLocal: options.restoreMissingLocal !== false,
+        onProgress: forward
+      });
+      result.uploaded += Number(result.local?.uploaded || 0);
+      result.restored += Number(result.local?.restored || 0);
+      result.matched += Number(result.local?.matched || 0);
+      result.totalItems += Number(result.local?.totalItems || 0);
+      result.processedItems += Number(result.local?.processedItems || 0);
+      result.processedBytes += Number(result.local?.processedBytes || 0);
+      result.transferredBytes += Number(result.local?.transferredBytes || 0);
+      result.failures.push(...(Array.isArray(result.local?.failures) ? result.local.failures.map(row => ({ space: 'local', ...row })) : []));
+    }
+    result.ok = result.failures.length === 0;
+    return result;
+  };
+
+  const restoreAllLegacyFromServer = async (options = {}) => {
+    const result = { schema: 'memory-suite.restore-all.v1', namespace, plugin: null, local: null, restored: 0, removed: 0, verified: 0, failures: [], totalItems: 0, processedItems: 0, processedBytes: 0, transferredBytes: 0 };
+    const forward = progress => { try { options.onProgress?.(progress); } catch (_) {} };
+    if (state.legacy.plugin) {
+      result.plugin = await restoreServerSpaceToLegacy(state.legacy.plugin, 'plugin', {
+        pruneUntracked: options.pruneUntracked === true,
+        requireFullCoverage: options.requireFullCoverage === true,
+        allowPluginOnly: options.allowPluginOnly === true,
+        onProgress: forward
+      });
+      result.restored += Number(result.plugin?.restored || 0);
+      result.removed += Number(result.plugin?.removed || 0);
+      result.verified += Number(result.plugin?.verified || 0);
+      result.totalItems += Number(result.plugin?.totalItems || 0);
+      result.processedItems += Number(result.plugin?.processedItems || 0);
+      result.processedBytes += Number(result.plugin?.processedBytes || 0);
+      result.transferredBytes += Number(result.plugin?.transferredBytes || 0);
+      result.failures.push(...(Array.isArray(result.plugin?.failures) ? result.plugin.failures.map(row => ({ space: 'plugin', ...row })) : []));
+    }
+    if (state.legacy.local && typeof state.legacy.local?.getItem === 'function') {
+      result.local = await restoreServerSpaceToLegacy(state.legacy.local, 'local', {
+        pruneUntracked: options.pruneUntracked === true,
+        requireFullCoverage: options.requireFullCoverage === true,
+        allowPluginOnly: options.allowPluginOnly === true,
+        onProgress: forward
+      });
+      result.restored += Number(result.local?.restored || 0);
+      result.removed += Number(result.local?.removed || 0);
+      result.verified += Number(result.local?.verified || 0);
+      result.totalItems += Number(result.local?.totalItems || 0);
+      result.processedItems += Number(result.local?.processedItems || 0);
+      result.processedBytes += Number(result.local?.processedBytes || 0);
+      result.transferredBytes += Number(result.local?.transferredBytes || 0);
+      result.failures.push(...(Array.isArray(result.local?.failures) ? result.local.failures.map(row => ({ space: 'local', ...row })) : []));
+    }
+    result.ok = result.failures.length === 0;
+    return result;
+  };
+
+  const configureConnection = async (settings, operationOptions = {}) => {
+    const requested = settings && typeof settings === 'object' ? settings : {};
+    const current = await readConfig(true);
+    const targetMode = normalizeMode(requested.mode ?? current.mode);
+    const targetUrl = normalizeServerUrl(requested.url ?? current.url);
+    const original = { ...current };
+    const onProgress = typeof operationOptions.onProgress === 'function' ? operationOptions.onProgress : null;
+    const report = (phase, patch = {}) => { try { onProgress?.({ schema: 'memory-suite.connection-progress.v1', namespace, space: String(patch.space || 'plugin'), phase, ...patch, lastActivityAt: Date.now() }); } catch (_) {} };
+    let connectionTest = null;
+    let restoredBeforeUrlChange = null;
+    let seedSync = null;
+    try {
+      report('configuration_start', { currentAction: '설정 변경 준비', message: `${modeLabel(original.mode)} → ${modeLabel(targetMode)}` });
+      if (targetMode === MODE_PLUGIN_ONLY) {
+        const transition = current.mode === MODE_PLUGIN_ONLY
+          ? { changed: false, from: current.mode, to: targetMode }
+          : await setModeSafely(MODE_PLUGIN_ONLY, { onProgress });
+        if (targetUrl !== original.url) await persistServerUrl(targetUrl);
+        const config = await readConfig(true);
+        report('configuration_complete', { currentAction: '설정 적용 완료', message: `${modeLabel(config.mode)}로 적용되었습니다.` });
+        return { ok: true, from: original, to: config, transition, connectionTest: null, restoredBeforeUrlChange: null, seedSync: null };
+      }
+
+      report('connection_test', { currentAction: '서버 연결 확인', message: `${targetUrl} 연결을 확인하고 있습니다.` });
+      connectionTest = await testConnection(targetUrl);
+      if (!connectionTest.ok) {
+        const error = new Error(`memory_suite_connection_test_failed:${connectionTest.error || 'unknown'}`);
+        error.code = 'MEMORY_SUITE_CONNECTION_TEST_FAILED';
+        error.connectionTest = connectionTest;
+        throw error;
+      }
+      report('connection_ready', { currentAction: '서버 연결 확인 완료', message: `Memory Suite ${connectionTest.serverVersion || '-'} 연결됨` });
+
+      if (targetUrl !== original.url && original.mode === MODE_SERVER_ONLY) {
+        report('restore_before_url_change', { currentAction: '기존 서버 데이터 로컬 복구', message: '서버 주소 변경 전에 현재 서버 DATA를 pluginStorage로 안전하게 복구합니다.' });
+        restoredBeforeUrlChange = await restoreAllLegacyFromServer({ pruneUntracked: true, requireFullCoverage: true, onProgress });
+        if (!restoredBeforeUrlChange.ok) throw new Error(`memory_suite_restore_before_url_change_failed:${restoredBeforeUrlChange.failures.length}`);
+      }
+
+      if (targetUrl !== original.url) await persistServerUrl(targetUrl);
+      resetBootstrapCache();
+
+      if (targetUrl !== original.url) {
+        report('seed_new_server', { currentAction: '새 서버 기준선 생성', message: '새 서버에 기존 데이터를 안전하게 복사하고 있습니다.' });
+        seedSync = await synchronizeAllLegacy({
+          allowPluginOnly: true,
+          allowOverwrite: false,
+          restoreMissingLocal: targetMode === MODE_MIRROR,
+          onProgress
+        });
+        if (!seedSync.ok) throw new Error(`memory_suite_new_server_seed_failed:${seedSync.failures.length}`);
+      }
+
+      const refreshed = await readConfig(true);
+      report('mode_transition', { currentAction: '저장 모드 전환 준비', message: '서버 기준선 검증이 끝나면 저장 모드를 확정합니다.' });
+      const transition = refreshed.mode === targetMode
+        ? { changed: false, from: refreshed.mode, to: targetMode }
+        : await setModeSafely(targetMode, { onProgress });
+      const config = await readConfig(true);
+      await bootstrap(true, true);
+      report('configuration_complete', { currentAction: '설정 적용 완료', message: `${modeLabel(config.mode)} · ${config.url}` });
+      return { ok: true, from: original, to: config, transition, connectionTest, restoredBeforeUrlChange, seedSync };
+    } catch (error) {
+      state.transientMode = '';
+      state.config.at = 0;
+      report('configuration_rollback', { currentAction: '이전 설정 복구', message: compact(error?.message || error, 260) });
+      try {
+        const now = await readConfig(true).catch(() => null);
+        if (now?.url !== original.url) await persistServerUrl(original.url);
+        const afterUrl = await readConfig(true).catch(() => null);
+        if (afterUrl && afterUrl.mode !== original.mode) await setModeSafely(original.mode, { onProgress });
+      } catch (_) {}
+      throw error;
+    }
+  };
+
+  const createBackgroundJob = async (kind, target = {}) => {
+    const currentConfig = await readConfig(true);
+    const existing = state.syncJob.current;
+    if (existing && !syncJobTerminal(existing.status)) {
+      const sameTarget = existing.kind === kind
+        && String(existing.targetMode || '') === String(target.mode || '')
+        && String(existing.targetUrl || '') === String(target.url || '');
+      if (sameTarget) return cloneSyncJob(existing);
+      const error = new Error(`memory_suite_background_job_busy:${existing.kind}:${existing.status}`);
+      error.code = 'MEMORY_SUITE_SYNC_JOB_BUSY';
+      error.job = cloneSyncJob(existing);
+      throw error;
+    }
+    let random = '';
+    try { random = globalThis?.crypto?.randomUUID?.() || ''; } catch (_) {}
+    if (!random) random = `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+    const job = {
+      schema: SYNC_JOB_SCHEMA,
+      namespace,
+      pluginId,
+      pluginVersion,
+      jobId: `${namespace}_${kind}_${random}`.replace(/[^A-Za-z0-9._:-]/g, '_').slice(0, 220),
+      kind,
+      status: 'queued',
+      phase: 'queued',
+      sourceMode: currentConfig.mode,
+      sourceUrl: currentConfig.url,
+      targetMode: target.mode ? normalizeMode(target.mode) : currentConfig.mode,
+      targetUrl: target.url ? normalizeServerUrl(target.url) : currentConfig.url,
+      totalItems: 0,
+      processedItems: 0,
+      processedBytes: 0,
+      transferredBytes: 0,
+      uploaded: 0,
+      restored: 0,
+      matched: 0,
+      removedByTombstone: 0,
+      failures: 0,
+      conflicts: 0,
+      retryCount: 0,
+      nextRetryAt: 0,
+      currentSpace: '',
+      currentKey: '',
+      currentAction: '',
+      message: '',
+      spaces: {},
+      startedAt: Date.now(),
+      updatedAt: Date.now(),
+      lastActivityAt: Date.now(),
+      finishedAt: 0,
+      result: null,
+      error: ''
+    };
+    state.syncJob.current = job;
+    state.syncJob.loaded = true;
+    notifySyncJob();
+    await persistSyncJobNow();
+    return cloneSyncJob(job);
+  };
+
+  const completeBackgroundJob = async (result = null) => {
+    updateSyncJob({
+      status: 'completed', phase: 'completed', currentAction: '완료', currentKey: '',
+      message: '작업이 안전하게 완료되었습니다.', result: result ? cloneSyncJob(result) : null,
+      error: '', nextRetryAt: 0, finishedAt: Date.now()
+    }, { persist: 'immediate' });
+    return getSyncJob();
+  };
+
+  const failBackgroundJob = async error => {
+    updateSyncJob({
+      status: 'failed', phase: 'failed', currentAction: '작업 중단', currentKey: '',
+      message: '작업을 완료하지 못했습니다.', error: compact(error?.message || error, 700),
+      nextRetryAt: 0, finishedAt: Date.now()
+    }, { persist: 'immediate' });
+    return getSyncJob();
+  };
+
+  const executeBackgroundJob = async () => {
+    const job = state.syncJob.current;
+    if (!job || syncJobTerminal(job.status)) return getSyncJob();
+    if (state.syncJob.promise) return state.syncJob.promise;
+    if (state.syncJob.retryTimer) { clearTimeout(state.syncJob.retryTimer); state.syncJob.retryTimer = null; }
+    updateSyncJob({ status: 'running', phase: job.phase === 'resume_pending' ? 'resuming' : (job.phase || 'starting'), nextRetryAt: 0, error: '' });
+    const runner = (async () => {
+      try {
+        let result;
+        if (job.kind === 'connection_config') {
+          result = await configureConnection({ mode: job.targetMode, url: job.targetUrl }, { onProgress: applySyncProgressToJob });
+        } else if (job.kind === 'manual_sync') {
+          result = await synchronizeAllLegacy({ allowOverwrite: true, restoreMissingLocal: true, onProgress: applySyncProgressToJob });
+          if (!result.ok) throw new Error(`sync_failures:${result.failures.length}`);
+        } else if (job.kind === 'server_restore') {
+          result = await restoreAllLegacyFromServer({ pruneUntracked: false, requireFullCoverage: false, onProgress: applySyncProgressToJob });
+          if (!result.ok) throw new Error(`restore_failures:${result.failures.length}`);
+        } else {
+          throw new Error(`memory_suite_unknown_background_job:${job.kind}`);
+        }
+        await completeBackgroundJob(result);
+        return result;
+      } catch (error) {
+        if (retryableSyncError(error) && Number(state.syncJob.current?.retryCount || 0) < 120) {
+          const retryCount = Number(state.syncJob.current?.retryCount || 0) + 1;
+          const delay = SYNC_JOB_RETRY_DELAYS_MS[Math.min(SYNC_JOB_RETRY_DELAYS_MS.length - 1, retryCount - 1)];
+          updateSyncJob({
+            status: 'paused', phase: 'waiting_for_server', currentAction: '서버 재연결 대기',
+            message: `서버 연결이 일시적으로 끊겼습니다. ${Math.ceil(delay / 1000)}초 후 이어서 확인합니다.`,
+            error: compact(error?.message || error, 420), retryCount, nextRetryAt: Date.now() + delay
+          }, { persist: 'immediate' });
+          state.syncJob.retryTimer = setTimeout(() => {
+            state.syncJob.retryTimer = null;
+            void executeBackgroundJob();
+          }, delay);
+          try { state.syncJob.retryTimer?.unref?.(); } catch (_) {}
+          return null;
+        }
+        await failBackgroundJob(error);
+        throw error;
+      }
+    })();
+    state.syncJob.promise = runner.finally(() => { state.syncJob.promise = null; });
+    return state.syncJob.promise;
+  };
+
+  const startConnectionConfigurationJob = async settings => {
+    const requested = settings && typeof settings === 'object' ? settings : {};
+    const current = await readConfig(true);
+    const target = {
+      mode: normalizeMode(requested.mode ?? current.mode),
+      url: normalizeServerUrl(requested.url ?? current.url)
+    };
+    const job = await createBackgroundJob('connection_config', target);
+    void executeBackgroundJob().catch(() => {});
+    return job;
+  };
+
+  const startSynchronizationJob = async () => {
+    const current = await readConfig(true);
+    if (current.mode !== MODE_MIRROR) throw new Error('memory_suite_manual_sync_requires_mirror_mode');
+    const job = await createBackgroundJob('manual_sync', { mode: current.mode, url: current.url });
+    void executeBackgroundJob().catch(() => {});
+    return job;
+  };
+
+  const startRestoreJob = async () => {
+    const current = await readConfig(true);
+    if (current.mode !== MODE_SERVER_ONLY) throw new Error('memory_suite_restore_requires_server_only_mode');
+    const job = await createBackgroundJob('server_restore', { mode: current.mode, url: current.url });
+    void executeBackgroundJob().catch(() => {});
+    return job;
+  };
+
+  const resumePendingSyncJob = async () => {
+    await loadPersistedSyncJob();
+    const job = state.syncJob.current;
+    if (!job || syncJobTerminal(job.status)) return cloneSyncJob(job);
+    if (!state.legacy.plugin) return cloneSyncJob(job);
+    void executeBackgroundJob().catch(() => {});
+    return cloneSyncJob(job);
+  };
+
+  const waitForSyncJob = async (jobId = '', timeoutMs = 15 * 60 * 1000) => {
+    const wanted = String(jobId || state.syncJob.current?.jobId || '');
+    if (!wanted) return null;
+    const current = state.syncJob.current;
+    if (current?.jobId === wanted && syncJobTerminal(current.status)) return cloneSyncJob(current);
+    return await new Promise((resolve, reject) => {
+      let timer = null;
+      const unsubscribe = subscribeSyncJob(job => {
+        if (!job || job.jobId !== wanted || !syncJobTerminal(job.status)) return;
+        if (timer) clearTimeout(timer);
+        unsubscribe();
+        resolve(job);
+      });
+      timer = setTimeout(() => {
+        unsubscribe();
+        reject(new Error(`memory_suite_sync_job_wait_timeout:${wanted}`));
+      }, Math.max(1000, Number(timeoutMs || 0) || 15 * 60 * 1000));
+    });
+  };
+
+  const getConnectionSettings = async (options = {}) => {
+    const config = await readConfig(options.force === true);
+    const result = {
+      schema: 'memory-suite.connection-settings.v1',
+      namespace,
+      pluginId,
+      pluginVersion,
+      mode: config.mode,
+      modeLabel: modeLabel(config.mode),
+      url: config.url,
+      status: { ...state.status },
+      migration: { plugin: { ...state.migration.plugin }, local: { ...state.migration.local } },
+      syncJob: getSyncJob(),
+      diagnostics: {
+        ready: !!state.diagnostics.value,
+        reachable: state.diagnostics.value?.reachable ?? null,
+        updatedAt: Number(state.diagnostics.at || 0),
+        eventCount: Array.isArray(state.diagnostics.value?.events) ? state.diagnostics.value.events.length : 0,
+        error: String(state.diagnostics.value?.error || '')
+      }
+    };
+    if (options.test === true) result.connection = await testConnection(config.url);
+    return result;
+  };
+
+  const prepareServerScopeDeletion = async (options = {}) => {
+    const pluginLegacy = state.legacy.plugin;
+    if (!pluginLegacy) throw new Error('memory_suite_pluginstorage_unavailable');
+    const localLegacy = state.legacy.local;
+    const pluginKeys = [...new Set((Array.isArray(options.pluginKeys) ? options.pluginKeys : []).map(String).filter(key => matchesRoute('plugin', key)))];
+    const localKeys = [...new Set((Array.isArray(options.localKeys) ? options.localKeys : []).map(String).filter(key => matchesRoute('local', key)))];
+    const current = await readConfig(true);
+    const proofNeedsTransientServer = current.mode === MODE_PLUGIN_ONLY;
+    if (proofNeedsTransientServer) state.transientMode = MODE_MIRROR;
+    let beforeIntegrity;
+    try { beforeIntegrity = await remoteIntegrity(); }
+    catch (error) { if (proofNeedsTransientServer) state.transientMode = ''; throw error; }
+    let pluginRestore = null;
+    let localRestore = null;
+    let pluginSync = null;
+    let localSync = null;
+
+    if (current.mode === MODE_MIRROR) {
+      pluginSync = await synchronizeLegacyWithServer(pluginLegacy, 'plugin', { allowOverwrite: true, restoreMissingLocal: true });
+      if (localLegacy && typeof localLegacy?.getItem === 'function') {
+        localSync = await synchronizeLegacyWithServer(localLegacy, 'local', { allowOverwrite: true, restoreMissingLocal: true });
+      }
+    } else if (current.mode === MODE_SERVER_ONLY) {
+      pluginRestore = await restoreServerSpaceToLegacy(pluginLegacy, 'plugin', { pruneUntracked: false, requireFullCoverage: false });
+      if (localLegacy && typeof localLegacy?.getItem === 'function') {
+        localRestore = await restoreServerSpaceToLegacy(localLegacy, 'local', { pruneUntracked: false, requireFullCoverage: false });
+      } else if (localKeys.length) {
+        const error = new Error('memory_suite_local_storage_required_for_scope_preservation');
+        error.code = 'MEMORY_SUITE_LOCAL_STORAGE_UNAVAILABLE';
+        throw error;
+      }
+    }
+
+    const pluginProof = await verifyScopedLegacyPreservation(pluginLegacy, 'plugin', pluginKeys);
+    const localProof = localKeys.length
+      ? await verifyScopedLegacyPreservation(localLegacy, 'local', localKeys)
+      : { schema: 'memory-suite.scoped-legacy-preservation.v1', namespace, space: 'local', requested: 0, exact: 0, tombstones: 0, failures: [], ok: true };
+
+    let modeChanged = false;
+    if (proofNeedsTransientServer) state.transientMode = '';
+    if (current.mode !== MODE_PLUGIN_ONLY) {
+      await persistMode(MODE_PLUGIN_ONLY);
+      modeChanged = true;
+    }
+    const verifiedMode = await readConfig(true);
+    if (verifiedMode.mode !== MODE_PLUGIN_ONLY) throw new Error(`memory_suite_scope_delete_mode_transition_failed:${verifiedMode.mode}`);
+    const afterIntegrity = await remoteIntegrity({ allowPluginOnly: true });
+    const receipt = {
+      schema: 'memory-suite.server-scope-delete-owner-receipt.v1',
+      namespace, pluginId, pluginVersion,
+      scopeId: String(options.scopeId || '').slice(0, 320),
+      scopeKey: String(options.scopeKey || '').slice(0, 700),
+      modeBefore: current.mode,
+      modeAfter: MODE_PLUGIN_ONLY,
+      modeChanged,
+      verified: pluginProof.ok === true && localProof.ok === true && afterIntegrity.ok === true,
+      pluginKeys: pluginKeys.length,
+      localKeys: localKeys.length,
+      pluginProof,
+      localProof,
+      pluginRestore,
+      localRestore,
+      pluginSync,
+      localSync,
+      integrityBefore: beforeIntegrity,
+      integrityAfter: afterIntegrity,
+      checkedAt: Date.now()
+    };
+    if (receipt.verified !== true) {
+      const error = new Error('memory_suite_scope_delete_owner_proof_incomplete');
+      error.code = 'MEMORY_SUITE_SCOPE_DELETE_OWNER_PROOF_INCOMPLETE';
+      error.receipt = receipt;
+      throw error;
+    }
+    state.management.lastResult = receipt;
+    setStatus('scope_delete_owner_ready', '', { mode: MODE_PLUGIN_ONLY, scopeId: receipt.scopeId });
+    return receipt;
+  };
+
+  const deletePluginStorageAfterServerVerification = async () => {
+    const legacy = state.legacy.plugin;
+    if (!legacy) throw new Error('memory_suite_pluginstorage_unavailable');
+    const current = await readConfig(true);
+    if (current.mode === MODE_PLUGIN_ONLY) {
+      const error = new Error('pluginStorage 삭제는 플러그인 + 서버 병존 또는 서버 단독 모드에서만 사용할 수 있습니다.');
+      error.code = 'MEMORY_SUITE_DELETE_REQUIRES_SERVER_MODE';
+      throw error;
+    }
+    const preservation = await verifyServerPreservation(legacy);
+    let modeChanged = false;
+    if (current.mode === MODE_MIRROR) {
+      await persistMode(MODE_SERVER_ONLY);
+      modeChanged = true;
+    }
+    const allKeys = await listRoutedLegacyKeys(legacy, 'plugin', true);
+    const logicalKeys = allKeys.filter(key => matchesRoute('plugin', key));
+    const artifactKeys = allKeys.filter(key => !matchesRoute('plugin', key) && isOwnedChunkArtifact('plugin', key));
+    const failures = [];
+    let deleted = 0;
+    for (const key of logicalKeys) {
+      try {
+        const ok = await legacyRemoveVerified(legacy, key);
+        if (!ok) throw new Error('pluginstorage_delete_failed');
+        deleted += 1;
+      } catch (error) { failures.push({ key, error: compact(error?.message || error, 220) }); }
+    }
+    for (const key of artifactKeys) {
+      try {
+        const ok = await legacyRemoveVerified(legacy, key);
+        if (ok) deleted += 1;
+      } catch (error) { failures.push({ key, error: compact(error?.message || error, 220) }); }
+    }
+    const remaining = await listRoutedLegacyKeys(legacy, 'plugin', true).catch(() => []);
+    if (remaining.length) failures.push({ key: '*', error: `pluginstorage_keys_remaining:${remaining.length}` });
+    const result = { schema: 'memory-suite.pluginstorage-delete.v1', namespace, preservation, modeChanged, mode: MODE_SERVER_ONLY, deleted, logicalDeleted: logicalKeys.length, artifactDeleted: artifactKeys.length, remaining, failures, ok: failures.length === 0 };
+    state.management.lastResult = result;
+    if (!result.ok) {
+      const error = new Error(`memory_suite_pluginstorage_delete_incomplete:${failures.length}`);
+      error.code = 'MEMORY_SUITE_PLUGINSTORAGE_DELETE_INCOMPLETE';
+      error.result = result;
+      throw error;
+    }
+    setStatus('pluginstorage_deleted', '', { mode: MODE_SERVER_ONLY, deleted });
+    return result;
+  };
+
+  const migrateAllLegacy = async (legacy, space) => {
+    const target = state.migration[space] || state.migration.plugin;
+    const startedAt = Date.now();
+    target.state = 'running'; target.at = startedAt; target.reason = '';
+    target.scanned = 0; target.migrated = 0; target.skipped = 0; target.failed = 0;
+    const config = await readConfig();
+    if (config.mode === MODE_PLUGIN_ONLY) {
+      target.state = 'plugin_only';
+      return { ...target };
+    }
+    if (typeof legacy?.keys !== 'function' || typeof legacy?.getItem !== 'function') {
+      target.state = 'lazy_only'; target.reason = 'legacy_key_enumeration_unavailable'; return { ...target };
+    }
+    if (config.mode === MODE_MIRROR && space === 'plugin') {
+      try {
+        const synced = await synchronizeLegacyWithServer(legacy, space, { allowOverwrite: true, restoreMissingLocal: true });
+        target.scanned = synced.localKeys; target.migrated = synced.uploaded; target.skipped = synced.matched + synced.restored; target.failed = synced.failures.length;
+        target.state = synced.ok ? 'complete' : 'partial'; target.at = Date.now();
+        return { ...target, durationMs: Date.now() - startedAt };
+      } catch (error) {
+        target.state = 'partial'; target.failed += 1; target.reason = compact(error?.message || error, 240); target.at = Date.now();
+        return { ...target, durationMs: Date.now() - startedAt };
+      }
+    }
+    const listed = await legacy.keys();
+    const keysToInspect = [...new Set((Array.isArray(listed) ? listed : []).map(String).filter(key => matchesRoute(space, key)))];
+    target.scanned = keysToInspect.length;
+    let cursor = 0;
+    const worker = async () => {
+      while (cursor < keysToInspect.length) {
+        const index = cursor; cursor += 1; const key = keysToInspect[index];
+        try {
+          const result = await migrateFromLegacy(space, key, async () => await legacy.getItem(key));
+          if (result.state === 'migrated') target.migrated += 1; else target.skipped += 1;
+        } catch (error) { target.failed += 1; target.reason = compact(error?.message || error, 240); }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(migrationConcurrency, Math.max(1, keysToInspect.length)) }, () => worker()));
+    target.state = target.failed > 0 ? 'partial' : 'complete'; target.at = Date.now();
+    return { ...target, durationMs: Date.now() - startedAt };
+  };
+
+  const scheduleLegacyMigration = (legacy, space, force = false) => {
+    const enabled = space === 'local' ? autoMigrateLocal : autoMigratePlugin;
+    if (!enabled || !legacy || (typeof legacy !== 'object' && typeof legacy !== 'function')) return null;
+    let record = migrationStateByLegacy.get(legacy);
+    const timestamp = Date.now();
+    if (!record) { record = { running: null, timer: null, completed: false, retryAt: 0, space }; migrationStateByLegacy.set(legacy, record); }
+    if (record.running) return record.running;
+    if (!force && record.completed) return null;
+    if (!force && record.retryAt > timestamp) return null;
+    if (record.timer) return null;
+    record.timer = setTimeout(() => {
+      record.timer = null;
+      record.running = migrateAllLegacy(legacy, space)
+        .then(result => {
+          record.completed = result.state === 'complete' || result.state === 'plugin_only' || result.state === 'lazy_only';
+          record.retryAt = result.state === 'partial' ? Date.now() + migrationRetryMs : 0;
+          return result;
+        })
+        .catch(error => {
+          record.completed = false; record.retryAt = Date.now() + migrationRetryMs;
+          const target = state.migration[space] || state.migration.plugin;
+          target.state = 'failed'; target.reason = compact(error?.message || error, 240); target.at = Date.now();
+          warnOnce(`migration_${space}_${target.reason}`, error);
+          return { ...target };
+        })
+        .finally(() => { record.running = null; });
+    }, migrationDelayMs + (space === 'local' ? 900 : 0));
+    try { record.timer?.unref?.(); } catch (_) {}
+    return null;
+  };
+
+  const get = async (space, key, legacyGet = null, legacySet = null, legacyRemove = null) => {
+    if (!matchesRoute(space, key)) return typeof legacyGet === 'function' ? await legacyGet() : null;
+    const config = await readConfig();
+    if (config.mode === MODE_PLUGIN_ONLY) return typeof legacyGet === 'function' ? await legacyGet() : null;
+    if (config.mode === MODE_MIRROR) {
+      const localValue = typeof legacyGet === 'function' ? await legacyGet() : null;
+      if (!isNullishStorageValue(localValue)) {
+        try {
+          const remote = await remoteGet(space, key);
+          if (remote.tombstone === true) {
+            if (typeof legacyRemove === 'function') await legacyRemove();
+            setStatus('server_tombstone_applied', '', { mode: MODE_MIRROR, key: compact(key, 160), space });
+            return null;
+          }
+          void serializeMutation(space, key, async () => {
+            try {
+              if (remote.exists !== true || jsonComparable(remote.value) !== jsonComparable(localValue)) {
+                await remoteMutate('set', space, key, localValue);
+              }
+              setStatus('synced', '', { mode: MODE_MIRROR, key: compact(key, 160), space });
+            } catch (error) {
+              setStatus('local_ahead', error?.message || error, { mode: MODE_MIRROR, key: compact(key, 160), space });
+            }
+          });
+          return localValue;
+        } catch (error) {
+          setStatus('server_unavailable_local_only', error?.message || error, { mode: MODE_MIRROR, key: compact(key, 160), space });
+          return localValue;
+        }
+      }
+      try {
+        const remote = await remoteGet(space, key);
+        if (remote.exists === true) {
+          if (typeof legacySet === 'function') await legacySet(remote.value);
+          return remote.value;
+        }
+        if (remote.tombstone === true && typeof legacyRemove === 'function') await legacyRemove();
+        return null;
+      } catch (error) {
+        setStatus('server_unavailable_local_only', error?.message || error, { mode: MODE_MIRROR, key: compact(key, 160), space });
+        return null;
+      }
+    }
+    const remote = await remoteGet(space, key);
+    if (remote.exists === true) return remote.value;
+    if (remote.tombstone === true) return null;
+    const migrated = await migrateFromLegacy(space, key, legacyGet);
+    return migrated.value;
+  };
+
+  const set = async (space, key, value, legacySet = null) => {
+    if (!matchesRoute(space, key)) return typeof legacySet === 'function' ? await legacySet(value) : false;
+    const config = await readConfig();
+    if (config.mode === MODE_PLUGIN_ONLY) return typeof legacySet === 'function' ? await legacySet(value) : false;
+    if (config.mode === MODE_MIRROR) {
+      const localOk = typeof legacySet === 'function' ? await legacySet(value) : false;
+      if (!localOk) return false;
+      try {
+        await serializeMutation(space, key, () => remoteMutate('set', space, key, value));
+        setStatus('synced', '', { mode: MODE_MIRROR, key: compact(key, 160), space });
+      } catch (error) {
+        setStatus('local_ahead', error?.message || error, { mode: MODE_MIRROR, key: compact(key, 160), space });
+        warnOnce(`mirror_server_write_${compact(key, 80)}`, error);
+      }
+      return true;
+    }
+    await serializeMutation(space, key, () => remoteMutate('set', space, key, value));
+    return true;
+  };
+
+  const remove = async (space, key, legacyGet = null, legacySet = null, legacyRemove = null) => {
+    if (!matchesRoute(space, key)) return typeof legacyRemove === 'function' ? await legacyRemove() : false;
+    const config = await readConfig();
+    if (config.mode === MODE_PLUGIN_ONLY) return typeof legacyRemove === 'function' ? await legacyRemove() : false;
+    if (config.mode === MODE_MIRROR) {
+      const previousLocal = typeof legacyGet === 'function' ? await legacyGet() : null;
+      try {
+        await serializeMutation(space, key, () => remoteMutate('remove', space, key, null));
+      } catch (error) {
+        setStatus('mirror_delete_blocked', error?.message || error, { mode: MODE_MIRROR, key: compact(key, 160), space });
+        return false;
+      }
+      const localOk = typeof legacyRemove === 'function' ? await legacyRemove() : false;
+      if (!localOk) {
+        if (!isNullishStorageValue(previousLocal)) {
+          try { await serializeMutation(space, key, () => remoteMutate('set', space, key, previousLocal)); } catch (_) {}
+        }
+        setStatus('mirror_delete_rolled_back', 'pluginStorage remove failed', { mode: MODE_MIRROR, key: compact(key, 160), space });
+        return false;
+      }
+      setStatus('synced', '', { mode: MODE_MIRROR, key: compact(key, 160), space });
+      return true;
+    }
+    await serializeMutation(space, key, () => remoteMutate('remove', space, key, null));
+    return true;
+  };
+
+  const keys = async (space, prefix = '', legacyKeysFn = null) => {
+    const config = await readConfig();
+    const legacy = typeof legacyKeysFn === 'function' ? await legacyKeysFn() : [];
+    const legacyList = Array.isArray(legacy) ? legacy.map(String).filter(Boolean) : [];
+    if (config.mode === MODE_PLUGIN_ONLY) return legacyList;
+    let remote = { keys: [], tombstones: [] };
+    try { remote = await remoteKeys(space, prefix); }
+    catch (error) {
+      if (config.mode === MODE_MIRROR) return legacyList;
+      throw error;
+    }
+    const serverKeys = Array.isArray(remote.keys) ? remote.keys.map(String) : [];
+    const tombstones = new Set(Array.isArray(remote.tombstones) ? remote.tombstones.map(String) : []);
+    const hiddenLegacyKey = key => {
+      if (!matchesRoute(space, key)) return false;
+      if (tombstones.has(key)) return true;
+      for (const tombstone of tombstones) if (key.startsWith(`${tombstone}::chunk:v1:`)) return true;
+      return false;
+    };
+    return [...new Set([...serverKeys, ...legacyList.filter(key => !hiddenLegacyKey(key))])];
+  };
+
+  const createProxy = (legacy, space, cache) => {
+    if (!legacy || (typeof legacy !== 'object' && typeof legacy !== 'function')) return legacy;
+    state.legacy[space] = legacy;
+    if (space === 'plugin') setTimeout(() => { void resumePendingSyncJob().catch(() => {}); }, 0);
+    if (cache.has(legacy)) { scheduleLegacyMigration(legacy, space); return cache.get(legacy); }
+    const proxy = Object.freeze({
+      getItem: async key => await get(
+        space,
+        String(key),
+        async () => typeof legacy.getItem === 'function' ? await legacy.getItem(key) : null,
+        async next => typeof legacy.setItem === 'function' ? (await legacy.setItem(key, next)) !== false : false,
+        async () => {
+          if (typeof legacy.removeItem === 'function') return (await legacy.removeItem(key)) !== false;
+          if (typeof legacy.setItem === 'function') return (await legacy.setItem(key, null)) !== false;
+          return false;
+        }
+      ),
+      setItem: async (key, value) => await set(space, String(key), value, async next => typeof legacy.setItem === 'function' ? (await legacy.setItem(key, next)) !== false : false),
+      removeItem: async key => await remove(
+        space,
+        String(key),
+        async () => typeof legacy.getItem === 'function' ? await legacy.getItem(key) : null,
+        async next => typeof legacy.setItem === 'function' ? (await legacy.setItem(key, next)) !== false : false,
+        async () => {
+          if (typeof legacy.removeItem === 'function') return (await legacy.removeItem(key)) !== false;
+          if (typeof legacy.setItem === 'function') return (await legacy.setItem(key, null)) !== false;
+          return false;
+        }
+      ),
+      keys: async () => await keys(space, '', async () => typeof legacy.keys === 'function' ? await legacy.keys() : []),
+      migrateAll: async () => await migrateAllLegacy(legacy, space)
+    });
+    cache.set(legacy, proxy);
+    scheduleLegacyMigration(legacy, space);
+    return proxy;
+  };
+
+  const connectionPanelIdBase = `memory-suite-connection-${namespace}`.replace(/[^A-Za-z0-9_-]/g, '_');
+  let connectionPanelSequence = 0;
+
+  const htmlEscape = value => String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
+  const mountConnectionPanel = async (container, panelOptions = {}) => {
+    if (!container || typeof container.querySelector !== 'function') return false;
+    const instanceId = `${connectionPanelIdBase}-${++connectionPanelSequence}`;
+    const title = String(panelOptions.title || `${displayName} · 서버 연결`).trim();
+    const description = String(panelOptions.description || '저장 방식과 Memory Suite 서버 주소를 설정하고 연결 상태를 확인합니다.').trim();
+    const config = await readConfig(true).catch(error => ({ mode: MODE_PLUGIN_ONLY, url: defaultUrl, error: compact(error?.message || error, 300) }));
+    const fmtBytes = bytes => {
+      const value = Math.max(0, Number(bytes || 0) || 0);
+      if (value < 1024) return `${Math.round(value)} B`;
+      if (value < 1024 ** 2) return `${(value / 1024).toFixed(value < 10 * 1024 ? 1 : 0)} KB`;
+      if (value < 1024 ** 3) return `${(value / (1024 ** 2)).toFixed(value < 10 * 1024 ** 2 ? 1 : 0)} MB`;
+      return `${(value / (1024 ** 3)).toFixed(2)} GB`;
+    };
+    const fmtDuration = ms => {
+      const total = Math.max(0, Math.floor(Number(ms || 0) / 1000));
+      if (total < 60) return `${total}초`;
+      const minutes = Math.floor(total / 60);
+      const seconds = total % 60;
+      if (minutes < 60) return `${minutes}분 ${seconds}초`;
+      return `${Math.floor(minutes / 60)}시간 ${minutes % 60}분`;
+    };
+    const phaseLabel = phase => ({
+      queued: '작업 준비', starting: '작업 시작', resuming: '이전 작업 재개', resume_pending: '재개 대기',
+      configuration_start: '설정 변경 준비', connection_test: '서버 연결 확인', connection_ready: '서버 연결 확인 완료',
+      seed_new_server: '새 서버 기준선 생성', mode_transition: '저장 모드 전환 준비',
+      integrity_before: '서버 무결성 확인', inventory: '데이터 조사 중', inventory_complete: '데이터 조사 완료',
+      sync_local: 'pluginStorage → 서버 동기화', restore_missing_local: '서버 → pluginStorage 보충',
+      restore_before_url_change: '기존 서버 데이터 복구', prune_local: '로컬 정리', restore_values: '서버 데이터 복구',
+      restore_tombstones: '삭제 상태 복구', integrity_after: '최종 무결성 확인', space_complete: '저장소 동기화 완료',
+      space_incomplete: '동기화 확인 필요', configuration_complete: '설정 적용 완료', configuration_rollback: '이전 설정 복구',
+      waiting_for_server: '서버 재연결 대기', completed: '완료', failed: '실패'
+    }[String(phase || '')] || String(phase || '작업 중'));
+    const jobTitle = job => job?.kind === 'manual_sync' ? '수동 동기화'
+      : (job?.kind === 'server_restore' ? '서버 → pluginStorage 복구'
+        : ((job?.sourceMode === MODE_PLUGIN_ONLY && job?.targetMode !== MODE_PLUGIN_ONLY) ? '초기 서버 동기화' : '저장 설정 전환'));
+
+    container.innerHTML = `
+      <section class="mscx" data-memory-suite-connection-panel="${htmlEscape(namespace)}">
+        <style>
+          #${instanceId}{--mscx-bg:rgba(15,23,42,.72);--mscx-card:rgba(30,41,59,.76);--mscx-soft:rgba(15,23,42,.68);--mscx-line:rgba(148,163,184,.25);--mscx-text:#eef4ff;--mscx-muted:#9eabc1;--mscx-accent:#7aa2ff;--mscx-good:#56d49b;--mscx-warn:#f0b65a;--mscx-danger:#fb7185;color:var(--mscx-text);display:grid;gap:14px;font:500 13px/1.55 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;min-width:0}
+          #${instanceId} *{box-sizing:border-box} #${instanceId} .mscx-head{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;padding:2px 2px 0} #${instanceId} h2{margin:0;font-size:20px;line-height:1.25;color:var(--mscx-text)} #${instanceId} .mscx-head p{margin:6px 0 0;color:var(--mscx-muted);font-size:12px}
+          #${instanceId} .mscx-state{display:inline-flex;align-items:center;gap:7px;padding:6px 9px;border:1px solid var(--mscx-line);border-radius:999px;background:var(--mscx-soft);white-space:nowrap;font-size:11px;font-weight:800;color:var(--mscx-muted)} #${instanceId} .mscx-dot{width:8px;height:8px;border-radius:50%;background:var(--mscx-muted)} #${instanceId} .mscx-state.good .mscx-dot{background:var(--mscx-good);box-shadow:0 0 0 4px rgba(86,212,155,.12)} #${instanceId} .mscx-state.warn .mscx-dot{background:var(--mscx-warn)} #${instanceId} .mscx-state.error .mscx-dot{background:var(--mscx-danger)}
+          #${instanceId} .mscx-card{padding:14px;border:1px solid var(--mscx-line);border-radius:15px;background:var(--mscx-card);min-width:0} #${instanceId} .mscx-card-title{display:block;margin-bottom:9px;font-size:12px;font-weight:850;color:var(--mscx-text)}
+          #${instanceId} .mscx-modes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px} #${instanceId} .mscx-mode{position:relative;display:grid;gap:4px;padding:12px;border:1px solid var(--mscx-line);border-radius:12px;background:var(--mscx-soft);cursor:pointer;min-width:0} #${instanceId} .mscx-mode.selected,#${instanceId} .mscx-mode:has(input:checked){border-color:var(--mscx-accent);box-shadow:0 0 0 1px var(--mscx-accent) inset;background:rgba(81,116,200,.13)} #${instanceId} .mscx-mode input{position:absolute;right:10px;top:10px;accent-color:var(--mscx-accent)} #${instanceId} .mscx-mode strong{padding-right:22px;font-size:12px;color:var(--mscx-text)} #${instanceId} .mscx-mode small{color:var(--mscx-muted);font-size:10px;line-height:1.45}
+          #${instanceId} .mscx-url-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px} #${instanceId} input[type="url"]{width:100%;min-width:0;padding:10px 11px;border:1px solid var(--mscx-line);border-radius:10px;background:var(--mscx-soft);color:var(--mscx-text);font:500 12px ui-monospace,SFMono-Regular,Consolas,monospace;outline:none} #${instanceId} input[type="url"]:focus{border-color:var(--mscx-accent);box-shadow:0 0 0 3px rgba(122,162,255,.12)}
+          #${instanceId} .mscx-actions{display:flex;flex-wrap:wrap;gap:8px} #${instanceId} button{min-height:38px;padding:8px 12px;border:1px solid var(--mscx-line);border-radius:10px;background:var(--mscx-soft);color:var(--mscx-text);font:750 11px system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;cursor:pointer} #${instanceId} button:hover{border-color:rgba(122,162,255,.65);background:rgba(70,94,150,.22)} #${instanceId} button.primary{background:rgba(55,97,181,.72);border-color:rgba(122,162,255,.75)} #${instanceId} button.danger{color:#ffe4e8;background:rgba(126,34,52,.55);border-color:rgba(251,113,133,.55)} #${instanceId} button:disabled{opacity:.45;cursor:not-allowed}
+          #${instanceId} .mscx-info{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px} #${instanceId} .mscx-info div{padding:9px 10px;border:1px solid var(--mscx-line);border-radius:10px;background:var(--mscx-soft);min-width:0} #${instanceId} .mscx-info span{display:block;color:var(--mscx-muted);font-size:9px;font-weight:800} #${instanceId} .mscx-info strong{display:block;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;color:var(--mscx-text)}
+          #${instanceId} .mscx-job{display:grid;gap:10px;border-color:rgba(122,162,255,.34);background:linear-gradient(180deg,rgba(35,55,97,.45),rgba(15,23,42,.58))} #${instanceId} .mscx-job[hidden]{display:none} #${instanceId} .mscx-job-head{display:flex;justify-content:space-between;gap:10px;align-items:center} #${instanceId} .mscx-job-head strong{font-size:13px} #${instanceId} .mscx-job-badge{font-size:10px;font-weight:850;color:var(--mscx-muted)}
+          #${instanceId} .mscx-progress{height:9px;border-radius:999px;overflow:hidden;background:rgba(2,6,23,.6);border:1px solid rgba(148,163,184,.18)} #${instanceId} .mscx-progress>i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--mscx-accent),var(--mscx-good));transition:width .25s ease} #${instanceId} .mscx-progress.indeterminate>i{width:38%;animation:mscx-slide 1.2s ease-in-out infinite}@keyframes mscx-slide{0%{transform:translateX(-110%)}100%{transform:translateX(290%)}}
+          #${instanceId} .mscx-job-phase{font-size:12px;font-weight:800;color:var(--mscx-text)} #${instanceId} .mscx-job-message{font-size:10px;color:var(--mscx-muted)} #${instanceId} .mscx-job-stats{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:7px} #${instanceId} .mscx-job-stat{padding:8px;border-radius:9px;background:rgba(2,6,23,.38);border:1px solid rgba(148,163,184,.16);min-width:0} #${instanceId} .mscx-job-stat span{display:block;font-size:8px;color:var(--mscx-muted);font-weight:800} #${instanceId} .mscx-job-stat b{display:block;margin-top:2px;font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis} #${instanceId} .mscx-job-current{padding:8px 9px;border-radius:9px;background:rgba(2,6,23,.35);font:500 9px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;color:var(--mscx-muted);overflow-wrap:anywhere}
+          #${instanceId} .mscx-message{min-height:56px;padding:11px 12px;border:1px solid var(--mscx-line);border-radius:11px;background:var(--mscx-soft);color:var(--mscx-muted);white-space:pre-wrap;font-size:11px} #${instanceId} .mscx-message.good{border-color:rgba(86,212,155,.35);color:#c9f8e4} #${instanceId} .mscx-message.error{border-color:rgba(251,113,133,.38);color:#ffd0d8} #${instanceId} .mscx-note{color:var(--mscx-muted);font-size:10px;line-height:1.5}
+          @media(max-width:760px){#${instanceId} .mscx-modes{grid-template-columns:1fr}#${instanceId} .mscx-info{grid-template-columns:repeat(2,minmax(0,1fr))}#${instanceId} .mscx-job-stats{grid-template-columns:repeat(2,minmax(0,1fr))}#${instanceId} .mscx-url-row{grid-template-columns:1fr}#${instanceId} .mscx-head{display:grid}#${instanceId} .mscx-state{justify-self:start}}
+        </style>
+        <div id="${instanceId}">
+          <div class="mscx-head"><div><h2>${htmlEscape(title)}</h2><p>${htmlEscape(description)}</p></div><div class="mscx-state" data-mscx-state><span class="mscx-dot"></span><span data-mscx-state-text>상태 확인 중</span></div></div>
+          <div class="mscx-card"><span class="mscx-card-title">저장 방식</span><div class="mscx-modes">
+            <label class="mscx-mode"><input type="radio" name="${instanceId}-mode" value="plugin_only"><strong>플러그인 단독 · 기본</strong><small>RisuAI pluginStorage만 사용합니다. 서버가 없어도 정상 작동합니다.</small></label>
+            <label class="mscx-mode"><input type="radio" name="${instanceId}-mode" value="mirror"><strong>플러그인 + 서버 병존</strong><small>pluginStorage와 DATA 서버를 계속 동기화합니다.</small></label>
+            <label class="mscx-mode"><input type="radio" name="${instanceId}-mode" value="server_only"><strong>서버 단독</strong><small>Memory Suite DATA를 영구 정본으로 사용합니다.</small></label>
+          </div></div>
+          <div class="mscx-card"><span class="mscx-card-title">서버 주소</span><div class="mscx-url-row"><input data-mscx-url type="url" spellcheck="false" value="${htmlEscape(config.url || defaultUrl)}"><button data-mscx-test type="button">연결 테스트</button></div><div class="mscx-note" style="margin-top:8px">보안을 위해 localhost·127.0.0.1·::1의 HTTP 주소만 허용합니다. 기본 주소는 http://127.0.0.1:47630 입니다.</div></div>
+          <div class="mscx-info"><div><span>현재 모드</span><strong data-mscx-mode-label>${htmlEscape(modeLabel(config.mode || MODE_PLUGIN_ONLY))}</strong></div><div><span>서버 버전</span><strong data-mscx-version>-</strong></div><div><span>프로토콜</span><strong data-mscx-protocol>-</strong></div><div><span>서버 데이터</span><strong data-mscx-records>-</strong></div><div><span>namespace</span><strong>${htmlEscape(namespace)}</strong></div></div>
+          <div class="mscx-actions"><button data-mscx-apply class="primary" type="button">설정 적용</button><button data-mscx-sync type="button">지금 동기화</button><button data-mscx-restore type="button">서버 → pluginStorage 복구</button><button data-mscx-delete class="danger" type="button">플러그인 스토리지 삭제</button></div>
+          <div class="mscx-card mscx-job" data-mscx-job hidden><div class="mscx-job-head"><strong data-mscx-job-title>초기 서버 동기화</strong><span class="mscx-job-badge" data-mscx-job-badge>작업 중</span></div><div class="mscx-progress" data-mscx-progress><i></i></div><div><div class="mscx-job-phase" data-mscx-job-phase>작업 준비</div><div class="mscx-job-message" data-mscx-job-message></div></div><div class="mscx-job-stats"><div class="mscx-job-stat"><span>진행</span><b data-mscx-job-items>-</b></div><div class="mscx-job-stat"><span>처리 용량</span><b data-mscx-job-bytes>-</b></div><div class="mscx-job-stat"><span>전송·복구</span><b data-mscx-job-transfer>-</b></div><div class="mscx-job-stat"><span>경과 시간</span><b data-mscx-job-elapsed>-</b></div><div class="mscx-job-stat"><span>마지막 활동</span><b data-mscx-job-activity>-</b></div><div class="mscx-job-stat"><span>재시도 / 실패</span><b data-mscx-job-retry>-</b></div></div><div class="mscx-job-current" data-mscx-job-current>현재 작업을 준비하고 있습니다.</div><div class="mscx-note">이 화면을 닫아도 작업은 계속됩니다. 새로고침 후에는 저장된 작업 영수증을 읽고 이미 서버에 일치하는 항목을 다시 전송하지 않고 이어서 확인합니다.</div></div>
+          <div class="mscx-message" data-mscx-message>${htmlEscape(config.error ? `설정 읽기 실패: ${config.error}` : `현재 모드: ${modeLabel(config.mode || MODE_PLUGIN_ONLY)}`)}</div>
+        </div>
+      </section>`;
+
+    const root = container.querySelector(`#${instanceId}`);
+    if (!root) return false;
+    let currentConfig = { ...config };
+    let lastTerminalHandled = '';
+    const q = selector => root.querySelector(selector);
+    const modeInputs = () => Array.from(root.querySelectorAll(`input[name="${instanceId}-mode"]`));
+    const selectedMode = () => modeInputs().find(input => input.checked)?.value || MODE_PLUGIN_ONLY;
+    const updateModeSelectionStyles = () => modeInputs().forEach(input => input.closest?.('.mscx-mode')?.classList?.toggle('selected', input.checked === true));
+    modeInputs().forEach(input => { input.checked = input.value === (currentConfig.mode || MODE_PLUGIN_ONLY); input.addEventListener?.('change', updateModeSelectionStyles); });
+    updateModeSelectionStyles();
+    const messageNode = q('[data-mscx-message]');
+    const stateNode = q('[data-mscx-state]');
+    const setMessage = (value, tone = '') => { if (messageNode) { messageNode.textContent = String(value || ''); messageNode.className = `mscx-message${tone ? ` ${tone}` : ''}`; } };
+    const setConnectionUi = result => {
+      const ok = result?.ok === true;
+      if (stateNode) stateNode.className = `mscx-state ${ok ? 'good' : 'error'}`;
+      const stateText = q('[data-mscx-state-text]'); if (stateText) stateText.textContent = ok ? '서버 연결됨' : ((currentConfig.mode || MODE_PLUGIN_ONLY) === MODE_PLUGIN_ONLY ? '플러그인 단독' : '서버 연결 안 됨');
+      const version = q('[data-mscx-version]'); if (version) version.textContent = ok ? (result.serverVersion || '-') : '-';
+      const protocol = q('[data-mscx-protocol]'); if (protocol) protocol.textContent = ok ? `${Number(result.protocol?.major || 0)}.${Number(result.protocol?.minor || 0)}` : '-';
+      const records = q('[data-mscx-records]'); if (records) records.textContent = ok ? `${Number(result.liveRecords || 0).toLocaleString()}건` : '-';
+    };
+    const setPluginOnlyUi = () => {
+      if (stateNode) stateNode.className = 'mscx-state warn';
+      const stateText = q('[data-mscx-state-text]'); if (stateText) stateText.textContent = '플러그인 단독';
+      const version = q('[data-mscx-version]'); if (version) version.textContent = '-';
+      const protocol = q('[data-mscx-protocol]'); if (protocol) protocol.textContent = '-';
+      const records = q('[data-mscx-records]'); if (records) records.textContent = '-';
+    };
+    const renderJob = job => {
+      const node = q('[data-mscx-job]');
+      if (!node) return;
+      if (!job) { node.hidden = true; return; }
+      node.hidden = false;
+      const terminal = syncJobTerminal(job.status);
+      const total = Math.max(0, Number(job.totalItems || 0) || 0);
+      const processed = Math.max(0, Number(job.processedItems || 0) || 0);
+      const percent = total > 0 ? Math.max(0, Math.min(100, processed / total * 100)) : 0;
+      const progressNode = q('[data-mscx-progress]');
+      if (progressNode) {
+        progressNode.classList.toggle('indeterminate', !terminal && total <= 0);
+        const bar = progressNode.querySelector('i'); if (bar && total > 0) bar.style.width = `${percent.toFixed(2)}%`; else if (bar && terminal) bar.style.width = job.status === 'completed' ? '100%' : '0%';
+      }
+      q('[data-mscx-job-title]').textContent = jobTitle(job);
+      q('[data-mscx-job-badge]').textContent = job.status === 'completed' ? '완료' : (job.status === 'failed' ? '실패' : (job.status === 'paused' ? '일시 중지 · 자동 재시도' : (total > 0 ? `${percent.toFixed(1)}%` : '작업 중')));
+      q('[data-mscx-job-phase]').textContent = phaseLabel(job.phase);
+      q('[data-mscx-job-message]').textContent = job.message || (job.error ? job.error : '');
+      q('[data-mscx-job-items]').textContent = total > 0 ? `${processed.toLocaleString()} / ${total.toLocaleString()}건` : `${processed.toLocaleString()}건 확인`;
+      q('[data-mscx-job-bytes]').textContent = fmtBytes(job.processedBytes || 0);
+      q('[data-mscx-job-transfer]').textContent = fmtBytes(job.transferredBytes || 0);
+      const endAt = job.finishedAt || Date.now(); q('[data-mscx-job-elapsed]').textContent = fmtDuration(endAt - Number(job.startedAt || endAt));
+      const activityAge = Math.max(0, Date.now() - Number(job.lastActivityAt || job.updatedAt || Date.now())); q('[data-mscx-job-activity]').textContent = activityAge < 1500 ? '방금 전' : `${fmtDuration(activityAge)} 전`;
+      q('[data-mscx-job-retry]').textContent = `${Number(job.retryCount || 0)} / ${Number(job.failures || 0)}`;
+      const currentBits = [job.currentAction, job.currentSpace ? `[${job.currentSpace}]` : '', job.currentKey].filter(Boolean); q('[data-mscx-job-current]').textContent = currentBits.join(' · ') || (terminal ? (job.status === 'completed' ? '모든 검증이 완료되었습니다.' : (job.error || '작업이 중단되었습니다.')) : '현재 작업을 준비하고 있습니다.');
+      const active = !terminal;
+      if (active && stateNode) {
+        stateNode.className = job.status === 'paused' ? 'mscx-state warn' : 'mscx-state warn';
+        const stateText = q('[data-mscx-state-text]'); if (stateText) stateText.textContent = job.status === 'paused' ? '동기화 일시 중지' : `${jobTitle(job)} 중`;
+      }
+      if (terminal && job.jobId && lastTerminalHandled !== job.jobId) {
+        lastTerminalHandled = job.jobId;
+        setMessage(job.status === 'completed'
+          ? `${jobTitle(job)} 완료\n업로드 ${Number(job.uploaded || 0).toLocaleString()} · 복구 ${Number(job.restored || 0).toLocaleString()} · 일치 ${Number(job.matched || 0).toLocaleString()}`
+          : `${jobTitle(job)} 실패\n${job.error || '상세 오류를 확인하세요.'}`, job.status === 'completed' ? 'good' : 'error');
+        setTimeout(() => { void refreshActionState().then(async latest => { if (latest.mode === MODE_PLUGIN_ONLY) setPluginOnlyUi(); else setConnectionUi(await testConnection(latest.url)); }); }, 0);
+      }
+    };
+    const refreshActionState = async () => {
+      const current = await readConfig(true).catch(() => currentConfig); currentConfig = { ...current };
+      const job = getSyncJob(); const activeJob = !!job && !syncJobTerminal(job.status);
+      const modeLabelNode = q('[data-mscx-mode-label]'); if (modeLabelNode) modeLabelNode.textContent = modeLabel(current.mode);
+      q('[data-mscx-apply]').disabled = activeJob;
+      q('[data-mscx-sync]').disabled = activeJob || current.mode !== MODE_MIRROR;
+      q('[data-mscx-restore]').disabled = activeJob || current.mode !== MODE_SERVER_ONLY;
+      q('[data-mscx-delete]').disabled = activeJob || current.mode === MODE_PLUGIN_ONLY;
+      modeInputs().forEach(input => { input.disabled = activeJob; input.checked = input.value === (activeJob ? (job.targetMode || current.mode) : current.mode); }); updateModeSelectionStyles();
+      const url = q('[data-mscx-url]'); if (url) { url.disabled = activeJob; if (typeof document === 'undefined' || document.activeElement !== url) url.value = activeJob ? (job.targetUrl || current.url) : current.url; }
+      renderJob(job);
+      return current;
+    };
+
+    q('[data-mscx-test]').onclick = async () => {
+      setMessage('서버 연결을 확인하고 있습니다…'); q('[data-mscx-test]').disabled = true;
+      const result = await testConnection(q('[data-mscx-url]').value); setConnectionUi(result); renderJob(getSyncJob());
+      setMessage(result.ok ? `연결 성공\nMemory Suite ${result.serverVersion || '-'} · Protocol ${Number(result.protocol?.major || 0)}.${Number(result.protocol?.minor || 0)} · DB ${result.integrity?.result || 'ok'} · 데이터 ${Number(result.liveRecords || 0).toLocaleString()}건 · ${result.durationMs}ms` : `연결 실패\n${result.error || '서버에 연결할 수 없습니다.'}`, result.ok ? 'good' : 'error');
+      q('[data-mscx-test]').disabled = false;
+    };
+
+    q('[data-mscx-apply]').onclick = async () => {
+      const targetMode = selectedMode(); const targetUrl = q('[data-mscx-url]').value;
+      try {
+        const current = await readConfig(true);
+        if (targetMode === current.mode && normalizeServerUrl(targetUrl) === current.url) { setMessage('변경할 설정이 없습니다.', 'good'); return; }
+        if (targetMode === MODE_PLUGIN_ONLY && current.mode === MODE_PLUGIN_ONLY) {
+          q('[data-mscx-apply]').disabled = true; setMessage('서버 주소 설정을 적용하고 있습니다…');
+          const result = await configureConnection({ mode: targetMode, url: targetUrl });
+          setMessage(`설정 적용 완료\n${modeLabel(result.to.mode)} · ${result.to.url}`, 'good'); setPluginOnlyUi();
+          await refreshActionState(); return;
+        }
+        const job = await startConnectionConfigurationJob({ mode: targetMode, url: targetUrl });
+        setMessage(`설정 변경을 접수했습니다.\n현재 저장 모드는 데이터 안전을 위해 그대로 유지하며, ${jobTitle(job)}가 끝나면 ${modeLabel(job.targetMode)}로 자동 확정됩니다.`, 'good');
+        renderJob(job); await refreshActionState();
+      } catch (error) { setMessage(`설정 적용 시작 실패\n${error?.message || error}`, 'error'); await refreshActionState(); }
+    };
+
+    q('[data-mscx-sync]').onclick = async () => {
+      try { const job = await startSynchronizationJob(); setMessage('수동 동기화를 백그라운드에서 시작했습니다. 이 화면을 닫아도 계속됩니다.', 'good'); renderJob(job); await refreshActionState(); }
+      catch (error) { setMessage(`동기화 시작 실패\n${error?.message || error}`, 'error'); }
+    };
+    q('[data-mscx-restore]').onclick = async () => {
+      try { const job = await startRestoreJob(); setMessage('서버 DATA 복구를 백그라운드에서 시작했습니다. 진행 상황은 아래에 계속 표시됩니다.', 'good'); renderJob(job); await refreshActionState(); }
+      catch (error) { setMessage(`복구 시작 실패\n${error?.message || error}`, 'error'); }
+    };
+
+    let deleteArmedUntil = 0;
+    q('[data-mscx-delete]').onclick = async () => {
+      const button = q('[data-mscx-delete]'); if (getSyncJob() && !syncJobTerminal(getSyncJob().status)) { setMessage('진행 중인 동기화가 끝난 뒤 삭제할 수 있습니다.', 'error'); return; }
+      if (Date.now() > deleteArmedUntil) {
+        button.disabled = true; setMessage('삭제 전에 서버 DATA의 무결성과 보존 범위를 확인하고 있습니다…');
+        try { const checked = await verifyServerPreservation(state.legacy.plugin); deleteArmedUntil = Date.now() + 30000; button.textContent = '검증 완료 · 다시 눌러 삭제'; setMessage(`서버 보존 검증 완료\nDB 무결성: ${checked.integrity?.result || 'ok'} · 항목 ${checked.checked}\n30초 안에 다시 누르면 pluginStorage를 삭제하고 서버 단독으로 전환합니다.`, 'good'); }
+        catch (error) { deleteArmedUntil = 0; button.textContent = '플러그인 스토리지 삭제'; setMessage(`삭제 차단\n서버에 안전하게 보존됐다고 확인할 수 없습니다.\n${error?.message || error}`, 'error'); }
+        finally { await refreshActionState(); if (deleteArmedUntil > Date.now()) button.disabled = false; }
+        return;
+      }
+      deleteArmedUntil = 0; button.disabled = true; setMessage('서버 보존 상태를 다시 확인한 뒤 pluginStorage를 삭제합니다…');
+      try { const result = await deletePluginStorageAfterServerVerification(); button.textContent = '플러그인 스토리지 삭제'; await clearPersistedSyncJob(); setMessage(`삭제 완료\n삭제 항목 ${result.deleted} · 저장 방식 서버 단독\n필요하면 복구 버튼으로 pluginStorage를 다시 만들 수 있습니다.`, 'good'); }
+      catch (error) { button.textContent = '플러그인 스토리지 삭제'; setMessage(`삭제 실패 또는 중단\n${error?.message || error}\n검증되지 않은 데이터는 삭제하지 않았습니다.`, 'error'); }
+      finally { await refreshActionState(); }
+    };
+
+    const unsubscribe = subscribeSyncJob(renderJob);
+    const tick = setInterval(() => {
+      if (!root.isConnected) { clearInterval(tick); unsubscribe(); return; }
+      renderJob(getSyncJob());
+    }, 1000);
+    try { tick?.unref?.(); } catch (_) {}
+    await resumePendingSyncJob().catch(() => null);
+    await refreshActionState();
+    if ((currentConfig.mode || MODE_PLUGIN_ONLY) !== MODE_PLUGIN_ONLY) void testConnection(currentConfig.url).then(result => { setConnectionUi(result); renderJob(getSyncJob()); }).catch(() => {}); else setPluginOnlyUi();
+    renderJob(getSyncJob());
+    return true;
+  };
+
+  const managementRootId = `memory-suite-management-${namespace}`.replace(/[^A-Za-z0-9_-]/g, '_');
+  const managementButtonId = `memory-suite-management-button-${namespace}`.replace(/[^A-Za-z0-9_-]/g, '_');
+
+  const closeManagementDialog = async () => {
+    try { state.management.root?.remove?.(); } catch (_) {}
+    state.management.root = null;
+    for (const api of apiCandidates()) {
+      try { if (typeof api?.hideContainer === 'function') { await api.hideContainer(); break; } } catch (_) {}
+    }
+  };
+
+  const openManagementDialog = async () => {
+    for (const api of apiCandidates()) {
+      try { if (typeof api?.showContainer === 'function') { await api.showContainer('fullscreen'); break; } } catch (_) {}
+    }
+    if (typeof document === 'undefined' || !document.body) throw new Error('memory_suite_management_dom_unavailable');
+    try { document.getElementById(managementRootId)?.remove?.(); } catch (_) {}
+    const root = document.createElement('div');
+    root.id = managementRootId;
+    root.innerHTML = `<style>
+      #${managementRootId}{position:fixed;inset:0;z-index:2147483000;background:rgba(4,8,15,.72);display:flex;align-items:center;justify-content:center;padding:18px}
+      #${managementRootId} .ms-dialog-card{width:min(820px,100%);max-height:94vh;overflow:auto;background:#101827;border:1px solid #334155;border-radius:17px;padding:18px;box-shadow:0 24px 80px rgba(0,0,0,.48)}
+      #${managementRootId} .ms-dialog-close{display:flex;justify-content:flex-end;margin-top:12px} #${managementRootId} .ms-dialog-close button{padding:9px 14px;border:1px solid #475569;border-radius:9px;background:#1e293b;color:#eef3ff;cursor:pointer;font-weight:700}
+    </style><div class="ms-dialog-card"><div data-ms-dialog-panel></div><div class="ms-dialog-close"><button data-ms-dialog-close type="button">닫기</button></div></div>`;
+    document.body.appendChild(root);
+    state.management.root = root;
+    const host = root.querySelector('[data-ms-dialog-panel]');
+    await mountConnectionPanel(host, { title: `${displayName} · 서버 연결`, description: '저장 방식, 서버 주소, 연결 상태와 복구·삭제 작업을 관리합니다.' });
+    root.querySelector('[data-ms-dialog-close]').onclick = () => { void closeManagementDialog(); };
+    return true;
+  };
+
+  const registerManagementButton = async () => {
+    if (!managementButtonEnabled || state.management.registered || state.management.registering) return state.management.handle;
+    state.management.registering = true;
+    try {
+      const api = apiCandidates().find(candidate => typeof candidate?.registerButton === 'function');
+      if (!api) return null;
+      const handle = await api.registerButton({
+        name: `${displayName} 데이터 저장`, icon: '💾', iconType: 'html', location: 'hamburger', id: managementButtonId
+      }, openManagementDialog);
+      state.management.handle = handle || { id: managementButtonId };
+      state.management.registered = true;
+      return state.management.handle;
+    } catch (error) {
+      const message = String(error?.message || error || '');
+      if (/duplicate|already|exists/i.test(message)) {
+        state.management.registered = true;
+        state.management.handle = { id: managementButtonId, duplicate: true };
+        return state.management.handle;
+      }
+      warnOnce('management_button_registration_failed', error);
+      return null;
+    } finally { state.management.registering = false; }
+  };
+
+  const scheduleManagementRegistration = () => {
+    if (!managementButtonEnabled || state.management.registered || state.management.timer) return;
+    let attempts = 0;
+    const tryRegister = async () => {
+      state.management.timer = null; attempts += 1;
+      const result = await registerManagementButton();
+      if (!result && attempts < 8) {
+        state.management.timer = setTimeout(tryRegister, Math.min(5000, 500 + attempts * 650));
+        try { state.management.timer?.unref?.(); } catch (_) {}
+      }
+    };
+    state.management.timer = setTimeout(tryRegister, 300);
+    try { state.management.timer?.unref?.(); } catch (_) {}
+  };
+
+
+  // ---------------------------------------------------------------------------
+  // Scope-routed storage layer v1.7
+  // ---------------------------------------------------------------------------
+  const normalizeScopeDescriptor = (value, fallbackId = '') => {
+    const source = value && typeof value === 'object' ? value : (value ? { scopeId: value } : {});
+    const scopeId = String(source.scopeId || source.scopeKey || source.key || fallbackId || '').trim().slice(0, 700);
+    const canonicalCharacterIdRaw = String(source.canonicalCharacterId || source.canonical_character_id || '').trim().slice(0, 240);
+    const canonicalChatIdRaw = String(source.canonicalChatId || source.canonical_chat_id || '').trim().slice(0, 240);
+    const canonicalScopeIdRaw = String(source.canonicalScopeId || source.canonical_scope_id || '').trim().slice(0, 700);
+    const aliases = [...new Set((Array.isArray(source.aliases) ? source.aliases : [])
+      .concat([source.scopeKey, source.key, source.storageHash, source.chatId, source.chat_id, canonicalChatIdRaw, canonicalScopeIdRaw])
+      .map(item => String(item || '').trim()).filter(Boolean))].slice(0, 24);
+    if (!scopeId) return { scopeId: '', scopeKey: '', label: '현재 스코프 확인 불가', aliases, available: false };
+    const characterId = String(source.characterId || source.character_id || '').trim().slice(0, 240);
+    const chatId = String(source.chatId || source.chat_id || '').trim().slice(0, 240);
+    const canonicalCharacterId = canonicalCharacterIdRaw || characterId;
+    const canonicalChatId = canonicalChatIdRaw || chatId;
+    const canonicalScopeId = canonicalScopeIdRaw || (canonicalCharacterId && canonicalChatId ? `canonical:char:${canonicalCharacterId}|chat:${canonicalChatId}` : '');
+    const personaId = String(source.personaId || source.persona_id || '').trim().slice(0, 240);
+    const characterName = String(source.characterName || source.character_name || '').trim().slice(0, 160);
+    const chatTitle = String(source.chatTitle || source.chat_title || source.title || '').trim().slice(0, 200);
+    const personaName = String(source.personaName || source.persona_name || '').trim().slice(0, 160);
+    const label = String(source.label || source.displayName || [characterName, chatTitle].filter(Boolean).join(' / ') || chatTitle || chatId || scopeId).trim().slice(0, 260);
+    return { ...source, scopeId, scopeKey: String(source.scopeKey || source.key || scopeId).trim().slice(0, 700), aliases, characterId, chatId, canonicalCharacterId, canonicalChatId, canonicalScopeId, personaId, characterName, chatTitle, personaName, label, available: source.available !== false };
+  };
+
+  const defaultCurrentScope = async () => {
+    const apis = apiCandidates();
+    let charIndex = -1, chatIndex = -1, character = null, chat = null, db = null;
+    for (const api of apis) {
+      try {
+        if (charIndex < 0 && typeof api?.getCurrentCharacterIndex === 'function') charIndex = Number(await api.getCurrentCharacterIndex());
+        if (chatIndex < 0 && typeof api?.getCurrentChatIndex === 'function') chatIndex = Number(await api.getCurrentChatIndex());
+        if (!character && Number.isInteger(charIndex) && charIndex >= 0 && typeof api?.getCharacterFromIndex === 'function') character = await api.getCharacterFromIndex(charIndex);
+        if (!chat && Number.isInteger(charIndex) && charIndex >= 0 && Number.isInteger(chatIndex) && chatIndex >= 0 && typeof api?.getChatFromIndex === 'function') chat = await api.getChatFromIndex(charIndex, chatIndex);
+        if (!db && typeof api?.getDatabase === 'function') db = await api.getDatabase(['selectedPersona', 'personas']);
+      } catch (_) {}
+    }
+    character = character && typeof character === 'object' ? character : {};
+    chat = chat && typeof chat === 'object' ? chat : {};
+    db = db && typeof db === 'object' ? db : {};
+    const first = (...values) => values.map(item => String(item == null ? '' : item).trim()).find(Boolean) || '';
+    // Keep the legacy physical routing IDs unchanged, but carry a canonical
+    // RisuAI identity beside them. This prevents an update from orphaning existing
+    // server/pluginStorage routes while allowing owner plugins to converge on chaId/chat.id.
+    const characterId = first(character.id, character._id, character.uid, character.uuid, character.key, Number.isInteger(charIndex) && charIndex >= 0 ? `charIndex:${charIndex}` : '');
+    const chatId = first(chat.id, chat._id, chat.uid, chat.uuid, chat.key, chat.chatId, Number.isInteger(chatIndex) && chatIndex >= 0 ? `chatIndex:${chatIndex}` : '');
+    const canonicalCharacterId = first(character.chaId, character.characterId, character.charId, character.id, character._id, character.uid, character.uuid, character.key, characterId);
+    const canonicalChatId = first(chat.id, chat.chatId, chat._id, chat.uid, chat.uuid, chat.key, chatId);
+    const canonicalScopeId = canonicalCharacterId && canonicalChatId ? `canonical:char:${canonicalCharacterId}|chat:${canonicalChatId}` : '';
+    let personaId = first(chat.bindedPersona, chat.boundPersonaId, chat.personaId);
+    const selectedPersona = Number(db.selectedPersona);
+    if (!personaId && Number.isInteger(selectedPersona) && Array.isArray(db.personas)) personaId = first(db.personas[selectedPersona]?.id, db.personas[selectedPersona]?._id, `personaIndex:${selectedPersona}`);
+    if (!characterId || !chatId) return normalizeScopeDescriptor(null);
+    const scopeId = `memory-suite:${namespace}:char:${characterId}|chat:${chatId}|persona:${personaId || 'default'}`;
+    return normalizeScopeDescriptor({
+      scopeId, scopeKey: scopeId, characterId, chatId, canonicalCharacterId, canonicalChatId, canonicalScopeId, personaId,
+      characterName: first(character.nickname, character.name, character.charName),
+      chatTitle: first(chat.name, chat.title, chat.chatName, chat.filename, chatId),
+      aliases: [chatId, canonicalChatId, canonicalScopeId].filter(Boolean)
+    });
+  };
+
+  const rawPluginStorage = () => {
+    if (state.legacy.plugin?.getItem && state.legacy.plugin?.setItem) return state.legacy.plugin;
+    for (const api of apiCandidates()) {
+      try { if (api?.pluginStorage?.getItem && api?.pluginStorage?.setItem) return api.pluginStorage; } catch (_) {}
+    }
+    return null;
+  };
+
+  const rawDeviceStorage = async () => {
+    if (state.legacy.local?.getItem && state.legacy.local?.setItem) return state.legacy.local;
+    for (const api of apiCandidates()) {
+      try {
+        if (typeof api?.getLocalPluginStorage === 'function') {
+          const store = await api.getLocalPluginStorage();
+          if (store?.getItem && store?.setItem) return store;
+        }
+        if (api?.safeLocalStorage?.getItem && api?.safeLocalStorage?.setItem) return api.safeLocalStorage;
+      } catch (_) {}
+    }
+    return null;
+  };
+
+  const parseScopeRegistry = raw => {
+    let source = raw;
+    if (typeof source === 'string') { try { source = JSON.parse(source); } catch (_) { source = null; } }
+    source = source && typeof source === 'object' && !Array.isArray(source) ? source : {};
+    const entries = {};
+    const incoming = source.entries && typeof source.entries === 'object' && !Array.isArray(source.entries) ? source.entries : {};
+    for (const [scopeIdRaw, rowRaw] of Object.entries(incoming)) {
+      const row = rowRaw && typeof rowRaw === 'object' ? rowRaw : {};
+      const scope = normalizeScopeDescriptor(row, scopeIdRaw);
+      if (!scope.scopeId) continue;
+      entries[scope.scopeId] = { ...scope, mode: normalizeMode(row.mode), updatedAt: Math.max(0, Number(row.updatedAt || 0) || 0), source: String(row.source || 'registry').slice(0, 100) };
+    }
+    return {
+      schema: SCOPE_ROUTING_SCHEMA,
+      version: 1,
+      namespace,
+      pluginId,
+      defaultMode: MODE_PLUGIN_ONLY,
+      updatedAt: Math.max(0, Number(source.updatedAt || 0) || 0),
+      legacyGlobalModeImported: source.legacyGlobalModeImported === true,
+      entries
+    };
+  };
+
+  const mergeScopeRegistries = (...values) => {
+    const result = parseScopeRegistry(null);
+    for (const value of values) {
+      const registry = parseScopeRegistry(value);
+      result.legacyGlobalModeImported = result.legacyGlobalModeImported || registry.legacyGlobalModeImported;
+      result.updatedAt = Math.max(result.updatedAt, registry.updatedAt);
+      for (const [scopeId, row] of Object.entries(registry.entries)) {
+        const previous = result.entries[scopeId];
+        if (!previous || Number(row.updatedAt || 0) >= Number(previous.updatedAt || 0)) result.entries[scopeId] = row;
+      }
+    }
+    return result;
+  };
+
+  const writeScopeRegistryLocal = async registryValue => {
+    const registry = parseScopeRegistry(registryValue);
+    registry.updatedAt = Date.now();
+    const payload = JSON.stringify(registry);
+    let success = false;
+    const pluginStore = rawPluginStorage();
+    if (pluginStore?.setItem) {
+      try {
+        const result = await pluginStore.setItem(SCOPE_ROUTING_LOCAL_KEY, payload);
+        if (result !== false) {
+          const readback = await pluginStore.getItem?.(SCOPE_ROUTING_LOCAL_KEY);
+          success = String(readback || '') === payload;
+        }
+      } catch (_) {}
+    }
+    const deviceStore = await rawDeviceStorage().catch(() => null);
+    if (deviceStore?.setItem) {
+      try { await deviceStore.setItem(SCOPE_ROUTING_LOCAL_KEY, payload); success = true; } catch (_) {}
+    }
+    if (!success) {
+      const error = new Error('memory_suite_scope_routing_storage_unavailable');
+      error.code = 'MEMORY_SUITE_SCOPE_ROUTING_STORAGE_UNAVAILABLE';
+      throw error;
+    }
+    state.scopeRouting.registry = registry;
+    state.scopeRouting.registryLoaded = true;
+    return registry;
+  };
+
+  const loadScopeRegistry = async (force = false, tryServer = false) => {
+    if (!force && state.scopeRouting.registryLoaded && state.scopeRouting.registry) return state.scopeRouting.registry;
+    if (!force && state.scopeRouting.registryLoading) return await state.scopeRouting.registryLoading;
+    const task = (async () => {
+      let pluginRaw = null, deviceRaw = null, serverRaw = null;
+      const pluginStore = rawPluginStorage();
+      try { pluginRaw = await pluginStore?.getItem?.(SCOPE_ROUTING_LOCAL_KEY); } catch (_) {}
+      const deviceStore = await rawDeviceStorage().catch(() => null);
+      try { deviceRaw = await deviceStore?.getItem?.(SCOPE_ROUTING_LOCAL_KEY); } catch (_) {}
+      if (tryServer && !pluginRaw && !deviceRaw) {
+        try {
+          const remote = await remoteGet('plugin', SCOPE_ROUTING_SERVER_KEY, { allowPluginOnly: true });
+          if (remote.exists === true) serverRaw = remote.value;
+        } catch (_) {}
+      }
+      const registry = mergeScopeRegistries(serverRaw, pluginRaw, deviceRaw);
+      state.scopeRouting.registry = registry;
+      state.scopeRouting.registryLoaded = true;
+      return registry;
+    })();
+    state.scopeRouting.registryLoading = task;
+    try { return await task; } finally { state.scopeRouting.registryLoading = null; }
+  };
+
+  const synchronizeScopeRegistryToServer = async registryValue => {
+    const registry = parseScopeRegistry(registryValue || await loadScopeRegistry());
+    try {
+      await remoteMutate('set', 'plugin', SCOPE_ROUTING_SERVER_KEY, registry, { allowPluginOnly: true });
+      return true;
+    } catch (error) {
+      setStatus('scope_route_server_pending', error?.message || error);
+      return false;
+    }
+  };
+
+  const hydrateScopeRegistryFromServer = async () => {
+    if (!scopeRoutingEnabled) return null;
+    try {
+      const remote = await remoteGet('plugin', SCOPE_ROUTING_SERVER_KEY, { allowPluginOnly:true });
+      if (remote.exists !== true || !remote.value) return null;
+      const local = await loadScopeRegistry(false, false);
+      const merged = mergeScopeRegistries(remote.value, local);
+      const saved = await writeScopeRegistryLocal(merged);
+      state.scopeRouting.routeCache.clear();
+      setStatus('scope_routes_hydrated', '', { routeCount:Object.keys(saved.entries || {}).length });
+      return saved;
+    } catch (error) {
+      // Scope metadata hydration is best-effort. It must never prevent plugin UI,
+      // request hooks, or plugin-only scopes from starting while the server is down.
+      setStatus('scope_routes_server_unavailable', error?.message || error);
+      return null;
+    }
+  };
+
+  const resolveCurrentScope = async (force = false) => {
+    if (!scopeRoutingEnabled) return normalizeScopeDescriptor({ scopeId: '__plugin_global__', scopeKey: '__plugin_global__', label: `${displayName} 전역`, global: true });
+    if (!force && scopeCacheMs > 0 && state.scopeRouting.current?.scopeId && Date.now() - Number(state.scopeRouting.currentAt || 0) < scopeCacheMs) return state.scopeRouting.current;
+    let value = null;
+    try { value = currentScopeProvider ? await currentScopeProvider({ namespace, pluginId, pluginVersion, force }) : await defaultCurrentScope(); }
+    catch (error) { setStatus('scope_unavailable', error?.message || error); }
+    const scope = normalizeScopeDescriptor(value);
+    state.scopeRouting.current = scope;
+    state.scopeRouting.currentAt = Date.now();
+    state.scopeRouting.routeCache.clear();
+    return scope;
+  };
+
+  const registryEntryByAlias = (registry, aliasValue) => {
+    const alias = String(aliasValue || '').trim();
+    if (!alias) return null;
+    for (const row of Object.values(registry?.entries || {})) {
+      if (row.scopeId === alias || row.scopeKey === alias || (Array.isArray(row.aliases) && row.aliases.includes(alias))) return row;
+    }
+    return null;
+  };
+
+  const maybeImportLegacyGlobalMode = async (scope, registry) => {
+    if (!scope?.scopeId || registry.entries[scope.scopeId] || registry.legacyGlobalModeImported) return registry;
+    const legacyMode = normalizeMode(await getArgumentValue(modeArguments, MODE_PLUGIN_ONLY));
+    registry.legacyGlobalModeImported = true;
+    if (legacyMode !== MODE_PLUGIN_ONLY) {
+      registry.entries[scope.scopeId] = { ...scope, mode: legacyMode, updatedAt: Date.now(), source: 'legacy_global_mode_current_scope' };
+      state.scopeRouting.lastLegacyImport = { scopeId: scope.scopeId, mode: legacyMode, at: Date.now() };
+    }
+    const saved = await writeScopeRegistryLocal(registry);
+    try { await setArgumentValue(modeArguments[0] || 'memory_suite_server_mode', MODE_PLUGIN_ONLY); } catch (_) {}
+    return saved;
+  };
+
+  const readScopeMode = async (scopeInput = null, force = false) => {
+    const scope = normalizeScopeDescriptor(scopeInput || await resolveCurrentScope(force));
+    if (!scope.scopeId) return { scope, mode: MODE_PLUGIN_ONLY, modeLabel: modeLabel(MODE_PLUGIN_ONLY), explicit: false };
+    let registry = await loadScopeRegistry(force, false);
+    if (!scopeInput || scope.scopeId === state.scopeRouting.current?.scopeId) registry = await maybeImportLegacyGlobalMode(scope, registry);
+    const stored = registry.entries[scope.scopeId];
+    const transient = state.scopeRouting.transientModes.get(scope.scopeId);
+    const mode = VALID_MODES.has(transient) ? transient : normalizeMode(stored?.mode || MODE_PLUGIN_ONLY);
+    return { scope: stored ? normalizeScopeDescriptor(stored, scope.scopeId) : scope, mode, modeLabel: modeLabel(mode), explicit: !!stored };
+  };
+
+  const persistScopedMode = async (modeValue, scopeInput = null, persistOptions = {}) => {
+    const target = normalizeMode(modeValue);
+    const scope = normalizeScopeDescriptor(scopeInput || await resolveCurrentScope(true));
+    if (!scope.scopeId || scope.available === false) {
+      const error = new Error('memory_suite_current_scope_unavailable');
+      error.code = 'MEMORY_SUITE_SCOPE_UNAVAILABLE';
+      throw error;
+    }
+    const registry = await loadScopeRegistry(true, false);
+    registry.entries[scope.scopeId] = { ...(registry.entries[scope.scopeId] || {}), ...scope, mode: target, updatedAt: Date.now(), source: String(persistOptions.source || 'user_scope_setting') };
+    registry.legacyGlobalModeImported = true;
+    const saved = await writeScopeRegistryLocal(registry);
+    state.scopeRouting.transientModes.delete(scope.scopeId);
+    state.config = { ...state.config, at: Date.now(), mode: target };
+    void synchronizeScopeRegistryToServer(saved);
+    setStatus('scope_mode_changed', '', { scopeId: scope.scopeId, scopeLabel: scope.label, mode: target, modeLabel: modeLabel(target) });
+    return { scope, mode: target, modeLabel: modeLabel(target), registry: saved };
+  };
+
+  const anyServerScopedMode = async () => {
+    const registry = await loadScopeRegistry(false, false);
+    return Object.values(registry.entries || {}).some(row => normalizeMode(row.mode) !== MODE_PLUGIN_ONLY);
+  };
+
+  const normalizeRouteDescriptor = async (rawValue, space, key, currentScope) => {
+    let raw = rawValue;
+    if (typeof raw === 'string') raw = { scopeId: raw };
+    raw = raw && typeof raw === 'object' ? raw : {};
+    let kind = String(raw.kind || raw.type || '').trim().toLowerCase();
+    if (!['scope', 'shared', 'global'].includes(kind)) kind = raw.global === true ? 'global' : (raw.shared === true ? 'shared' : 'scope');
+    // Resolve an explicit scope or alias before falling back to the current scope.
+    // Falling back first would silently assign an unknown historical key to the
+    // currently open chat, which is unsafe for per-scope routing.
+    let scope = normalizeScopeDescriptor(raw.scope || raw, '');
+    if (kind === 'scope' && !scope.scopeId && raw.scopeAlias) {
+      const registry = await loadScopeRegistry(false, false);
+      scope = normalizeScopeDescriptor(registryEntryByAlias(registry, raw.scopeAlias));
+    }
+    if (kind === 'scope' && !scope.scopeId) scope = normalizeScopeDescriptor(currentScope);
+    let mode = MODE_PLUGIN_ONLY;
+    if (kind === 'scope') mode = (await readScopeMode(scope, false)).mode;
+    else if (kind === 'shared') mode = (await anyServerScopedMode()) ? normalizeMode(sharedRouteModeRaw) : MODE_PLUGIN_ONLY;
+    const remoteKey = String(raw.remoteKey || (raw.scopedContainer === true && scope.scopeId
+      ? `${key}${SCOPED_REMOTE_KEY_MARKER}${encodeURIComponent(scope.scopeId)}`
+      : key));
+    return {
+      routed: true, kind, space, key: String(key), logicalKey: String(key), remoteKey,
+      scope, scopeId: scope.scopeId || '', scopeLabel: scope.label || '', mode,
+      projectValue: typeof raw.projectValue === 'function' ? raw.projectValue : null,
+      mergeValue: typeof raw.mergeValue === 'function' ? raw.mergeValue : null,
+      removeValue: typeof raw.removeValue === 'function' ? raw.removeValue : null,
+      scopedContainer: raw.scopedContainer === true,
+      // Shared/global infrastructure is never swept or deleted as part of one chat scope.
+      // A plugin may opt a truly scope-owned shared record in explicitly.
+      includeInScopeSync: raw.includeInScopeSync === true || (raw.includeInScopeSync !== false && kind === 'scope'),
+      metadata: raw.metadata && typeof raw.metadata === 'object' ? raw.metadata : {}
+    };
+  };
+
+  const resolveScopedRoute = async (space, key, routeOptions = {}) => {
+    const normalizedKey = String(key || '');
+    if (!matchesRoute(space, normalizedKey)) return { routed: false, kind: 'global', space, key: normalizedKey, logicalKey: normalizedKey, remoteKey: normalizedKey, scopeId: '', mode: MODE_PLUGIN_ONLY };
+    if (!scopeRoutingEnabled) return { routed: true, kind: 'global', space, key: normalizedKey, logicalKey: normalizedKey, remoteKey: normalizedKey, scopeId: '', mode: MODE_PLUGIN_ONLY };
+    const currentScope = normalizeScopeDescriptor(routeOptions.scope || await resolveCurrentScope(routeOptions.forceScope === true));
+    const cacheKey = `${space}\n${normalizedKey}\n${currentScope.scopeId}`;
+    if (!routeOptions.noCache && state.scopeRouting.routeCache.has(cacheKey)) return state.scopeRouting.routeCache.get(cacheKey);
+    let raw = null;
+    try {
+      raw = resolveKeyScopeProvider
+        ? await resolveKeyScopeProvider({ namespace, pluginId, pluginVersion, space, key: normalizedKey, currentScope, registry: await loadScopeRegistry(false, false) })
+        : { kind: 'scope', ...currentScope };
+    } catch (error) {
+      setStatus('scope_route_failed', error?.message || error, { key: compact(normalizedKey, 180), space });
+      raw = { kind: 'scope', ...currentScope };
+    }
+    const route = await normalizeRouteDescriptor(raw, space, normalizedKey, currentScope);
+    state.scopeRouting.routeCache.set(cacheKey, route);
+    return route;
+  };
+
+  const scopedRemoteKeyInfo = remoteKeyValue => {
+    const remoteKey = String(remoteKeyValue || '');
+    const index = remoteKey.lastIndexOf(SCOPED_REMOTE_KEY_MARKER);
+    if (index < 0) return { logicalKey: remoteKey, scopeId: '' };
+    let scopeId = '';
+    try { scopeId = decodeURIComponent(remoteKey.slice(index + SCOPED_REMOTE_KEY_MARKER.length)); } catch (_) {}
+    return { logicalKey: remoteKey.slice(0, index), scopeId };
+  };
+
+  const routeProjectValue = async (route, value) => {
+    if (typeof route?.projectValue === 'function') return await route.projectValue(value, { route, scope: route.scope, namespace, pluginId });
+    return value;
+  };
+
+  const routeMergeValue = async (route, remoteValue, localValue) => {
+    if (typeof route?.mergeValue === 'function') return await route.mergeValue(remoteValue, localValue, { route, scope: route.scope, namespace, pluginId });
+    return remoteValue;
+  };
+
+  const routeRemoveLocal = async (route, legacyGet, legacySet, legacyRemove) => {
+    if (typeof route?.removeValue === 'function') {
+      const local = typeof legacyGet === 'function' ? await legacyGet() : null;
+      const next = await route.removeValue(local, { route, scope: route.scope, namespace, pluginId });
+      if (next === undefined || next === null || next === '') return typeof legacyRemove === 'function' ? await legacyRemove() : false;
+      return typeof legacySet === 'function' ? await legacySet(next) : false;
+    }
+    return typeof legacyRemove === 'function' ? await legacyRemove() : false;
+  };
+
+  const scopedBootstrap = async (force = false) => await bootstrap(force, true);
+  const scopedServerGet = async (space, key) => await remoteGet(String(space || 'plugin'), String(key || ''), { allowPluginOnly: true });
+  const scopedServerGetMany = async (space = 'plugin', keys = []) => await remoteGetMany(String(space || 'plugin'), keys, { allowPluginOnly: true });
+  const scopedServerKeys = async (space = 'plugin', prefix = '') => await remoteKeys(String(space || 'plugin'), String(prefix || ''), { allowPluginOnly: true });
+  const scopedServerIntegrity = async () => await remoteIntegrity({ allowPluginOnly: true });
+
+  const scopedGet = async (space, key, legacyGet = null, legacySet = null, legacyRemove = null) => {
+    const route = await resolveScopedRoute(space, key);
+    if (!route.routed || route.mode === MODE_PLUGIN_ONLY) return typeof legacyGet === 'function' ? await legacyGet() : null;
+    if (route.mode === MODE_MIRROR) {
+      const localValue = typeof legacyGet === 'function' ? await legacyGet() : null;
+      const projected = isNullishStorageValue(localValue) ? null : await routeProjectValue(route, localValue);
+      if (!isNullishStorageValue(projected)) {
+        try {
+          const remote = await remoteGet(space, route.remoteKey, { allowPluginOnly: true });
+          if (remote.tombstone === true) {
+            await routeRemoveLocal(route, legacyGet, legacySet, legacyRemove);
+            setStatus('server_tombstone_applied', '', { scopeId: route.scopeId, mode: route.mode, key: compact(key, 160), space });
+            return typeof legacyGet === 'function' ? await legacyGet() : null;
+          }
+          void serializeMutation(space, route.remoteKey, async () => {
+            try {
+              if (remote.exists !== true || jsonComparable(remote.value) !== jsonComparable(projected)) {
+                await remoteMutate('set', space, route.remoteKey, projected, { allowPluginOnly: true });
+              }
+              setStatus('synced', '', { scopeId: route.scopeId, mode: route.mode, key: compact(key, 160), space });
+            } catch (error) {
+              setStatus('local_ahead', error?.message || error, { scopeId: route.scopeId, mode: route.mode, key: compact(key, 160), space });
+            }
+          });
+          return localValue;
+        } catch (error) {
+          setStatus('server_unavailable_local_only', error?.message || error, { scopeId: route.scopeId, mode: route.mode, key: compact(key, 160), space });
+          return localValue;
+        }
+      }
+      try {
+        const remote = await remoteGet(space, route.remoteKey, { allowPluginOnly: true });
+        if (remote.exists === true) {
+          const merged = await routeMergeValue(route, remote.value, localValue);
+          if (typeof legacySet === 'function') await legacySet(merged);
+          return merged;
+        }
+        if (remote.tombstone === true) await routeRemoveLocal(route, legacyGet, legacySet, legacyRemove);
+        return typeof legacyGet === 'function' ? await legacyGet() : null;
+      } catch (error) {
+        setStatus('server_unavailable_local_only', error?.message || error, { scopeId: route.scopeId, mode: route.mode, key: compact(key, 160), space });
+        return localValue;
+      }
+    }
+    // server_only: never fall back silently when the server is unavailable.
+    const remote = await remoteGet(space, route.remoteKey, { allowPluginOnly: true });
+    if (remote.exists === true) return await routeMergeValue(route, remote.value, null);
+    if (remote.tombstone === true) return null;
+    const localValue = typeof legacyGet === 'function' ? await legacyGet() : null;
+    const projected = isNullishStorageValue(localValue) ? null : await routeProjectValue(route, localValue);
+    if (!isNullishStorageValue(projected)) {
+      try { await remoteMutate('set', space, route.remoteKey, projected, { expectedRevision: 0, allowPluginOnly: true }); }
+      catch (error) {
+        if (error?.status !== 409) throw error;
+      }
+      const migrated = await remoteGet(space, route.remoteKey, { allowPluginOnly: true });
+      if (migrated.exists === true) return await routeMergeValue(route, migrated.value, null);
+    }
+    return null;
+  };
+
+  const scopedSet = async (space, key, value, legacySet = null) => {
+    const route = await resolveScopedRoute(space, key);
+    if (!route.routed || route.mode === MODE_PLUGIN_ONLY) return typeof legacySet === 'function' ? await legacySet(value) : false;
+    const projected = await routeProjectValue(route, value);
+    if (route.mode === MODE_MIRROR) {
+      const localOk = typeof legacySet === 'function' ? await legacySet(value) : false;
+      if (!localOk) return false;
+      try {
+        await serializeMutation(space, route.remoteKey, () => remoteMutate('set', space, route.remoteKey, projected, { allowPluginOnly: true }));
+        setStatus('synced', '', { scopeId: route.scopeId, mode: route.mode, key: compact(key, 160), space });
+      } catch (error) {
+        setStatus('local_ahead', error?.message || error, { scopeId: route.scopeId, mode: route.mode, key: compact(key, 160), space });
+        warnOnce(`mirror_server_write_${compact(key, 80)}`, error);
+      }
+      return true;
+    }
+    await serializeMutation(space, route.remoteKey, () => remoteMutate('set', space, route.remoteKey, projected, { allowPluginOnly: true }));
+    return true;
+  };
+
+  const scopedRemove = async (space, key, legacyGet = null, legacySet = null, legacyRemove = null) => {
+    const route = await resolveScopedRoute(space, key);
+    if (!route.routed || route.mode === MODE_PLUGIN_ONLY) return typeof legacyRemove === 'function' ? await legacyRemove() : false;
+    if (route.mode === MODE_MIRROR) {
+      try { await serializeMutation(space, route.remoteKey, () => remoteMutate('remove', space, route.remoteKey, null, { allowPluginOnly: true })); }
+      catch (error) { setStatus('mirror_delete_blocked', error?.message || error, { scopeId: route.scopeId, key: compact(key, 160), space }); return false; }
+      const localOk = await routeRemoveLocal(route, legacyGet, legacySet, legacyRemove);
+      if (!localOk) return false;
+      return true;
+    }
+    await serializeMutation(space, route.remoteKey, () => remoteMutate('remove', space, route.remoteKey, null, { allowPluginOnly: true }));
+    return true;
+  };
+
+  const scopedKeys = async (space, prefix = '', legacyKeysFn = null) => {
+    const currentScope = await resolveCurrentScope(false);
+    const legacy = typeof legacyKeysFn === 'function' ? await legacyKeysFn() : [];
+    const legacyList = Array.isArray(legacy) ? legacy.map(String).filter(Boolean) : [];
+    const visible = [];
+    let requiresServer = false;
+    for (const key of legacyList) {
+      if (!matchesRoute(space, key)) { visible.push(key); continue; }
+      const route = await resolveScopedRoute(space, key, { scope: currentScope });
+      if (route.mode !== MODE_SERVER_ONLY) visible.push(key);
+      if (route.mode !== MODE_PLUGIN_ONLY) requiresServer = true;
+    }
+    let remote = { keys: [], tombstones: [] };
+    try { remote = await remoteKeys(space, prefix, { allowPluginOnly: true }); }
+    catch (error) {
+      if (requiresServer && (await readScopeMode(currentScope)).mode === MODE_SERVER_ONLY) throw error;
+      return [...new Set(visible)];
+    }
+    const tombstones = new Set();
+    for (const raw of Array.isArray(remote.tombstones) ? remote.tombstones : []) tombstones.add(scopedRemoteKeyInfo(raw).logicalKey);
+    for (const remoteKey of Array.isArray(remote.keys) ? remote.keys : []) {
+      const decoded = scopedRemoteKeyInfo(remoteKey);
+      if (decoded.scopeId && decoded.scopeId !== currentScope.scopeId) continue;
+      const route = await resolveScopedRoute(space, decoded.logicalKey, { scope: decoded.scopeId ? { ...currentScope, scopeId: decoded.scopeId, scopeKey: decoded.scopeId } : currentScope });
+      if (route.mode !== MODE_PLUGIN_ONLY && !tombstones.has(decoded.logicalKey)) visible.push(decoded.logicalKey);
+    }
+    return [...new Set(visible.filter(key => !tombstones.has(key)))];
+  };
+
+  const scheduleScopedAutomaticMigration = (legacy, space) => {
+    const enabled = space === 'plugin' ? autoMigratePlugin : autoMigrateLocal;
+    if (!enabled || !legacy || typeof legacy.keys !== 'function') return;
+    const migration = state.migration[space];
+    if (!migration || migration.scheduled === true || migration.state === 'running') return;
+    migration.scheduled = true;
+    const run = async () => {
+      migration.scheduled = false;
+      let scope = null;
+      try {
+        scope = await resolveCurrentScope(false);
+        if (!scope?.scopeId) {
+          state.migration[space] = { ...migration, state:'lazy_only', at:Date.now(), reason:'current_scope_unavailable', scheduled:false };
+          return;
+        }
+        const modeState = await readScopeMode(scope, false);
+        if (modeState.mode === MODE_PLUGIN_ONLY) {
+          state.migration[space] = { ...migration, state:'idle', at:Date.now(), reason:'scope_plugin_only', scheduled:false };
+          return;
+        }
+        state.migration[space] = { ...migration, state:'running', at:Date.now(), reason:'scope_automatic_migration', scheduled:false };
+        const result = await scopedSynchronizeSpace(legacy, space, {
+          scope, allowOverwrite:false, restoreMissingLocal:modeState.mode === MODE_MIRROR
+        });
+        state.migration[space] = {
+          state:'complete', scanned:Number(result.totalItems || 0), migrated:Number(result.uploaded || 0),
+          skipped:Number(result.matched || 0), failed:Number(result.failures?.length || 0), at:Date.now(),
+          reason:`scope:${scope.scopeId}`, scheduled:false
+        };
+      } catch (error) {
+        const keyEnumerationMissing = error?.code === 'MEMORY_SUITE_KEYS_UNAVAILABLE' || /key_enumeration/i.test(String(error?.message || ''));
+        state.migration[space] = {
+          ...state.migration[space], state:keyEnumerationMissing?'lazy_only':'partial', at:Date.now(),
+          failed:Math.max(1, Number(error?.result?.failures?.length || 0) || 1), reason:compact(error?.message || error, 300), scheduled:false
+        };
+        if (!keyEnumerationMissing && retryableSyncError(error)) {
+          setTimeout(() => scheduleScopedAutomaticMigration(legacy, space), migrationRetryMs);
+        }
+      }
+    };
+    const timer = setTimeout(() => { void run(); }, migrationDelayMs);
+    try { timer?.unref?.(); } catch (_) {}
+  };
+
+  const createScopedProxy = (legacy, space, cache) => {
+    if (!legacy || (typeof legacy !== 'object' && typeof legacy !== 'function')) return legacy;
+    state.legacy[space] = legacy;
+    if (cache.has(legacy)) return cache.get(legacy);
+    const proxy = Object.freeze({
+      getItem: async key => await scopedGet(
+        space, String(key),
+        async () => typeof legacy.getItem === 'function' ? await legacy.getItem(key) : null,
+        async next => typeof legacy.setItem === 'function' ? (await legacy.setItem(key, next)) !== false : false,
+        async () => {
+          if (typeof legacy.removeItem === 'function') return (await legacy.removeItem(key)) !== false;
+          if (typeof legacy.setItem === 'function') return (await legacy.setItem(key, null)) !== false;
+          return false;
+        }
+      ),
+      setItem: async (key, value) => await scopedSet(space, String(key), value, async next => typeof legacy.setItem === 'function' ? (await legacy.setItem(key, next)) !== false : false),
+      removeItem: async key => await scopedRemove(
+        space, String(key),
+        async () => typeof legacy.getItem === 'function' ? await legacy.getItem(key) : null,
+        async next => typeof legacy.setItem === 'function' ? (await legacy.setItem(key, next)) !== false : false,
+        async () => {
+          if (typeof legacy.removeItem === 'function') return (await legacy.removeItem(key)) !== false;
+          if (typeof legacy.setItem === 'function') return (await legacy.setItem(key, null)) !== false;
+          return false;
+        }
+      ),
+      keys: async prefix => await scopedKeys(space, String(prefix || ''), async () => typeof legacy.keys === 'function' ? await legacy.keys() : [])
+    });
+    cache.set(legacy, proxy);
+    scheduleScopedAutomaticMigration(legacy, space);
+    if (space === 'plugin') setTimeout(() => {
+      void hydrateScopeRegistryFromServer().then(() => scopedResumePendingSyncJob()).catch(() => {});
+    }, 0);
+    return proxy;
+  };
+
+  const scopeRouteMatches = (route, targetScope) => {
+    if (!route?.routed || route.kind === 'global' || route.includeInScopeSync === false) return false;
+    if (route.kind === 'shared') return route.includeInScopeSync === true;
+    return !!targetScope?.scopeId && route.scopeId === targetScope.scopeId;
+  };
+
+  const collectScopedLegacyRows = async (legacy, space, scope) => {
+    const listed = await legacyKeys(legacy);
+    if (listed == null) {
+      const error = new Error('memory_suite_pluginstorage_key_enumeration_required');
+      error.code = 'MEMORY_SUITE_KEYS_UNAVAILABLE';
+      throw error;
+    }
+    const rows = [];
+    for (const key of listed.map(String).filter(Boolean)) {
+      if (!matchesRoute(space, key)) continue;
+      const route = await resolveScopedRoute(space, key, { scope, noCache: true });
+      if (scopeRouteMatches(route, scope)) rows.push({ key, route });
+    }
+    return rows;
+  };
+
+  const scopedSynchronizeSpace = async (legacy, space = 'plugin', syncOptions = {}) => {
+    if (!legacy) throw new Error('memory_suite_pluginstorage_unavailable');
+    const scope = normalizeScopeDescriptor(syncOptions.scope || await resolveCurrentScope(true));
+    if (!scope.scopeId) throw new Error('memory_suite_current_scope_unavailable');
+    const onProgress = typeof syncOptions.onProgress === 'function' ? syncOptions.onProgress : null;
+    const progress = {
+      schema: 'memory-suite.sync-progress.v2', namespace, space, scopeId: scope.scopeId, scopeLabel: scope.label,
+      phase: 'integrity_before', currentAction: '서버 무결성 확인', currentKey: '', totalItems: 0, processedItems: 0,
+      processedBytes: 0, transferredBytes: 0, uploaded: 0, restored: 0, matched: 0, removedByTombstone: 0,
+      failureCount: 0, conflictCount: 0, startedAt: Date.now(), lastActivityAt: Date.now()
+    };
+    const report = (phase, patch = {}) => {
+      Object.assign(progress, patch || {}, { phase: String(phase || progress.phase), lastActivityAt: Date.now() });
+      try { onProgress?.({ ...progress }); } catch (_) {}
+    };
+    const integrityBefore = await remoteIntegrity({ allowPluginOnly: true });
+    report('inventory', { message: `${scope.label || scope.scopeId} 데이터 목록을 조사하고 있습니다.` });
+    const localRows = await collectScopedLegacyRows(legacy, space, scope);
+    const listing = await remoteKeys(space, '', { allowPluginOnly: true });
+    const remoteRecords = new Map((Array.isArray(listing.records) ? listing.records : []).map(row => [String(row?.key || ''), row]));
+    const remoteKeysForScope = new Set();
+    for (const remoteKey of Array.isArray(listing.keys) ? listing.keys : []) {
+      const decoded = scopedRemoteKeyInfo(remoteKey);
+      if (decoded.scopeId === scope.scopeId) remoteKeysForScope.add(remoteKey);
+      else if (!decoded.scopeId) {
+        const route = await resolveScopedRoute(space, decoded.logicalKey, { scope, noCache: true });
+        if (scopeRouteMatches(route, scope) && route.remoteKey === remoteKey) remoteKeysForScope.add(remoteKey);
+      }
+    }
+    const localRemoteKeys = new Set(localRows.map(row => row.route.remoteKey));
+    const missingRemoteRows = syncOptions.restoreMissingLocal === true
+      ? Array.from(remoteKeysForScope).filter(remoteKey => !localRemoteKeys.has(remoteKey))
+      : [];
+    progress.totalItems = localRows.length + missingRemoteRows.length;
+    report('inventory_complete', { totalItems: progress.totalItems, currentAction: '목록 조사 완료' });
+    const result = {
+      schema: 'memory-suite.scope-sync.v1', namespace, space, scope, startedAt: progress.startedAt,
+      totalItems: progress.totalItems, processedItems: 0, processedBytes: 0, transferredBytes: 0,
+      uploaded: 0, restored: 0, matched: 0, removedByTombstone: 0, conflicts: [], failures: [],
+      integrityBefore, integrityAfter: null
+    };
+    for (const row of localRows) {
+      let bytes = 0, action = '비교';
+      try {
+        report('sync_local', { currentKey: row.key, currentAction: 'pluginStorage → 서버 비교' });
+        const local = await legacyRead(legacy, row.key);
+        const projected = isNullishStorageValue(local) ? null : await routeProjectValue(row.route, local);
+        bytes = isNullishStorageValue(projected) ? 0 : storageValueBytes(projected);
+        if (isNullishStorageValue(projected)) action = '빈 값 건너뜀';
+        else {
+          const remote = await remoteGet(space, row.route.remoteKey, { allowPluginOnly: true });
+          if (remote.exists === true && jsonComparable(remote.value) === jsonComparable(projected)) { result.matched += 1; action = '일치 확인'; }
+          else if (remote.tombstone === true && syncOptions.allowOverwrite === false) {
+            result.conflicts.push({ key: row.key, remoteKey: row.route.remoteKey, reason: 'server_tombstone', localPreserved: true });
+            action = '삭제 충돌 보존';
+          } else {
+            await remoteMutate('set', space, row.route.remoteKey, projected, { allowPluginOnly: true });
+            result.uploaded += 1; result.transferredBytes += bytes; action = '서버 저장·검증 완료';
+          }
+        }
+      } catch (error) { result.failures.push({ key: row.key, error: compact(error?.message || error, 240) }); action = '실패'; }
+      finally {
+        result.processedItems += 1; result.processedBytes += bytes;
+        Object.assign(progress, { processedItems: result.processedItems, processedBytes: result.processedBytes, transferredBytes: result.transferredBytes, uploaded: result.uploaded, restored: result.restored, matched: result.matched, failureCount: result.failures.length, conflictCount: result.conflicts.length });
+        report('sync_local', { currentKey: row.key, currentAction: action });
+      }
+    }
+    for (const remoteKey of missingRemoteRows) {
+      let bytes = Math.max(0, Number(remoteRecords.get(remoteKey)?.valueBytes || 0) || 0), action = '서버 → pluginStorage 복구';
+      try {
+        const decoded = scopedRemoteKeyInfo(remoteKey);
+        const route = await resolveScopedRoute(space, decoded.logicalKey, { scope, noCache: true });
+        const remote = await remoteGet(space, remoteKey, { allowPluginOnly: true });
+        if (remote.exists === true) {
+          const current = await legacyRead(legacy, decoded.logicalKey);
+          const merged = await routeMergeValue(route, remote.value, current);
+          if (!await legacyWriteVerified(legacy, decoded.logicalKey, merged)) throw new Error('pluginstorage_restore_failed');
+          result.restored += 1; result.transferredBytes += bytes; action = '복구·readback 완료';
+        }
+      } catch (error) { result.failures.push({ key: remoteKey, error: compact(error?.message || error, 240) }); action = '복구 실패'; }
+      finally {
+        result.processedItems += 1; result.processedBytes += bytes;
+        Object.assign(progress, { processedItems: result.processedItems, processedBytes: result.processedBytes, transferredBytes: result.transferredBytes, uploaded: result.uploaded, restored: result.restored, matched: result.matched, failureCount: result.failures.length, conflictCount: result.conflicts.length });
+        report('sync_remote', { currentKey: remoteKey, currentAction: action });
+      }
+    }
+    report('integrity_after', { currentKey: '', currentAction: '최종 무결성 확인', message: '현재 스코프 동기화 후 서버 DATA 무결성을 확인하고 있습니다.' });
+    result.integrityAfter = await remoteIntegrity({ allowPluginOnly: true });
+    result.ok = result.failures.length === 0 && result.conflicts.length === 0;
+    report(result.ok ? 'scope_complete' : 'scope_incomplete', { currentKey: '', currentAction: result.ok ? '스코프 동기화 완료' : '확인 필요', message: result.ok ? `${scope.label || scope.scopeId} 동기화를 완료했습니다.` : `실패 ${result.failures.length} · 충돌 ${result.conflicts.length}` });
+    if (!result.ok) {
+      const error = new Error(`memory_suite_scope_sync_incomplete:${scope.scopeId}:failures=${result.failures.length},conflicts=${result.conflicts.length}`);
+      error.code = 'MEMORY_SUITE_SCOPE_SYNC_INCOMPLETE'; error.result = result; throw error;
+    }
+    return result;
+  };
+
+  const scopedSynchronizeAll = async (syncOptions = {}) => {
+    const scope = normalizeScopeDescriptor(syncOptions.scope || await resolveCurrentScope(true));
+    const result = { schema: 'memory-suite.scope-sync-all.v1', namespace, scope, plugin: null, local: null, uploaded: 0, restored: 0, matched: 0, failures: [], totalItems: 0, processedItems: 0, processedBytes: 0, transferredBytes: 0 };
+    const forward = progress => { try { syncOptions.onProgress?.(progress); } catch (_) {} };
+    if (state.legacy.plugin) {
+      result.plugin = await scopedSynchronizeSpace(state.legacy.plugin, 'plugin', { ...syncOptions, scope, onProgress: forward });
+      for (const field of ['uploaded','restored','matched','totalItems','processedItems','processedBytes','transferredBytes']) result[field] += Number(result.plugin?.[field] || 0);
+    }
+    if (state.legacy.local && typeof state.legacy.local?.keys === 'function') {
+      result.local = await scopedSynchronizeSpace(state.legacy.local, 'local', { ...syncOptions, scope, onProgress: forward });
+      for (const field of ['uploaded','restored','matched','totalItems','processedItems','processedBytes','transferredBytes']) result[field] += Number(result.local?.[field] || 0);
+    }
+    result.ok = true;
+    return result;
+  };
+
+  const scopedRestoreSpace = async (legacy, space = 'plugin', restoreOptions = {}) => {
+    if (!legacy) throw new Error('memory_suite_pluginstorage_unavailable');
+    const scope = normalizeScopeDescriptor(restoreOptions.scope || await resolveCurrentScope(true));
+    if (!scope.scopeId) throw new Error('memory_suite_current_scope_unavailable');
+    const onProgress = typeof restoreOptions.onProgress === 'function' ? restoreOptions.onProgress : null;
+    const listing = await remoteKeys(space, '', { allowPluginOnly: true });
+    const candidates = [];
+    for (const remoteKey of Array.isArray(listing.keys) ? listing.keys : []) {
+      const decoded = scopedRemoteKeyInfo(remoteKey);
+      if (decoded.scopeId === scope.scopeId) candidates.push({ remoteKey, logicalKey: decoded.logicalKey });
+      else if (!decoded.scopeId) {
+        const route = await resolveScopedRoute(space, decoded.logicalKey, { scope, noCache: true });
+        if (scopeRouteMatches(route, scope) && route.remoteKey === remoteKey) candidates.push({ remoteKey, logicalKey: decoded.logicalKey });
+      }
+    }
+    const tombstones = [];
+    for (const remoteKey of Array.isArray(listing.tombstones) ? listing.tombstones : []) {
+      const decoded = scopedRemoteKeyInfo(remoteKey);
+      if (decoded.scopeId === scope.scopeId) tombstones.push({ remoteKey, logicalKey: decoded.logicalKey });
+    }
+    const result = { schema: 'memory-suite.scope-restore.v1', namespace, space, scope, totalItems: candidates.length + tombstones.length, processedItems: 0, restored: 0, removed: 0, verified: 0, failures: [] };
+    const report = (phase, patch = {}) => { try { onProgress?.({ schema:'memory-suite.sync-progress.v2', namespace, space, scopeId:scope.scopeId, scopeLabel:scope.label, phase, totalItems:result.totalItems, processedItems:result.processedItems, restored:result.restored, removedByTombstone:result.removed, failureCount:result.failures.length, lastActivityAt:Date.now(), ...patch }); } catch (_) {} };
+    for (const row of candidates) {
+      try {
+        report('restore_values', { currentKey: row.logicalKey, currentAction: '서버 → pluginStorage 복구' });
+        const route = await resolveScopedRoute(space, row.logicalKey, { scope, noCache: true });
+        const remote = await remoteGet(space, row.remoteKey, { allowPluginOnly: true });
+        if (remote.exists !== true) throw new Error('server_record_missing');
+        const current = await legacyRead(legacy, row.logicalKey);
+        const merged = await routeMergeValue(route, remote.value, current);
+        if (!await legacyWriteVerified(legacy, row.logicalKey, merged)) throw new Error('pluginstorage_restore_failed');
+        result.restored += 1; result.verified += 1;
+      } catch (error) { result.failures.push({ key: row.logicalKey, error: compact(error?.message || error, 220) }); }
+      finally { result.processedItems += 1; }
+    }
+    for (const row of tombstones) {
+      try {
+        const route = await resolveScopedRoute(space, row.logicalKey, { scope, noCache: true });
+        await routeRemoveLocal(route, async () => legacyRead(legacy, row.logicalKey), async next => legacyWriteVerified(legacy, row.logicalKey, next), async () => legacyRemoveVerified(legacy, row.logicalKey));
+        result.removed += 1;
+      } catch (error) { result.failures.push({ key: row.logicalKey, error: compact(error?.message || error, 220) }); }
+      finally { result.processedItems += 1; }
+    }
+    result.ok = result.failures.length === 0;
+    if (!result.ok) { const error = new Error(`memory_suite_scope_restore_incomplete:${scope.scopeId}:${result.failures.length}`); error.code='MEMORY_SUITE_SCOPE_RESTORE_INCOMPLETE'; error.result=result; throw error; }
+    state.management.lastResult = result;
+    return result;
+  };
+
+  const scopedRestoreAll = async (restoreOptions = {}) => {
+    const scope = normalizeScopeDescriptor(restoreOptions.scope || await resolveCurrentScope(true));
+    const result = { schema:'memory-suite.scope-restore-all.v1', namespace, scope, plugin:null, local:null, failures:[], restored:0, removed:0, totalItems:0, processedItems:0 };
+    const forward = progress => { try { restoreOptions.onProgress?.(progress); } catch (_) {} };
+    if (state.legacy.plugin) { result.plugin = await scopedRestoreSpace(state.legacy.plugin, 'plugin', { ...restoreOptions, scope, onProgress:forward }); result.restored += result.plugin.restored; result.removed += result.plugin.removed; result.totalItems += result.plugin.totalItems; result.processedItems += result.plugin.processedItems; }
+    if (state.legacy.local && typeof state.legacy.local?.keys === 'function') { result.local = await scopedRestoreSpace(state.legacy.local, 'local', { ...restoreOptions, scope, onProgress:forward }); result.restored += result.local.restored; result.removed += result.local.removed; result.totalItems += result.local.totalItems; result.processedItems += result.local.processedItems; }
+    result.ok = true; return result;
+  };
+
+  const scopedVerifyPreservation = async (_legacy = state.legacy.plugin, verifyOptions = {}) => {
+    const scope = normalizeScopeDescriptor(verifyOptions.scope || await resolveCurrentScope(true));
+    if (!scope.scopeId) throw new Error('memory_suite_current_scope_unavailable');
+    const integrity = await remoteIntegrity({ allowPluginOnly: true });
+    const result = {
+      schema:'memory-suite.scope-preservation.v2', namespace, scope, checked:0,
+      failures:[], integrity, spaces:{ plugin:null, local:null }
+    };
+    const verifySpace = async (legacy, space) => {
+      if (!legacy || typeof legacy.getItem !== 'function' || typeof legacy.keys !== 'function') return null;
+      const rows = await collectScopedLegacyRows(legacy, space, scope);
+      const spaceResult = { space, checked:0, total:rows.length, failures:[] };
+      for (const row of rows) {
+        if (row.route.kind !== 'scope') continue; // Shared/global metadata is not deleted by current-scope cleanup.
+        try {
+          const local = await legacyRead(legacy, row.key);
+          const projected = isNullishStorageValue(local) ? null : await routeProjectValue(row.route, local);
+          if (isNullishStorageValue(projected)) continue;
+          const remote = await remoteGet(space, row.route.remoteKey, { allowPluginOnly:true });
+          if (remote.exists !== true || jsonComparable(remote.value) !== jsonComparable(projected)) {
+            spaceResult.failures.push({ key:row.key, remoteKey:row.route.remoteKey, reason:remote.tombstone?'server_tombstone':'value_mismatch_or_missing' });
+          } else {
+            spaceResult.checked += 1;
+          }
+        } catch (error) {
+          spaceResult.failures.push({ key:row.key, remoteKey:row.route.remoteKey, reason:compact(error?.message || error, 240) });
+        }
+      }
+      result.checked += spaceResult.checked;
+      result.failures.push(...spaceResult.failures.map(row => ({ ...row, space })));
+      return spaceResult;
+    };
+    result.spaces.plugin = await verifySpace(state.legacy.plugin, 'plugin');
+    result.spaces.local = await verifySpace(state.legacy.local, 'local');
+    result.ok = result.failures.length === 0;
+    if (!result.ok) {
+      const error = new Error(`memory_suite_scope_preservation_failed:${scope.scopeId}:${result.failures.length}`);
+      error.code='MEMORY_SUITE_SCOPE_PRESERVATION_FAILED'; error.result=result; throw error;
+    }
+    return result;
+  };
+
+  const scopedSetModeSafely = async (requestedMode, operationOptions = {}) => {
+    const target = normalizeMode(requestedMode);
+    const scope = normalizeScopeDescriptor(operationOptions.scope || await resolveCurrentScope(true));
+    const current = await readScopeMode(scope, true);
+    if (target === current.mode) return { changed:false, from:current.mode, to:target, scope, modeLabel:modeLabel(target) };
+    if (!state.legacy.plugin) throw new Error('memory_suite_pluginstorage_unavailable');
+    const onProgress = typeof operationOptions.onProgress === 'function' ? operationOptions.onProgress : null;
+    try {
+      if (current.mode === MODE_PLUGIN_ONLY && target !== MODE_PLUGIN_ONLY) {
+        const seeded = await scopedSynchronizeAll({ scope, allowOverwrite:false, restoreMissingLocal:target===MODE_MIRROR, onProgress });
+        state.scopeRouting.transientModes.set(scope.scopeId, MODE_MIRROR);
+        const settled = await scopedSynchronizeAll({ scope, allowOverwrite:true, restoreMissingLocal:target===MODE_MIRROR, onProgress });
+        if (!seeded.ok || !settled.ok) throw new Error('memory_suite_scope_mode_seed_failed');
+        await remoteIntegrity({ allowPluginOnly:true });
+      } else if (current.mode === MODE_MIRROR && target === MODE_SERVER_ONLY) {
+        await scopedSynchronizeAll({ scope, allowOverwrite:true, restoreMissingLocal:true, onProgress });
+        await remoteIntegrity({ allowPluginOnly:true });
+      } else if (current.mode === MODE_SERVER_ONLY && target !== MODE_SERVER_ONLY) {
+        await scopedRestoreAll({ scope, onProgress });
+      }
+      const saved = await persistScopedMode(target, scope, { source:'safe_scope_mode_transition' });
+      return { changed:true, from:current.mode, to:target, scope, modeLabel:modeLabel(target), config:saved };
+    } catch (error) {
+      state.scopeRouting.transientModes.delete(scope.scopeId);
+      throw error;
+    }
+  };
+
+  const scopedConfigureConnection = async (settings, operationOptions = {}) => {
+    const source = settings && typeof settings === 'object' ? settings : {};
+    const scope = normalizeScopeDescriptor(operationOptions.scope || await resolveCurrentScope(true));
+    const currentUrl = normalizeServerUrl(await getArgumentValue(urlArguments, defaultUrl));
+    const currentMode = (await readScopeMode(scope, true)).mode;
+    const targetUrl = normalizeServerUrl(source.url || currentUrl);
+    const targetMode = normalizeMode(source.mode || currentMode);
+
+    // The server URL is plugin-global while storage modes are scope-local. Moving the
+    // global URL while even one scope still depends on the old server would silently
+    // split that plugin's scopes between two DATA roots. Refuse the change until every
+    // known scope has been brought back to plugin_only. This is intentionally stricter
+    // than timestamp-based migration and never rewrites another scope behind the user's back.
+    if (targetUrl !== currentUrl) {
+      const registry = await loadScopeRegistry(true, false);
+      const serverBackedScopes = Object.values(registry?.entries || {})
+        .filter(row => normalizeMode(row?.mode) !== MODE_PLUGIN_ONLY)
+        .map(row => ({ scopeId:String(row?.scopeId || ''), scopeLabel:String(row?.label || row?.scopeId || ''), mode:normalizeMode(row?.mode) }));
+      if (serverBackedScopes.length) {
+        const error = new Error(`memory_suite_server_url_in_use:${serverBackedScopes.length}`);
+        error.code = 'MEMORY_SUITE_SERVER_URL_IN_USE';
+        error.details = { currentUrl, targetUrl, serverBackedScopes };
+        error.userMessage = '서버를 사용하는 스코프가 남아 있어 서버 주소를 변경할 수 없습니다. 해당 스코프들을 먼저 플러그인 단독으로 전환해 주세요.';
+        throw error;
+      }
+    }
+
+    let connectionTest = null;
+    if (targetMode !== MODE_PLUGIN_ONLY || targetUrl !== currentUrl) {
+      connectionTest = await testConnection(targetUrl);
+      if (!connectionTest.ok) { const error = new Error(`memory_suite_connection_test_failed:${connectionTest.error || 'unknown'}`); error.code='MEMORY_SUITE_CONNECTION_TEST_FAILED'; error.result=connectionTest; throw error; }
+    }
+    if (targetUrl !== currentUrl) await persistServerUrl(targetUrl);
+    const modeResult = await scopedSetModeSafely(targetMode, { ...operationOptions, scope });
+    const from = { mode:currentMode, modeLabel:modeLabel(currentMode), url:currentUrl, scope };
+    const to = { mode:targetMode, modeLabel:modeLabel(targetMode), url:targetUrl, scope };
+    return { ok:true, scope, url:targetUrl, mode:targetMode, modeLabel:modeLabel(targetMode), from, to, transition:modeResult, modeResult, connectionTest };
+  };
+
+  const scopedGetConnectionSettings = async (settingsOptions = {}) => {
+    const scope = normalizeScopeDescriptor(settingsOptions.scope || await resolveCurrentScope(settingsOptions.force === true));
+    const modeState = await readScopeMode(scope, settingsOptions.force === true);
+    const url = normalizeServerUrl(await getArgumentValue(urlArguments, defaultUrl));
+    state.config = { ...state.config, at: Date.now(), mode: modeState.mode, url };
+    const connection = settingsOptions.test === true ? await testConnection(url) : null;
+    return { namespace, pluginId, pluginVersion, scope, scopeId:scope.scopeId, scopeLabel:scope.label, mode:modeState.mode, modeLabel:modeLabel(modeState.mode), url, defaultMode:MODE_PLUGIN_ONLY, status:{...state.status, mode:modeState.mode, scopeId:scope.scopeId, scopeLabel:scope.label}, connection, syncJob:getSyncJob() };
+  };
+
+  const scopedCreateBackgroundJob = async (kind, target = {}) => {
+    const scope = normalizeScopeDescriptor(target.scope || await resolveCurrentScope(true));
+    if (!scope.scopeId || scope.available === false) {
+      const error = new Error('memory_suite_current_scope_unavailable');
+      error.code = 'MEMORY_SUITE_SCOPE_UNAVAILABLE';
+      throw error;
+    }
+    const existing = state.syncJob.current;
+    if (existing && !syncJobTerminal(existing.status)) {
+      const sameTarget = String(existing.kind || '') === String(kind || '')
+        && String(existing.scopeId || '') === scope.scopeId
+        && String(existing.targetMode || '') === String(target.mode || '')
+        && String(existing.targetUrl || '') === String(target.url || '');
+      if (sameTarget) return cloneSyncJob(existing);
+      const error = new Error(`memory_suite_background_job_busy:${existing.kind}:${existing.status}`);
+      error.code = 'MEMORY_SUITE_SYNC_JOB_BUSY';
+      error.job = cloneSyncJob(existing);
+      throw error;
+    }
+    const now = Date.now();
+    let random = '';
+    try { random = globalThis?.crypto?.randomUUID?.() || ''; } catch (_) {}
+    if (!random) random = `${now.toString(36)}_${Math.random().toString(36).slice(2,10)}`;
+    const jobId = `${namespace}_${kind}_${scope.scopeId}_${random}`.replace(/[^A-Za-z0-9._:-]/g, '_').slice(0, 240);
+    const currentMode = (await readScopeMode(scope, true)).mode;
+    const currentUrl = normalizeServerUrl(await getArgumentValue(urlArguments, defaultUrl));
+    state.syncJob.current = {
+      schema: SYNC_JOB_SCHEMA, namespace, pluginId, pluginVersion,
+      jobId, id: jobId, kind: String(kind || 'manual_sync'),
+      scopeId: scope.scopeId, scopeKey: scope.scopeKey, scopeLabel: scope.label,
+      sourceMode: currentMode, sourceUrl: currentUrl,
+      targetMode: target.mode ? normalizeMode(target.mode) : currentMode,
+      targetUrl: target.url ? normalizeServerUrl(target.url) : currentUrl,
+      status: 'queued', phase: 'queued', message: '작업을 준비하고 있습니다.',
+      startedAt: now, updatedAt: now, lastActivityAt: now, finishedAt: 0,
+      totalItems: 0, processedItems: 0, processedBytes: 0, transferredBytes: 0,
+      uploaded: 0, restored: 0, matched: 0, removedByTombstone: 0,
+      failures: 0, conflicts: 0, retryCount: 0, nextRetryAt: 0,
+      currentSpace: '', currentKey: '', currentAction: '', spaces: {}, completedPasses: {},
+      result: null, error: ''
+    };
+    state.syncJob.loaded = true;
+    notifySyncJob();
+    await persistSyncJobNow();
+    return getSyncJob();
+  };
+
+  const scopedExecuteBackgroundJob = async () => {
+    const job = state.syncJob.current;
+    if (!job || syncJobTerminal(job.status)) return getSyncJob();
+    if (state.syncJob.promise) return state.syncJob.promise;
+    if (state.syncJob.retryTimer) { clearTimeout(state.syncJob.retryTimer); state.syncJob.retryTimer = null; }
+    const scope = normalizeScopeDescriptor({
+      scopeId: job.scopeId, scopeKey: job.scopeKey || job.scopeId, label: job.scopeLabel || job.scopeId
+    });
+    updateSyncJob({
+      status: 'running', phase: job.phase === 'resume_pending' ? 'resuming' : (job.phase || 'starting'),
+      nextRetryAt: 0, error: ''
+    });
+    const runner = (async () => {
+      try {
+        let result;
+        if (job.kind === 'connection_config') {
+          result = await scopedConfigureConnection({ mode: job.targetMode, url: job.targetUrl }, { scope, onProgress: applySyncProgressToJob });
+        } else if (job.kind === 'manual_sync') {
+          const mode = (await readScopeMode(scope, true)).mode;
+          if (mode !== MODE_MIRROR) throw new Error('memory_suite_manual_sync_requires_mirror_mode');
+          result = await scopedSynchronizeAll({ scope, allowOverwrite: true, restoreMissingLocal: true, onProgress: applySyncProgressToJob });
+        } else if (job.kind === 'server_restore') {
+          const mode = (await readScopeMode(scope, true)).mode;
+          if (mode !== MODE_SERVER_ONLY) throw new Error('memory_suite_restore_requires_server_only_mode');
+          result = await scopedRestoreAll({ scope, onProgress: applySyncProgressToJob });
+        } else {
+          throw new Error(`memory_suite_unknown_background_job:${job.kind}`);
+        }
+        updateSyncJob({
+          status: 'completed', phase: 'completed', currentAction: '완료', currentKey: '',
+          message: '작업이 안전하게 완료되었습니다.', result: cloneSyncJob(result), error: '',
+          nextRetryAt: 0, finishedAt: Date.now()
+        }, { persist: 'immediate' });
+        return result;
+      } catch (error) {
+        if (retryableSyncError(error) && Number(state.syncJob.current?.retryCount || 0) < 120) {
+          const retryCount = Number(state.syncJob.current?.retryCount || 0) + 1;
+          const delay = SYNC_JOB_RETRY_DELAYS_MS[Math.min(SYNC_JOB_RETRY_DELAYS_MS.length - 1, retryCount - 1)];
+          updateSyncJob({
+            status: 'paused', phase: 'waiting_for_server', currentAction: '서버 재연결 대기',
+            message: `서버 연결이 일시적으로 끊겼습니다. ${Math.ceil(delay / 1000)}초 후 현재 스코프 작업을 이어서 확인합니다.`,
+            error: compact(error?.message || error, 420), retryCount, nextRetryAt: Date.now() + delay
+          }, { persist: 'immediate' });
+          state.syncJob.retryTimer = setTimeout(() => {
+            state.syncJob.retryTimer = null;
+            void scopedExecuteBackgroundJob();
+          }, delay);
+          try { state.syncJob.retryTimer?.unref?.(); } catch (_) {}
+          return null;
+        }
+        updateSyncJob({
+          status: 'failed', phase: 'failed', currentAction: '작업 중단', currentKey: '',
+          message: '작업을 완료하지 못했습니다.', error: compact(error?.message || error, 700),
+          nextRetryAt: 0, finishedAt: Date.now()
+        }, { persist: 'immediate' });
+        throw error;
+      }
+    })();
+    state.syncJob.promise = runner.finally(() => { state.syncJob.promise = null; });
+    return state.syncJob.promise;
+  };
+
+  const scopedStartConnectionConfigurationJob = async settings => {
+    const source = settings && typeof settings === 'object' ? settings : {};
+    const scope = normalizeScopeDescriptor(source.scope || await resolveCurrentScope(true));
+    const modeState = await readScopeMode(scope, true);
+    const currentUrl = normalizeServerUrl(await getArgumentValue(urlArguments, defaultUrl));
+    const job = await scopedCreateBackgroundJob('connection_config', {
+      scope, mode: normalizeMode(source.mode ?? modeState.mode), url: normalizeServerUrl(source.url ?? currentUrl)
+    });
+    void scopedExecuteBackgroundJob().catch(() => {});
+    return job;
+  };
+  const scopedStartSynchronizationJob = async (options = {}) => {
+    const scope = normalizeScopeDescriptor(options.scope || await resolveCurrentScope(true));
+    const modeState = await readScopeMode(scope, true);
+    if (modeState.mode !== MODE_MIRROR) throw new Error('memory_suite_manual_sync_requires_mirror_mode');
+    const url = normalizeServerUrl(await getArgumentValue(urlArguments, defaultUrl));
+    const job = await scopedCreateBackgroundJob('manual_sync', { scope, mode: modeState.mode, url });
+    void scopedExecuteBackgroundJob().catch(() => {});
+    return job;
+  };
+  const scopedStartRestoreJob = async (options = {}) => {
+    const scope = normalizeScopeDescriptor(options.scope || await resolveCurrentScope(true));
+    const modeState = await readScopeMode(scope, true);
+    if (modeState.mode !== MODE_SERVER_ONLY) throw new Error('memory_suite_restore_requires_server_only_mode');
+    const url = normalizeServerUrl(await getArgumentValue(urlArguments, defaultUrl));
+    const job = await scopedCreateBackgroundJob('server_restore', { scope, mode: modeState.mode, url });
+    void scopedExecuteBackgroundJob().catch(() => {});
+    return job;
+  };
+  const scopedResumePendingSyncJob = async () => {
+    await loadPersistedSyncJob();
+    const job = getSyncJob();
+    if (!job || syncJobTerminal(job.status) || state.syncJob.promise) return job;
+    const scope = await resolveCurrentScope(false);
+    if (!scope.scopeId || String(job.scopeId || '') !== scope.scopeId) return job;
+    void scopedExecuteBackgroundJob().catch(() => {});
+    return getSyncJob();
+  };
+  const scopedWaitForSyncJob = async (jobId = '', timeoutMs = 15 * 60 * 1000) => {
+    const wanted = String(jobId || state.syncJob.current?.jobId || state.syncJob.current?.id || '');
+    if (!wanted) return null;
+    const current = state.syncJob.current;
+    if ((current?.jobId === wanted || current?.id === wanted) && syncJobTerminal(current.status)) return cloneSyncJob(current);
+    return await new Promise((resolve, reject) => {
+      let timer = null;
+      const unsubscribe = subscribeSyncJob(job => {
+        if (!job || (job.jobId !== wanted && job.id !== wanted) || !syncJobTerminal(job.status)) return;
+        if (timer) clearTimeout(timer);
+        unsubscribe();
+        resolve(job);
+      });
+      timer = setTimeout(() => {
+        unsubscribe();
+        reject(new Error(`memory_suite_sync_job_wait_timeout:${wanted}`));
+      }, Math.max(1000, Number(timeoutMs || 0) || 15 * 60 * 1000));
+    });
+  };
+
+  const scopedDeletePluginStorageAfterVerification = async () => {
+    const scope = await resolveCurrentScope(true);
+    const checked = await scopedVerifyPreservation(state.legacy.plugin, { scope });
+    await persistScopedMode(MODE_SERVER_ONLY, scope, { source:'scope_pluginstorage_delete' });
+    const result = {
+      ok:true, schema:'memory-suite.scope-pluginstorage-delete.v2', namespace, scope,
+      deleted:0, deletedPlugin:0, deletedLocal:0, checked:checked.checked,
+      mode:MODE_SERVER_ONLY, spaces:{ plugin:null, local:null }
+    };
+    const deleteSpace = async (legacy, space) => {
+      if (!legacy || typeof legacy.keys !== 'function') return null;
+      const rows = await collectScopedLegacyRows(legacy, space, scope);
+      const rowResult = { space, examined:rows.length, deleted:0, retainedShared:0, failures:[] };
+      for (const row of rows) {
+        if (row.route.kind !== 'scope') { rowResult.retainedShared += 1; continue; }
+        try {
+          const ok = await routeRemoveLocal(
+            row.route,
+            async()=>legacyRead(legacy,row.key),
+            async next=>legacyWriteVerified(legacy,row.key,next),
+            async()=>legacyRemoveVerified(legacy,row.key)
+          );
+          if (!ok) throw new Error('scope_local_delete_readback_failed');
+          rowResult.deleted += 1;
+        } catch (error) {
+          rowResult.failures.push({ key:row.key, error:compact(error?.message || error, 240) });
+        }
+      }
+      if (rowResult.failures.length) {
+        const error = new Error(`memory_suite_scope_local_delete_incomplete:${space}:${rowResult.failures.length}`);
+        error.code='MEMORY_SUITE_SCOPE_LOCAL_DELETE_INCOMPLETE'; error.result=rowResult; throw error;
+      }
+      return rowResult;
+    };
+    result.spaces.plugin = await deleteSpace(state.legacy.plugin, 'plugin');
+    result.spaces.local = await deleteSpace(state.legacy.local, 'local');
+    result.deletedPlugin = Number(result.spaces.plugin?.deleted || 0);
+    result.deletedLocal = Number(result.spaces.local?.deleted || 0);
+    result.deleted = result.deletedPlugin + result.deletedLocal;
+    return result;
+  };
+
+  const scopedPrepareServerScopeDeletion = async (deleteOptions = {}) => {
+    const scope = normalizeScopeDescriptor(deleteOptions.scope || { scopeId:deleteOptions.scopeId, scopeKey:deleteOptions.scopeId, label:deleteOptions.scopeLabel || deleteOptions.scopeId });
+    if (!scope.scopeId) throw new Error('memory_suite_scope_delete_owner_scope_missing');
+    // Restore only this scope before allowing RE:TRACE to delete its server copy.
+    await scopedRestoreAll({ scope });
+    const localRows = await collectScopedLegacyRows(state.legacy.plugin, 'plugin', scope).catch(() => []);
+    await persistScopedMode(MODE_PLUGIN_ONLY, scope, { source:'retrace_server_scope_delete_owner_proof' });
+    return {
+      schema:'memory-suite.server-scope-delete-owner-receipt.v1', namespace, pluginId, scopeId:scope.scopeId,
+      verified:true, modeAfter:MODE_PLUGIN_ONLY, restoredKeys:localRows.length, checkedAt:Date.now(),
+      members:Array.isArray(deleteOptions.members)?deleteOptions.members.length:0
+    };
+  };
+
+  const scopedEnsureHandoffReady = async (handoffOptions = {}) => {
+    const phase = String(handoffOptions.phase || 'handoff').trim() || 'handoff';
+    const scope = normalizeScopeDescriptor(handoffOptions.scope || await resolveCurrentScope(true));
+    const modeState = await readScopeMode(scope, true);
+    const base = { schema:'memory-suite.handoff-storage.v2', namespace, pluginId, phase, scope, scopeId:scope.scopeId, mode:modeState.mode, modeLabel:modeLabel(modeState.mode), serverRequired:modeState.mode!==MODE_PLUGIN_ONLY, verified:true, pluginSync:null, localSync:null, integrity:null, checkedAt:Date.now() };
+    if (modeState.mode === MODE_PLUGIN_ONLY) return base;
+    const before = await remoteIntegrity({ allowPluginOnly:true });
+    let sync = null;
+    if (modeState.mode === MODE_MIRROR) sync = await scopedSynchronizeAll({ scope, allowOverwrite:true, restoreMissingLocal:true });
+    const after = await remoteIntegrity({ allowPluginOnly:true });
+    return { ...base, checkedAt:Date.now(), pluginSync:sync?.plugin||null, localSync:sync?.local||null, integrity:after, integrityBefore:before };
+  };
+
+  const scopedMountConnectionPanel = async (container, panelOptions = {}) => {
+    if (!container || typeof container.innerHTML === 'undefined') throw new Error('memory_suite_connection_panel_container_required');
+    const initial = await scopedGetConnectionSettings({ force:true });
+    const rootId = `memory-suite-scope-connection-${namespace}-${Math.random().toString(36).slice(2,8)}`;
+    const esc = value => safeText(value).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+    container.innerHTML = `<div id="${rootId}" class="mscx-scope-root"><style>
+      #${rootId}{font-family:system-ui,-apple-system,sans-serif;color:#e8eefc;display:grid;gap:14px} #${rootId} *{box-sizing:border-box}
+      #${rootId} .mscx-card{border:1px solid #34425b;background:#111a2a;border-radius:14px;padding:15px;display:grid;gap:12px}
+      #${rootId} h3{margin:0;font-size:18px} #${rootId} .muted{color:#9eacc3;font-size:12px;line-height:1.5}
+      #${rootId} .scope{padding:11px 12px;background:#172236;border:1px solid #3b4d6b;border-radius:10px} #${rootId} .scope b{display:block;margin-bottom:4px}
+      #${rootId} .modes{display:grid;gap:8px} #${rootId} label.mode{display:flex;gap:9px;align-items:flex-start;border:1px solid #34425b;border-radius:10px;padding:10px;cursor:pointer}
+      #${rootId} input[type=text]{width:100%;padding:10px 11px;border-radius:9px;border:1px solid #465a79;background:#0b1321;color:#fff}
+      #${rootId} .actions{display:flex;flex-wrap:wrap;gap:8px} #${rootId} button{border:1px solid #50658a;background:#1d2a42;color:#fff;border-radius:9px;padding:9px 12px;font-weight:700;cursor:pointer} #${rootId} button.primary{background:#2d5bd1;border-color:#4c79e4} #${rootId} button.danger{background:#51212a;border-color:#8e4350}
+      #${rootId} button:disabled{opacity:.45;cursor:not-allowed} #${rootId} .status{white-space:pre-wrap;border:1px solid #34425b;background:#0c1422;border-radius:10px;padding:11px;min-height:46px;font-size:12px;line-height:1.55}
+      #${rootId} .job{display:none;border:1px solid #365275;background:#101d31;border-radius:12px;padding:12px;gap:9px} #${rootId} .job.show{display:grid}
+      #${rootId} .bar{height:9px;background:#25344d;border-radius:99px;overflow:hidden} #${rootId} .bar>i{display:block;height:100%;background:#5d88ff;width:0%}
+      #${rootId} .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;font-size:12px} @media(max-width:540px){#${rootId} .grid{grid-template-columns:1fr}}
+    </style>
+      <div class="mscx-card"><div><h3>${esc(panelOptions.title || `${displayName} · 서버 연결`)}</h3><div class="muted">${esc(panelOptions.description || '현재 스코프의 저장 방식만 변경합니다.')}</div></div>
+        <div class="scope"><b>현재 스코프</b><span data-scope-label>${esc(initial.scopeLabel || '확인 불가')}</span><div class="muted" data-scope-id>${esc(initial.scopeId || '')}</div></div>
+        <div class="muted"><b>이 설정은 현재 스코프에만 적용됩니다.</b><br>새 스코프의 기본값은 항상 플러그인 단독입니다. 서버 주소만 플러그인 공통 설정입니다.</div>
+        <div class="modes">
+          <label class="mode"><input type="radio" name="${rootId}-mode" value="plugin_only"><span><b>플러그인 단독 · 기본</b><br><small>현재 스코프를 RisuAI pluginStorage에만 저장합니다.</small></span></label>
+          <label class="mode"><input type="radio" name="${rootId}-mode" value="mirror"><span><b>플러그인 + 서버 병존</b><br><small>현재 스코프만 양쪽에 실시간 동기화합니다.</small></span></label>
+          <label class="mode"><input type="radio" name="${rootId}-mode" value="server_only"><span><b>서버 단독</b><br><small>현재 스코프의 영구 정본을 Memory Suite DATA에 저장합니다.</small></span></label>
+        </div>
+        <label><b>서버 주소</b><input data-url type="text" value="${esc(initial.url)}"></label>
+        <div class="actions"><button data-test>연결 테스트</button><button class="primary" data-apply>설정 적용</button><button data-sync>지금 동기화</button><button data-restore>서버 → pluginStorage 복구</button><button class="danger" data-delete>현재 스코프 pluginStorage 삭제</button></div>
+        <div class="status" data-status>현재 모드: ${esc(initial.modeLabel)}\n서버 상태를 확인할 수 있습니다.</div>
+      </div>
+      <div class="job" data-job><b data-job-title>작업 진행 중</b><div class="bar"><i data-job-bar></i></div><div class="grid"><span data-job-phase></span><span data-job-count></span><span data-job-bytes></span><span data-job-time></span><span data-job-retry></span><span data-job-key></span></div></div>
+    </div>`;
+    const root = container.querySelector(`#${rootId}`);
+    const q = sel => root.querySelector(sel);
+    const setMessage = (message, tone='') => { const box=q('[data-status]'); box.textContent=String(message||''); box.dataset.tone=tone; };
+    const radio = root.querySelector(`input[name="${rootId}-mode"][value="${initial.mode}"]`) || root.querySelector(`input[name="${rootId}-mode"][value="plugin_only"]`); if (radio) radio.checked=true;
+    const formatBytes = bytes => { const n=Math.max(0,Number(bytes||0)); if(n<1024)return `${n} B`; if(n<1048576)return `${(n/1024).toFixed(1)} KB`; if(n<1073741824)return `${(n/1048576).toFixed(1)} MB`; return `${(n/1073741824).toFixed(2)} GB`; };
+    const renderJob = job => {
+      const card=q('[data-job]');
+      if (!job || job.scopeId !== initial.scopeId || syncJobTerminal(job.status)) { card.classList.remove('show'); return; }
+      card.classList.add('show'); const total=Math.max(0,Number(job.totalItems||0)), done=Math.max(0,Number(job.processedItems||0)); const percent=total?Math.min(100,Math.round(done/total*100)):0;
+      q('[data-job-title]').textContent = `${job.message || '작업 진행 중'}${total ? ` · ${percent}%` : ''}`; q('[data-job-bar]').style.width=`${percent}%`;
+      q('[data-job-phase]').textContent=`현재 단계: ${job.phase || '준비'}`; q('[data-job-count]').textContent=`진행: ${done.toLocaleString()} / ${total ? total.toLocaleString() : '조사 중'}`;
+      q('[data-job-bytes]').textContent=`처리: ${formatBytes(job.processedBytes)} · 전송: ${formatBytes(job.transferredBytes)}`; q('[data-job-time]').textContent=`경과: ${Math.max(0,Math.floor((Date.now()-Number(job.startedAt||Date.now()))/1000))}초`;
+      q('[data-job-retry]').textContent=`재시도 ${Number(job.retryCount||0)} · 실패 ${Number(job.failures||0)}`; q('[data-job-key]').textContent=`현재: ${job.currentKey || job.currentAction || '-'}`;
+    };
+    q('[data-test]').onclick = async()=>{ setMessage('서버 연결을 확인하고 있습니다…'); const result=await testConnection(q('[data-url]').value); setMessage(result.ok?`연결됨\nMemory Suite ${result.serverVersion}\nProtocol ${result.protocol?.major}.${result.protocol?.minor}\nnamespace ${namespace} · 항목 ${result.liveRecords}`:`연결 실패\n${result.error}`,result.ok?'good':'error'); };
+    q('[data-apply]').onclick = async()=>{ const mode=root.querySelector(`input[name="${rootId}-mode"]:checked`)?.value||MODE_PLUGIN_ONLY; try{ const job=await scopedStartConnectionConfigurationJob({mode,url:q('[data-url]').value,scope:initial.scope}); setMessage('설정 적용과 현재 스코프 초기 동기화를 시작했습니다.'); renderJob(job);}catch(error){setMessage(`설정 적용 시작 실패\n${error?.message||error}`,'error');} };
+    q('[data-sync]').onclick = async()=>{ try{const job=await scopedStartSynchronizationJob();setMessage('현재 스코프 동기화를 시작했습니다.');renderJob(job);}catch(error){setMessage(`동기화 시작 실패\n${error?.message||error}`,'error');} };
+    q('[data-restore]').onclick = async()=>{ try{const job=await scopedStartRestoreJob();setMessage('현재 스코프 복구를 시작했습니다.');renderJob(job);}catch(error){setMessage(`복구 시작 실패\n${error?.message||error}`,'error');} };
+    let armedUntil=0;
+    q('[data-delete]').onclick = async()=>{ const button=q('[data-delete]'); if(Date.now()>armedUntil){button.disabled=true;setMessage('현재 스코프가 서버에 안전하게 보존됐는지 확인하고 있습니다…');try{const checked=await scopedVerifyPreservation(state.legacy.plugin,{scope:initial.scope});armedUntil=Date.now()+30000;button.textContent='검증 완료 · 다시 눌러 삭제';setMessage(`보존 검증 완료 · ${checked.checked}개\n30초 안에 다시 누르면 현재 스코프의 payload만 삭제합니다.`,'good');}catch(error){armedUntil=0;setMessage(`삭제 차단\n${error?.message||error}`,'error');}finally{button.disabled=false;}return;} armedUntil=0;button.disabled=true;try{const result=await scopedDeletePluginStorageAfterVerification();button.textContent='현재 스코프 pluginStorage 삭제';setMessage(`삭제 완료 · ${result.deleted}개\n현재 스코프는 서버 단독입니다.`,'good');}catch(error){setMessage(`삭제 실패\n${error?.message||error}`,'error');}finally{button.disabled=false;} };
+    const unsubscribe=subscribeSyncJob(renderJob); const tick=setInterval(()=>{if(!root.isConnected){clearInterval(tick);unsubscribe();return;}renderJob(getSyncJob());},1000); try{tick?.unref?.();}catch(_){}
+    await scopedResumePendingSyncJob().catch(()=>null); renderJob(getSyncJob());
+    return true;
+  };
+
+
+  const ensureHandoffReady = async (options = {}) => {
+    const phase = String(options.phase || 'handoff').trim() || 'handoff';
+    const config = await readConfig(true);
+    const base = {
+      schema: 'memory-suite.handoff-storage.v1',
+      namespace,
+      pluginId,
+      phase,
+      mode: config.mode,
+      modeLabel: modeLabel(config.mode),
+      serverRequired: config.mode !== MODE_PLUGIN_ONLY,
+      verified: true,
+      pluginSync: null,
+      localSync: null,
+      integrity: null,
+      checkedAt: Date.now()
+    };
+    if (config.mode === MODE_PLUGIN_ONLY) return base;
+
+    const before = await remoteIntegrity();
+    let pluginSync = null;
+    let localSync = null;
+    if (config.mode === MODE_MIRROR) {
+      if (state.legacy.plugin) {
+        pluginSync = await synchronizeLegacyWithServer(state.legacy.plugin, 'plugin', {
+          allowOverwrite: true,
+          restoreMissingLocal: true
+        });
+        if (Array.isArray(pluginSync?.failures) && pluginSync.failures.length) {
+          const error = new Error(`memory_suite_handoff_plugin_sync_failed:${pluginSync.failures.length}`);
+          error.code = 'MEMORY_SUITE_HANDOFF_SYNC_FAILED';
+          error.sync = pluginSync;
+          throw error;
+        }
+      }
+      if (state.legacy.local && typeof state.legacy.local?.keys === 'function') {
+        localSync = await synchronizeLegacyWithServer(state.legacy.local, 'local', {
+          allowOverwrite: true,
+          restoreMissingLocal: true
+        });
+        if (Array.isArray(localSync?.failures) && localSync.failures.length) {
+          const error = new Error(`memory_suite_handoff_local_sync_failed:${localSync.failures.length}`);
+          error.code = 'MEMORY_SUITE_HANDOFF_SYNC_FAILED';
+          error.sync = localSync;
+          throw error;
+        }
+      }
+    }
+    const after = await remoteIntegrity();
+    const result = {
+      ...base,
+      checkedAt: Date.now(),
+      pluginSync,
+      localSync,
+      integrity: after,
+      integrityBefore: before
+    };
+    setStatus('handoff_storage_ready', '', {
+      mode: config.mode,
+      phase,
+      serverVersion: state.status.serverVersion || '',
+      records: Number(after?.records || 0) || 0
+    });
+    return result;
+  };
+
+  const serverGet = async (space, key) => await remoteGet(String(space || 'plugin'), String(key || ''));
+  const serverGetMany = async (space = 'plugin', keys = []) => await remoteGetMany(String(space || 'plugin'), keys);
+  const serverKeys = async (space = 'plugin', prefix = '') => await remoteKeys(String(space || 'plugin'), String(prefix || ''));
+  const serverIntegrity = async () => await remoteIntegrity();
+
+  const cloneDiagnosticValue = value => {
+    if (!value || typeof value !== 'object') return value || null;
+    try { return JSON.parse(JSON.stringify(value)); } catch (_) { return { ...value }; }
+  };
+  const offlineDiagnostics = async (error = null, manager = false) => {
+    let scope = null;
+    let mode = MODE_PLUGIN_ONLY;
+    try {
+      scope = await resolveCurrentScope(false);
+      mode = (await readScopeMode(scope, false)).mode;
+    } catch (_) {}
+    return {
+      schema: manager ? 'memory-suite.manager-server-diagnostics.v1' : 'memory-suite.plugin-server-diagnostics.v1',
+      generatedAt: Date.now(),
+      reachable: false,
+      namespace: manager ? '' : namespace,
+      pluginId,
+      pluginVersion,
+      scope: scope ? { label: String(scope.label || ''), available: scope.available !== false } : null,
+      storageMode: mode,
+      error: compact(error?.message || error || 'server_unavailable', 900),
+      status: { ...state.status }
+    };
+  };
+  const getCachedDiagnostics = () => cloneDiagnosticValue(state.diagnostics.value) || {
+    schema: 'memory-suite.plugin-server-diagnostics.v1',
+    generatedAt: 0,
+    reachable: null,
+    namespace,
+    pluginId,
+    pluginVersion,
+    status: { ...state.status },
+    reason: 'diagnostics_not_loaded'
+  };
+  const getDiagnostics = async (options = {}) => {
+    const force = options.force === true;
+    const maxAgeMs = Math.max(0, Math.min(10 * 60 * 1000, Number(options.maxAgeMs ?? 30000) || 0));
+    if (!force && state.diagnostics.value && Date.now() - Number(state.diagnostics.at || 0) <= maxAgeMs) return cloneDiagnosticValue(state.diagnostics.value);
+    if (!force && state.diagnostics.pending) return await state.diagnostics.pending;
+    const pending = (async () => {
+      let scope = null;
+      let mode = MODE_PLUGIN_ONLY;
+      try {
+        scope = normalizeScopeDescriptor(options.scope || await resolveCurrentScope(false));
+        mode = (await readScopeMode(scope, false)).mode;
+        const connection = await bootstrap(force, true);
+        if (connection?.capabilities?.['server-diagnostics.v1'] !== true) {
+          const result = {
+            schema: 'memory-suite.plugin-server-diagnostics.v1',
+            generatedAt: Date.now(),
+            reachable: true,
+            supported: false,
+            reason: 'server_diagnostics_unsupported',
+            namespace,
+            pluginId,
+            pluginVersion,
+            storageMode: mode,
+            scope: scope ? { label: String(scope.label || ''), available: scope.available !== false } : null,
+            server: { version: String(connection?.version || ''), protocol: cloneDiagnosticValue(connection?.protocol || {}) },
+            clientStatus: { ...state.status }
+          };
+          state.diagnostics.value = result;
+          state.diagnostics.at = Date.now();
+          return cloneDiagnosticValue(result);
+        }
+        const limit = Math.max(1, Math.min(1000, Number(options.limit || 500) || 500));
+        const since = Math.max(0, Number(options.since || 0) || 0);
+        const query = [
+          `namespace=${encodeURIComponent(namespace)}`,
+          `limit=${limit}`,
+          `since=${since}`,
+          `includeGlobal=${options.includeGlobal === false ? '0' : '1'}`,
+          `includeTextLogs=${options.includeTextLogs === true ? '1' : '0'}`,
+          ...(scope?.scopeId ? [`scopeId=${encodeURIComponent(scope.scopeId)}`] : [])
+        ].join('&');
+        const payload = await request('GET', `/v1/diagnostics?${query}`, null, { allowPluginOnly: true, scope, storageMode: mode, forceBootstrap: force });
+        const result = {
+          ...(payload?.result || {}),
+          schema: 'memory-suite.plugin-server-diagnostics.v1',
+          reachable: true,
+          namespace,
+          pluginId,
+          pluginVersion,
+          storageMode: mode,
+          scope: scope ? { label: String(scope.label || ''), available: scope.available !== false } : null,
+          clientStatus: { ...state.status }
+        };
+        state.diagnostics.value = result;
+        state.diagnostics.at = Date.now();
+        return cloneDiagnosticValue(result);
+      } catch (error) {
+        const result = await offlineDiagnostics(error, false);
+        state.diagnostics.value = result;
+        state.diagnostics.at = Date.now();
+        return cloneDiagnosticValue(result);
+      } finally {
+        state.diagnostics.pending = null;
+      }
+    })();
+    state.diagnostics.pending = pending;
+    return await pending;
+  };
+  const refreshDiagnostics = async (options = {}) => await getDiagnostics({ ...options, force: true });
+  const scheduleDiagnosticsRefresh = (delayMs = 0, options = {}) => {
+    if (state.diagnostics.timer) clearTimeout(state.diagnostics.timer);
+    state.diagnostics.timer = setTimeout(() => {
+      state.diagnostics.timer = null;
+      refreshDiagnostics(options).catch(() => {});
+    }, Math.max(0, Number(delayMs || 0) || 0));
+    return true;
+  };
+
+  const decorateDebugExport = async (payload, options = {}) => {
+    const source = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : { value: payload };
+    const memorySuite = await getDiagnostics({ force: options.force !== false, limit: options.limit || 500, since: options.since || 0, includeGlobal: options.includeGlobal !== false, includeTextLogs: options.includeTextLogs === true });
+    return { ...source, memorySuite };
+  };
+  const decorateDebugExportSync = payload => {
+    const source = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : { value: payload };
+    return { ...source, memorySuite: getCachedDiagnostics() };
+  };
+
+  const assertManagerOwner = () => {
+    if (pluginId !== 'flashback_hayaku_bridge') {
+      const error = new Error('memory_suite_manager_is_retrace_only');
+      error.code = 'MEMORY_SUITE_MANAGER_OWNER_REQUIRED';
+      throw error;
+    }
+  };
+  const managerHeaders = Object.freeze({
+    'X-Memory-Suite-Manager': 'retrace',
+    'X-Memory-Suite-Plugin': 'flashback_hayaku_bridge'
+  });
+  const managerRequest = async (method, route, body = null) => {
+    assertManagerOwner();
+    return await request(method, route, body, { extraHeaders: managerHeaders, allowPluginOnly: true });
+  };
+  const managerConnection = async () => {
+    assertManagerOwner();
+    return await bootstrap(false, true);
+  };
+  const managerGetDiagnostics = async (options = {}) => {
+    try {
+      const connection = await managerConnection();
+      if (connection?.capabilities?.['manager-diagnostics.v1'] !== true) {
+        return {
+          schema: 'memory-suite.manager-server-diagnostics.v1',
+          generatedAt: Date.now(),
+          reachable: true,
+          supported: false,
+          reason: 'manager_server_diagnostics_unsupported',
+          pluginId,
+          pluginVersion,
+          server: { version: String(connection?.version || ''), protocol: cloneDiagnosticValue(connection?.protocol || {}) },
+          clientStatus: { ...state.status }
+        };
+      }
+      const limit = Math.max(1, Math.min(1000, Number(options.limit || 1000) || 1000));
+      const since = Math.max(0, Number(options.since || 0) || 0);
+      const namespaceFilter = String(options.namespace || '').trim().toLowerCase();
+      const scope = options.scope || options.currentScope === true
+        ? normalizeScopeDescriptor(options.scope || await resolveCurrentScope(false))
+        : null;
+      const query = [
+        `limit=${limit}`,
+        `since=${since}`,
+        `includeGlobal=${options.includeGlobal === false ? '0' : '1'}`,
+        `includeTextLogs=${options.includeTextLogs === false ? '0' : '1'}`,
+        ...(namespaceFilter ? [`namespace=${encodeURIComponent(namespaceFilter)}`] : []),
+        ...(scope?.scopeId ? [`scopeId=${encodeURIComponent(scope.scopeId)}`] : [])
+      ].join('&');
+      const payload = await managerRequest('GET', `/v1/manager/diagnostics?${query}`);
+      return { ...(payload?.result || {}), reachable: true, pluginId, pluginVersion, clientStatus: { ...state.status } };
+    } catch (error) {
+      return await offlineDiagnostics(error, true);
+    }
+  };
+  const managerServerGet = async (targetNamespace, space, key) => {
+    const ns = String(targetNamespace || '').trim().toLowerCase();
+    const payload = await managerRequest('GET', `/v1/kv/get?namespace=${encodeURIComponent(ns)}&space=${encodeURIComponent(String(space || 'plugin'))}&key=${encodeURIComponent(String(key || ''))}`);
+    return payload?.result || {};
+  };
+  const managerServerGetMany = async (targetNamespace, space = 'plugin', keys = []) => {
+    const ns = String(targetNamespace || '').trim().toLowerCase();
+    const list = Array.isArray(keys) ? keys.map(String).filter(Boolean).slice(0, 512) : [];
+    if (!list.length) return { values: {} };
+    const payload = await managerRequest('POST', '/v1/kv/get-many', { namespace: ns, space: String(space || 'plugin'), keys: list });
+    return payload?.result || { values: {} };
+  };
+  const managerServerKeys = async (targetNamespace, space = 'plugin', prefix = '') => {
+    const ns = String(targetNamespace || '').trim().toLowerCase();
+    const payload = await managerRequest('GET', `/v1/kv/keys?namespace=${encodeURIComponent(ns)}&space=${encodeURIComponent(String(space || 'plugin'))}&prefix=${encodeURIComponent(String(prefix || ''))}`);
+    return payload?.result || { keys: [], tombstones: [], records: [] };
+  };
+  const managerServerIntegrity = async targetNamespace => {
+    const ns = String(targetNamespace || '').trim().toLowerCase();
+    const payload = await managerRequest('GET', `/v1/integrity?namespace=${encodeURIComponent(ns)}`);
+    const result = payload?.result || {};
+    if (result.ok !== true || String(result.result || '') !== 'ok') throw new Error(`memory_suite_manager_integrity_failed:${ns}:${result.result || 'unknown'}`);
+    return result;
+  };
+  const managerReplaceScopeIndex = async (targetNamespace, scopes = []) => {
+    const connection = await managerConnection();
+    if (connection?.capabilities?.['scope-catalog.v1'] !== true) {
+      const error = new Error('memory_suite_scope_catalog_capability_missing');
+      error.code = 'MEMORY_SUITE_MANAGER_CAPABILITY_MISSING';
+      throw error;
+    }
+    const response = await managerRequest('POST', '/v1/manager/scopes/index', {
+      namespace: String(targetNamespace || namespace || ''),
+      scopes: Array.isArray(scopes) ? scopes : []
+    });
+    return response?.result || null;
+  };
+  const managerListScopes = async () => {
+    const response = await managerRequest('GET', '/v1/manager/scopes');
+    return response?.result || { scopes: [] };
+  };
+  const managerPlanScopeDeletion = async payload => {
+    const connection = await managerConnection();
+    if (connection?.capabilities?.['scope-delete-preview.v1'] !== true) {
+      const error = new Error('memory_suite_scope_delete_capability_missing');
+      error.code = 'MEMORY_SUITE_MANAGER_CAPABILITY_MISSING';
+      throw error;
+    }
+    const response = await managerRequest('POST', '/v1/manager/scope-delete/plan', payload || {});
+    return response?.result || null;
+  };
+  const managerExecuteScopeDeletion = async (planId, mutationFingerprint) => {
+    const connection = await managerConnection();
+    if (connection?.capabilities?.['scope-delete-commit.v1'] !== true) throw new Error('memory_suite_scope_delete_commit_capability_missing');
+    const response = await managerRequest('POST', '/v1/manager/scope-delete/execute', {
+      planId: String(planId || ''),
+      mutationFingerprint: String(mutationFingerprint || '')
+    });
+    return response?.result || null;
+  };
+  const managerSetScopePinned = async (targetNamespace, scopeId, pinned) => {
+    const connection = await managerConnection();
+    if (connection?.capabilities?.['scope-pin.v1'] !== true) {
+      const error = new Error('memory_suite_scope_pin_capability_missing');
+      error.code = 'MEMORY_SUITE_MANAGER_CAPABILITY_MISSING';
+      throw error;
+    }
+    const response = await managerRequest('POST', '/v1/manager/scope-pin', {
+      namespace: String(targetNamespace || namespace || ''),
+      scopeId: String(scopeId || ''),
+      pinned: pinned === true
+    });
+    return response?.result || null;
+  };
+
+  const bridge = Object.freeze({
+    namespace,
+    pluginId,
+    get: scopedGet,
+    set: scopedSet,
+    remove: scopedRemove,
+    keys: scopedKeys,
+    bootstrap: scopedBootstrap,
+    shouldRoute: matchesRoute,
+    createPluginStorageProxy: legacy => createScopedProxy(legacy, 'plugin', proxyCache),
+    createLocalStorageProxy: legacy => createScopedProxy(legacy, 'local', localProxyCache),
+    synchronizeNow: async () => await scopedSynchronizeAll({ allowOverwrite: true, restoreMissingLocal: true }),
+    startSynchronizationJob: scopedStartSynchronizationJob,
+    startConnectionConfigurationJob: scopedStartConnectionConfigurationJob,
+    startRestoreJob: scopedStartRestoreJob,
+    resumePendingSyncJob: scopedResumePendingSyncJob,
+    waitForSyncJob: scopedWaitForSyncJob,
+    getSyncJob,
+    subscribeSyncJob,
+    verifyServerPreservation: async () => await scopedVerifyPreservation(state.legacy.plugin),
+    restorePluginStorage: async () => await scopedRestoreAll({}),
+    testConnection,
+    setServerUrl: persistServerUrl,
+    configureConnection: scopedConfigureConnection,
+    getConnectionSettings: scopedGetConnectionSettings,
+    mountConnectionPanel: scopedMountConnectionPanel,
+    restoreServerSpaceToLegacy: scopedRestoreSpace,
+    prepareServerScopeDeletion: scopedPrepareServerScopeDeletion,
+    deletePluginStorageAfterServerVerification: scopedDeletePluginStorageAfterVerification,
+    setMode: scopedSetModeSafely,
+    getMode: async () => (await readScopeMode(null, true)).mode,
+    getCurrentScope: async () => await resolveCurrentScope(true),
+    getScopeMode: async scope => await readScopeMode(scope, true),
+    setScopeMode: async (scope, mode) => await scopedSetModeSafely(mode, { scope }),
+    ensureHandoffReady: scopedEnsureHandoffReady,
+    serverGet: scopedServerGet,
+    serverGetMany: scopedServerGetMany,
+    serverKeys: scopedServerKeys,
+    serverIntegrity: scopedServerIntegrity,
+    getDiagnostics,
+    refreshDiagnostics,
+    scheduleDiagnosticsRefresh,
+    getCachedDiagnostics,
+    decorateDebugExport,
+    decorateDebugExportSync,
+    managerGetDiagnostics,
+    managerConnection,
+    managerServerGet,
+    managerServerGetMany,
+    managerServerKeys,
+    managerServerIntegrity,
+    managerReplaceScopeIndex,
+    managerListScopes,
+    managerPlanScopeDeletion,
+    managerExecuteScopeDeletion,
+    managerSetScopePinned,
+    openManagementDialog,
+    registerManagementButton,
+    status: () => ({
+      ...state.status,
+      scope: state.scopeRouting.current ? { ...state.scopeRouting.current } : null,
+      mode: state.config.mode,
+      modeLabel: modeLabel(state.config.mode),
+      lastLegacyImport: state.scopeRouting.lastLegacyImport,
+      lastManagementResult: state.management.lastResult,
+      migration: { plugin: { ...state.migration.plugin }, local: { ...state.migration.local } },
+      syncJob: getSyncJob()
+    })
+  });
+  scheduleManagementRegistration();
+  scheduleDiagnosticsRefresh(1200, { limit: 250 });
+  return bridge;
+
+};
+
+const memorySuiteHayakuCurrentScope = async () => {
+  let scope = null;
+  try { scope = await RisuCompat.currentChatScope(); } catch (_) {}
+  if (!scope?.key) return null;
+  return {
+    scopeId: scope.key, scopeKey: scope.key, characterId: scope.characterId || '', chatId: scope.chatId || '',
+    chatTitle: scope.chatTitle || '', label: scope.chatTitle || scope.chatId || scope.key,
+    aliases: [scope.key, scope.chatId].filter(Boolean)
+  };
+};
+const memorySuiteHayakuResolveKeyScope = async ({ key, currentScope }) => {
+  if (key.startsWith(STORAGE_LEDGER_KEY_PREFIX) || key.startsWith(RECOVERY_VAULT_KEY_PREFIX)) {
+    const prefix = key.startsWith(STORAGE_LEDGER_KEY_PREFIX) ? STORAGE_LEDGER_KEY_PREFIX : RECOVERY_VAULT_KEY_PREFIX;
+    const scopeId = key.slice(prefix.length).trim();
+    return currentScope?.scopeId === scopeId ? { kind: 'scope', ...currentScope } : { kind: 'scope', scopeId, scopeKey: scopeId, aliases: [scopeId], label: scopeId };
+  }
+  if (key.startsWith(HAYAKU_ARCHIVE_KEY_PREFIX) || key.startsWith(HAYAKU_ARCHIVE_META_KEY_PREFIX)) return { kind: 'shared' };
+  return { kind: 'global' };
+};
+const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
+  namespace:'hayaku', displayName:'HAYAKU', pluginId:HAYAKU_PLUGIN_ID, pluginVersion:PLUGIN_VERSION, managementButton:false,
+  pluginPrefixes:[STORAGE_LEDGER_KEY_PREFIX,RECOVERY_VAULT_KEY_PREFIX,HAYAKU_ARCHIVE_KEY_PREFIX,HAYAKU_ARCHIVE_META_KEY_PREFIX],
+  currentScopeProvider:memorySuiteHayakuCurrentScope, resolveKeyScope:memorySuiteHayakuResolveKeyScope
+});
+
+
   const RisuCompat = (() => {
     const candidates = apiCandidates;
     const api = () => candidates()[0] || API || null;
@@ -2192,13 +6215,13 @@ const MODE_PROFILES = Object.freeze({
       return text(fallback);
     };
     const getStorageItem = async (key, fallback = null) => {
-      const storage = storageHost()?.pluginStorage;
+      const storage = MemorySuiteStorageBridge.createPluginStorageProxy(storageHost()?.pluginStorage);
       if (typeof storage?.getItem !== 'function') return fallback;
-      const value = await boundedHostCall(`pluginStorage.getItem:${key}`, () => storage.getItem(key), fallback);
+      const value = await boundedHostCall(`MemorySuite.getItem:${key}`, () => storage.getItem(key), fallback);
       return value == null || value === '' ? fallback : value;
     };
     const setStorageItem = async (key, value) => {
-      const storage = storageHost()?.pluginStorage;
+      const storage = MemorySuiteStorageBridge.createPluginStorageProxy(storageHost()?.pluginStorage);
       if (typeof storage?.setItem !== 'function') return false;
       const serialized = typeof value === 'string' ? value : JSON.stringify(value);
       invalidateCopiedChatSourceLedger(key);
@@ -2212,7 +6235,7 @@ const MODE_PROFILES = Object.freeze({
       storageWriteFence.set(key, state);
       const revision = state.revision;
       const operation = beginFencedStorageWrite(storage, key, serialized, state, revision, false);
-      return !!(await boundedHostCall(`pluginStorage.setItem:${key}`, async () => {
+      return !!(await boundedHostCall(`MemorySuite.setItem:${key}`, async () => {
         await operation;
         return true;
       }, false));
@@ -6651,7 +10674,26 @@ const MODE_PROFILES = Object.freeze({
       packetRecoveryRaw,
       packetCoverageAuditRaw,
       packetCoverageFallbackRecallRaw,
-      displayScrubberRaw
+      displayScrubberRaw,
+      recallRelatednessWeightRaw,
+      recallRecencyWeightRaw,
+      recallContextMessagesRaw,
+      adaptiveContextWindowRaw,
+      multiQueryRecallRaw,
+      contradictionBundleRaw,
+      multiResolutionRecallRaw,
+      recallStabilityRaw,
+      recallStabilityBoostRaw,
+      recoveryVaultRaw,
+      rawPassageRecallRaw,
+      rawRecallMaxItemsRaw,
+      rawRecallMaxCharsRaw,
+      rawRecallMinScoreRaw,
+      typedMemoryGraphRaw,
+      graphClosureRecallRaw,
+      graphClosureMaxNodesRaw,
+      hierarchicalEpisodeMemoryRaw,
+      episodeRouterMaxHitsRaw
     ] = await Promise.all([
       readArg('hayaku_enabled', String(DEFAULT_SETTINGS.enabled)),
       readArg('hayaku_mode', DEFAULT_SETTINGS.mode),
@@ -6665,10 +10707,38 @@ const MODE_PROFILES = Object.freeze({
       readArg('hayaku_packet_recovery', String(DEFAULT_SETTINGS.packetRecovery)),
       readArg('hayaku_packet_coverage_audit', String(DEFAULT_SETTINGS.packetCoverageAudit)),
       readArg('hayaku_packet_coverage_fallback_recall', String(DEFAULT_SETTINGS.packetCoverageFallbackRecall)),
-      readArg('hayaku_display_scrubber', String(DEFAULT_SETTINGS.displayScrubber))
+      readArg('hayaku_display_scrubber', String(DEFAULT_SETTINGS.displayScrubber)),
+      readArg('hayaku_recall_relatedness_weight', String(DEFAULT_SETTINGS.recallRelatednessWeight)),
+      readArg('hayaku_recall_recency_weight', String(DEFAULT_SETTINGS.recallRecencyWeight)),
+      readArg('hayaku_recall_context_messages', String(DEFAULT_SETTINGS.recallContextMessages)),
+      readArg('hayaku_adaptive_context_window', String(DEFAULT_SETTINGS.adaptiveContextWindow)),
+      readArg('hayaku_multi_query_recall', String(DEFAULT_SETTINGS.multiQueryRecall)),
+      readArg('hayaku_contradiction_bundle', String(DEFAULT_SETTINGS.contradictionBundleEnabled)),
+      readArg('hayaku_multi_resolution_recall', String(DEFAULT_SETTINGS.multiResolutionRecallEnabled)),
+      readArg('hayaku_recall_stability', String(DEFAULT_SETTINGS.recallStabilityEnabled)),
+      readArg('hayaku_recall_stability_boost', String(DEFAULT_SETTINGS.recallStabilityBoost)),
+      readArg('hayaku_recovery_vault', String(DEFAULT_SETTINGS.recoveryVaultEnabled)),
+      readArg('hayaku_raw_passage_recall', String(DEFAULT_SETTINGS.rawPassageRecallEnabled)),
+      readArg('hayaku_raw_recall_max_items', String(DEFAULT_SETTINGS.rawRecallMaxItems)),
+      readArg('hayaku_raw_recall_max_chars', String(DEFAULT_SETTINGS.rawRecallMaxChars)),
+      readArg('hayaku_raw_recall_min_score', String(DEFAULT_SETTINGS.rawRecallMinScore)),
+      readArg('hayaku_typed_memory_graph', String(DEFAULT_SETTINGS.typedMemoryGraphEnabled)),
+      readArg('hayaku_graph_closure_recall', String(DEFAULT_SETTINGS.graphClosureRecallEnabled)),
+      readArg('hayaku_graph_closure_max_nodes', String(DEFAULT_SETTINGS.graphClosureMaxNodes)),
+      readArg('hayaku_hierarchical_episode_memory', String(DEFAULT_SETTINGS.hierarchicalEpisodeMemoryEnabled)),
+      readArg('hayaku_episode_router_max_hits', String(DEFAULT_SETTINGS.episodeRouterMaxHits))
     ]);
     const maxItemsPerAxis = Number(maxItemsPerAxisRaw);
     const bm25Weight = Number(bm25WeightRaw);
+    const recallRelatednessWeight = Number(recallRelatednessWeightRaw);
+    const recallRecencyWeight = Number(recallRecencyWeightRaw);
+    const recallContextMessages = Number(recallContextMessagesRaw);
+    const recallStabilityBoost = Number(recallStabilityBoostRaw);
+    const rawRecallMaxItems = Number(rawRecallMaxItemsRaw);
+    const rawRecallMaxChars = Number(rawRecallMaxCharsRaw);
+    const rawRecallMinScore = Number(rawRecallMinScoreRaw);
+    const graphClosureMaxNodes = Number(graphClosureMaxNodesRaw);
+    const episodeRouterMaxHits = Number(episodeRouterMaxHitsRaw);
     const configuredSettings = {
       ...DEFAULT_SETTINGS,
       enabled: falsySetting(enabledRaw) ? false : true,
@@ -6686,7 +10756,26 @@ const MODE_PROFILES = Object.freeze({
       packetRecovery: falsySetting(packetRecoveryRaw) ? false : true,
       packetCoverageAudit: falsySetting(packetCoverageAuditRaw) ? false : true,
       packetCoverageFallbackRecall: falsySetting(packetCoverageFallbackRecallRaw) ? false : true,
-      displayScrubber: truthySetting(displayScrubberRaw)
+      displayScrubber: truthySetting(displayScrubberRaw),
+      recallRelatednessWeight: clamp(Number.isFinite(recallRelatednessWeight) ? recallRelatednessWeight : DEFAULT_SETTINGS.recallRelatednessWeight, 0, 100, DEFAULT_SETTINGS.recallRelatednessWeight),
+      recallRecencyWeight: clamp(Number.isFinite(recallRecencyWeight) ? recallRecencyWeight : DEFAULT_SETTINGS.recallRecencyWeight, 0, 100, DEFAULT_SETTINGS.recallRecencyWeight),
+      recallContextMessages: Math.max(0, Math.min(20, Number.isFinite(recallContextMessages) ? Math.floor(recallContextMessages) : DEFAULT_SETTINGS.recallContextMessages)),
+      adaptiveContextWindow: falsySetting(adaptiveContextWindowRaw) ? false : true,
+      multiQueryRecall: falsySetting(multiQueryRecallRaw) ? false : true,
+      contradictionBundleEnabled: falsySetting(contradictionBundleRaw) ? false : true,
+      multiResolutionRecallEnabled: falsySetting(multiResolutionRecallRaw) ? false : true,
+      recallStabilityEnabled: falsySetting(recallStabilityRaw) ? false : true,
+      recallStabilityBoost: clamp(Number.isFinite(recallStabilityBoost) ? recallStabilityBoost : DEFAULT_SETTINGS.recallStabilityBoost, 0, 0.08, DEFAULT_SETTINGS.recallStabilityBoost),
+      recoveryVaultEnabled: falsySetting(recoveryVaultRaw) ? false : true,
+      rawPassageRecallEnabled: falsySetting(rawPassageRecallRaw) ? false : true,
+      rawRecallMaxItems: Math.max(1, Math.min(8, Number.isFinite(rawRecallMaxItems) ? Math.floor(rawRecallMaxItems) : DEFAULT_SETTINGS.rawRecallMaxItems)),
+      rawRecallMaxChars: Math.max(600, Math.min(8000, Number.isFinite(rawRecallMaxChars) ? Math.floor(rawRecallMaxChars) : DEFAULT_SETTINGS.rawRecallMaxChars)),
+      rawRecallMinScore: clamp(Number.isFinite(rawRecallMinScore) ? rawRecallMinScore : DEFAULT_SETTINGS.rawRecallMinScore, 0.04, 0.8, DEFAULT_SETTINGS.rawRecallMinScore),
+      typedMemoryGraphEnabled: falsySetting(typedMemoryGraphRaw) ? false : true,
+      graphClosureRecallEnabled: falsySetting(graphClosureRecallRaw) ? false : true,
+      graphClosureMaxNodes: Math.max(2, Math.min(24, Number.isFinite(graphClosureMaxNodes) ? Math.floor(graphClosureMaxNodes) : DEFAULT_SETTINGS.graphClosureMaxNodes)),
+      hierarchicalEpisodeMemoryEnabled: falsySetting(hierarchicalEpisodeMemoryRaw) ? false : true,
+      episodeRouterMaxHits: Math.max(1, Math.min(8, Number.isFinite(episodeRouterMaxHits) ? Math.floor(episodeRouterMaxHits) : DEFAULT_SETTINGS.episodeRouterMaxHits))
     };
     Memory.settings = configuredSettings;
     Memory.settingsLoadedAt = now();
@@ -6699,7 +10788,7 @@ const MODE_PROFILES = Object.freeze({
     ingestedPacketHashes: [],
     observations: [],
     entity: { characters: [], relations: [], povMemories: [], secrets: [] },
-    memory: { summaries: [], notes: [] },
+    memory: { summaries: [], notes: [], episodes: [], episodeIndex: null },
     world: { items: [] },
     narrative: { conflictTraces: [], sceneDeltas: [], themeMotifs: [], criticalDialogue: [], items: [] },
     planner: { consequenceLedger: [], payoffTracker: [], continuityLocks: [], doNotResolveYet: [], items: [] },
@@ -8575,6 +12664,339 @@ const MODE_PROFILES = Object.freeze({
     if (MEANINGFUL_PROTECTED_PACKET_RE.test(raw)) score += 0.4;
     return score;
   };
+  const globalPacketRoutingIdentity = (packet = {}, fallbackIndex = 0) => text(
+    packet.hash || packet.packetHash || packet.sourceHash
+      || `${Number(packet.messageIndex || 0)}:${Number(packet.sourcePacketIndex || packet.packetOrdinal || fallbackIndex)}:${stableHash64(packet.cheapText || packet.raw || '')}`
+  ).trim();
+  const globalPacketRoutingStringValues = (value, limit = 12, maxChars = 180) => {
+    const out = [];
+    const seen = new Set();
+    const visit = source => {
+      if (source == null || out.length >= limit) return;
+      if (Array.isArray(source)) { source.forEach(visit); return; }
+      if (objectish(source)) {
+        const direct = source.summary ?? source.text ?? source.label ?? source.title ?? source.name
+          ?? source.event ?? source.state ?? source.current_state ?? source.currentState
+          ?? source.action ?? source.consequence ?? source.payoff ?? source.setup;
+        if (direct != null && direct !== source) { visit(direct); return; }
+        const body = ledgerRev2Text(source);
+        if (body) visit(body);
+        return;
+      }
+      const body = compact(source, maxChars);
+      const key = normalizeKey(body);
+      if (!key || seen.has(key)) return;
+      seen.add(key);
+      out.push(body);
+    };
+    visit(value);
+    return out;
+  };
+  const globalPacketRoutingDescriptor = (packet = {}, packetOrdinal = 0, total = 0, options = {}) => {
+    const cheapText = compact(packet.cheapText || packet.raw || '', 4200);
+    let parsed = null;
+    const eagerRaw = text(packet.raw || '').trim();
+    if (options?.allowRawParse !== false && eagerRaw && eagerRaw.length <= 48000) {
+      parsed = safeJsonParse(eagerRaw, null);
+      if (!objectish(parsed)) {
+        const repaired = conservativeJsonSyntaxRepair(eagerRaw);
+        if (repaired?.ok === true && objectish(repaired.parsed)) parsed = repaired.parsed;
+      }
+    }
+    const meta = objectish(parsed?.meta) ? parsed.meta : {};
+    const summaryMemory = objectish(meta.summary_memory || meta.summaryMemory) ? (meta.summary_memory || meta.summaryMemory) : {};
+    const entity = objectish(parsed?.entity) ? parsed.entity : {};
+    const world = objectish(parsed?.world) ? parsed.world : {};
+    const narrative = objectish(parsed?.narrative) ? parsed.narrative : {};
+    const planner = objectish(parsed?.planner) ? parsed.planner : {};
+    const packetType = text(meta.packet_type || meta.packetType || '').trim().toLowerCase()
+      || (/recovery[_-]?snapshot/i.test(cheapText) ? 'recovery_snapshot' : 'current_snapshot');
+    const sceneId = compact(meta.scene_id || meta.sceneId || '', 120)
+      || compact((cheapText.match(/"scene_id"\s*:\s*"([^"\\]{1,120})"/i) || [])[1] || '', 120);
+    const turnHintRaw = meta.turn_hint || meta.turnHint || meta.turn_anchor || meta.turnAnchor || parsed?.turn;
+    const turnHint = Number(turnHintRaw);
+    const summaryFragments = globalPacketRoutingStringValues([
+      summaryMemory.summary, summaryMemory.recallAnchors,
+      narrative.scene_deltas, narrative.sceneDeltas,
+      world.active_events, world.activeEvents, world.historical_events, world.historicalEvents,
+      planner.consequence_ledger, planner.consequenceLedger,
+      narrative.conflict_traces, narrative.conflictTraces,
+      planner.continuity_locks, planner.continuityLocks
+    ], GLOBAL_PACKET_ROUTING_TUNING.maxSummaryFragments, 260);
+    const mentionedEntities = globalPacketRoutingStringValues([
+      summaryMemory.mentionedEntityNames, summaryMemory.mentioned_entity_names,
+      entity.characters, entity.relations
+    ], 32, 90);
+    const explicitCanonical = mergeValues([
+      summaryMemory.canonicalAnchors, summaryMemory.canonical_anchors,
+      summaryMemory.canonicalTokens, summaryMemory.canonical_tokens,
+      meta.canonicalAnchors, meta.canonical_anchors
+    ], 80).filter(value => CANONICAL_RECALL_TOKEN_PREFIX_RE.test(text(value)));
+    const routeText = compact([
+      sceneId, ...summaryFragments, ...mentionedEntities, ...explicitCanonical, cheapText
+    ].filter(Boolean).join('\n'), 5200);
+    const canonicalAnchors = mergeValues([explicitCanonical, canonicalRecallTokensForText(routeText)], 100)
+      .filter(value => CANONICAL_RECALL_TOKEN_PREFIX_RE.test(text(value)));
+    return {
+      packet,
+      packetKey: globalPacketRoutingIdentity(packet, packetOrdinal),
+      packetOrdinal,
+      messageIndex: Number.isFinite(Number(packet.messageIndex)) ? Number(packet.messageIndex) : packetOrdinal,
+      distanceFromLatest: Number.isFinite(Number(packet.packetDistanceFromLatest ?? packet.distanceFromLatest))
+        ? Math.max(0, Number(packet.packetDistanceFromLatest ?? packet.distanceFromLatest))
+        : Math.max(0, total - 1 - packetOrdinal),
+      packetType,
+      sceneId,
+      turnHint: Number.isFinite(turnHint) && turnHint > 0 ? turnHint : packetOrdinal + 1,
+      routeText,
+      summaryFragments,
+      mentionedEntities,
+      canonicalAnchors,
+      places: canonicalAnchors.filter(value => /^place:/i.test(text(value))),
+      objects: canonicalAnchors.filter(value => /^object:/i.test(text(value))),
+      events: canonicalAnchors.filter(value => /^(?:event|promise|narrative|story):/i.test(text(value))),
+      importance: clamp(parsed?.importance?.overall ?? parsed?.importance, 0, 1, 0.5),
+      rawParsed: objectish(parsed)
+    };
+  };
+  const globalPacketRoutingEvenSample = (values = [], limit = 1) => {
+    const list = ensureArray(values).filter(Boolean);
+    const cap = Math.max(0, Number(limit || 0) || 0);
+    if (!cap || !list.length) return [];
+    if (list.length <= cap) return list.slice();
+    if (cap === 1) return [list[list.length - 1]];
+    const out = [];
+    const seen = new Set();
+    for (let index = 0; index < cap; index += 1) {
+      const at = Math.round(index * (list.length - 1) / (cap - 1));
+      if (seen.has(at)) continue;
+      seen.add(at);
+      out.push(list[at]);
+    }
+    return out;
+  };
+  const globalPacketRoutingEpisode = (members = [], level = 1) => {
+    const rows = ensureArray(members).filter(Boolean);
+    if (!rows.length) return null;
+    const packetKeys = uniq(rows.flatMap(row => row.packetKeys || row.packetKey || []), 240);
+    const childEpisodeIds = uniq(rows.map(row => row.id).filter(Boolean), GLOBAL_PACKET_ROUTING_TUNING.parentFanIn * 2);
+    const sceneIds = uniq(rows.flatMap(row => ensureArray(row.sceneIds || row.sceneId)).map(value => compact(value, 120)).filter(Boolean), 24);
+    const summaryFragments = uniq(rows.flatMap(row => ensureArray(row.summaryFragments)).map(value => compact(value, 280)).filter(Boolean), GLOBAL_PACKET_ROUTING_TUNING.maxSummaryFragments);
+    const mentionedEntities = uniq(rows.flatMap(row => ensureArray(row.mentionedEntities)).map(value => compact(value, 90)).filter(Boolean), 48);
+    const canonicalAnchors = mergeValues(rows.map(row => row.canonicalAnchors), 160).filter(value => CANONICAL_RECALL_TOKEN_PREFIX_RE.test(text(value)));
+    const startTurn = Math.max(1, Math.min(...rows.map(row => Number(row.startTurn || row.turnHint || 1)).filter(Number.isFinite)));
+    const endTurn = Math.max(startTurn, Math.max(...rows.map(row => Number(row.endTurn || row.turnHint || startTurn)).filter(Number.isFinite)));
+    const summary = compact(summaryFragments.join(' → '), GLOBAL_PACKET_ROUTING_TUNING.maxSummaryChars)
+      || compact(rows.map(row => row.routeText || '').filter(Boolean).join(' / '), GLOBAL_PACKET_ROUTING_TUNING.maxSummaryChars);
+    const id = `global_route:${level}:${stableHash64([level, startTurn, endTurn, packetKeys.slice(0, 20), childEpisodeIds].flat().join('|'))}`;
+    return {
+      id, level, startTurn, endTurn, packetKeys, childEpisodeIds, sceneIds, summaryFragments,
+      mentionedEntities, canonicalAnchors,
+      places: uniq(rows.flatMap(row => ensureArray(row.places)).filter(Boolean), 32),
+      objects: uniq(rows.flatMap(row => ensureArray(row.objects)).filter(Boolean), 32),
+      events: uniq(rows.flatMap(row => ensureArray(row.events)).filter(Boolean), 40),
+      importance: clamp(Math.max(...rows.map(row => Number(row.importance || 0.5))), 0, 1, 0.5),
+      routeText: compact([
+        `global routing level ${level}`, `turn ${startTurn}-${endTurn}`, sceneIds.join(' '), mentionedEntities.join(' '),
+        canonicalAnchors.join(' '), summary
+      ].filter(Boolean).join('\n'), 6200),
+      memberCount: rows.length
+    };
+  };
+  const buildGlobalPacketRoutingCatalog = (packets = [], settings = Memory.settings || DEFAULT_SETTINGS) => {
+    if (settings?.hierarchicalEpisodeMemoryEnabled === false) return { version: GLOBAL_PACKET_ROUTING_VERSION, active: false, leaves: [], parents: [], cacheHit: false };
+    const list = ensureArray(packets);
+    const cacheKey = stableHash64([
+      GLOBAL_PACKET_ROUTING_VERSION, list.length,
+      ...list.map((packet, index) => globalPacketRoutingIdentity(packet, index))
+    ].join('\u0001'));
+    const cached = Memory.globalRoutingCatalogCache.get(cacheKey);
+    if (cached) {
+      Memory.globalRoutingCatalogStats.cacheHits += 1;
+      Memory.lastGlobalRoutingCatalog = { ...cached.diagnostics, cacheHit: true };
+      return { ...cached.value, cacheHit: true };
+    }
+    const parseAll = list.length <= GLOBAL_PACKET_ROUTING_TUNING.eagerParsePacketLimit;
+    const recentStart = Math.max(0, list.length - GLOBAL_PACKET_ROUTING_TUNING.eagerParseRecentPackets);
+    const descriptors = list.map((packet, index) => globalPacketRoutingDescriptor(packet, index, list.length, { allowRawParse: parseAll || index >= recentStart }))
+      .filter(row => row.packetType !== 'recovery_snapshot')
+      .sort((a, b) => a.packetOrdinal - b.packetOrdinal || a.messageIndex - b.messageIndex);
+    const clusters = [];
+    let current = [];
+    const flush = () => { if (current.length) clusters.push(current); current = []; };
+    for (const row of descriptors) {
+      const previous = current[current.length - 1];
+      const sceneChanged = Boolean(previous?.sceneId && row.sceneId && previous.sceneId !== row.sceneId);
+      const messageGap = previous ? Math.abs(Number(row.messageIndex || 0) - Number(previous.messageIndex || 0)) : 0;
+      if (current.length && ((sceneChanged && current.length >= GLOBAL_PACKET_ROUTING_TUNING.minScenePackets)
+        || current.length >= GLOBAL_PACKET_ROUTING_TUNING.maxPacketsPerEpisode
+        || messageGap > GLOBAL_PACKET_ROUTING_TUNING.sceneGapMessages)) flush();
+      current.push(row);
+    }
+    flush();
+    const allLeaves = clusters.map(cluster => globalPacketRoutingEpisode(cluster, 1)).filter(Boolean);
+    const leaves = globalPacketRoutingEvenSample(allLeaves, GLOBAL_PACKET_ROUTING_TUNING.maxLeafEpisodes);
+    const parents = [];
+    for (let index = 0; index < leaves.length; index += GLOBAL_PACKET_ROUTING_TUNING.parentFanIn) {
+      const group = leaves.slice(index, index + GLOBAL_PACKET_ROUTING_TUNING.parentFanIn);
+      if (group.length < 2) continue;
+      const parent = globalPacketRoutingEpisode(group, 2);
+      if (parent) parents.push(parent);
+    }
+    const boundedParents = parents.slice(-GLOBAL_PACKET_ROUTING_TUNING.maxParentEpisodes);
+    const value = { version: GLOBAL_PACKET_ROUTING_VERSION, active: descriptors.length > 0, leaves, parents: boundedParents, cacheHit: false };
+    const diagnostics = {
+      version: GLOBAL_PACKET_ROUTING_VERSION, active: value.active, sourcePackets: list.length, usablePackets: descriptors.length,
+      rawParsedPackets: descriptors.filter(row => row.rawParsed).length, cheapProjectionPackets: descriptors.filter(row => !row.rawParsed).length,
+      totalLeaves: allLeaves.length, leaves: leaves.length, parents: boundedParents.length, cacheKey, cacheHit: false
+    };
+    Memory.globalRoutingCatalogStats.builds += 1;
+    Memory.lastGlobalRoutingCatalog = diagnostics;
+    Memory.globalRoutingCatalogCache.set(cacheKey, { value, diagnostics, at: now() });
+    while (Memory.globalRoutingCatalogCache.size > GLOBAL_PACKET_ROUTING_TUNING.cacheEntries) {
+      const oldest = Memory.globalRoutingCatalogCache.keys().next().value;
+      if (oldest == null) break;
+      Memory.globalRoutingCatalogCache.delete(oldest);
+      Memory.globalRoutingCatalogStats.evictions += 1;
+    }
+    return value;
+  };
+  const globalPacketRoutingSpecificTerms = query => packetCheapTerms(query)
+    .map(normalizeKey).filter(term => term && !GLOBAL_PACKET_ROUTING_GENERIC_TERM_RE.test(term));
+  const globalPacketRoutingScore = (episode = {}, query = '', contextFocus = null) => {
+    const rawQuery = text(query || '');
+    const routePacket = { cheapText: episode.routeText || episode.summary || '' };
+    const direct = packetCheapRelevanceScore(routePacket, rawQuery);
+    const context = packetContextRelevanceScore(routePacket, contextFocus);
+    const normalizedRoute = normalizeKey(routePacket.cheapText);
+    const queryCanonical = canonicalRecallTokensForText(rawQuery).filter(anchor => !GLOBAL_PACKET_ROUTING_GENERIC_CANONICAL_RE.test(text(anchor)));
+    const episodeCanonical = new Set(ensureArray(episode.canonicalAnchors).map(normalizeKey));
+    const canonical = queryCanonical.filter(anchor => episodeCanonical.has(normalizeKey(anchor))).length;
+    const cleanQuery = cleanSearchText(rawQuery);
+    const exact = cleanQuery.length >= 8 && normalizedRoute.includes(normalizeKey(cleanQuery)) ? 1 : 0;
+    const specificTerms = globalPacketRoutingSpecificTerms(rawQuery);
+    const specificHits = specificTerms.filter(term => normalizedRoute.includes(term)).length;
+    const overview = GLOBAL_PACKET_ROUTING_QUERY_RE.test(rawQuery);
+    const supportAllowed = contextFocus?.ambiguous === true || overview;
+    const strongContext = supportAllowed && context >= 1.15;
+    if (!specificHits && canonical <= 0 && exact <= 0 && !strongContext && !overview) return { score: 0, direct, context, canonical, exact, specificHits, overview: false };
+    const baseOverview = overview && !specificHits && canonical <= 0 && exact <= 0
+      ? 0.18 + clamp(Number(episode.importance || 0.5), 0, 1, 0.5) * 0.08 : 0;
+    const raw = direct + specificHits * 0.72 + canonical * 1.7 + exact * 2.4
+      + (supportAllowed ? context * clamp(contextFocus?.supportWeight, 0.08, 0.5, 0.25) : 0);
+    return { score: Math.max(baseOverview, clamp(1 - Math.exp(-raw / 3.4), 0, 1, 0)), direct, context, canonical, exact, specificHits, overview };
+  };
+  const routeGlobalPacketCatalog = (packets = [], query = '', contextFocus = null, settings = Memory.settings || DEFAULT_SETTINGS) => {
+    try {
+      const list = ensureArray(packets);
+      const index = buildGlobalPacketRoutingCatalog(list, settings);
+      if (!index.active) return { active: false, packetScores: new Map(), episodeIdsByPacket: new Map(), selectedEpisodes: [], index };
+      const overviewQuery = GLOBAL_PACKET_ROUTING_QUERY_RE.test(text(query || ''));
+      const allLeafHits = ensureArray(index.leaves).map(episode => ({ episode, ...globalPacketRoutingScore(episode, query, contextFocus) }))
+        .filter(row => row.score >= GLOBAL_PACKET_ROUTING_TUNING.routeMinScore)
+        .sort((a, b) => b.score - a.score || b.direct - a.direct || b.canonical - a.canonical || Number(b.episode.endTurn || 0) - Number(a.episode.endTurn || 0));
+      let leafHits = allLeafHits.slice(0, GLOBAL_PACKET_ROUTING_TUNING.routeTopLeaves);
+      if (overviewQuery && allLeafHits.length > GLOBAL_PACKET_ROUTING_TUNING.routeTopLeaves) {
+        const chronological = allLeafHits.slice().sort((a, b) => Number(a.episode.startTurn || 0) - Number(b.episode.startTurn || 0));
+        const diverse = globalPacketRoutingEvenSample(chronological, GLOBAL_PACKET_ROUTING_TUNING.routeTopLeaves);
+        const best = allLeafHits[0];
+        const map = new Map([[best.episode.id, best]]);
+        diverse.forEach(row => map.set(row.episode.id, row));
+        leafHits = [...map.values()].sort((a, b) => b.score - a.score).slice(0, GLOBAL_PACKET_ROUTING_TUNING.routeTopLeaves);
+      }
+      const parentHits = ensureArray(index.parents).map(episode => ({ episode, ...globalPacketRoutingScore(episode, query, contextFocus) }))
+        .filter(row => row.score >= GLOBAL_PACKET_ROUTING_TUNING.routeMinScore + 0.02)
+        .sort((a, b) => b.score - a.score || Number(b.episode.endTurn || 0) - Number(a.episode.endTurn || 0))
+        .slice(0, GLOBAL_PACKET_ROUTING_TUNING.routeTopParents);
+      const selectedById = new Map(leafHits.map(row => [row.episode.id, row]));
+      for (const parentHit of parentHits) {
+        const childHits = ensureArray(parentHit.episode.childEpisodeIds).map(id => index.leaves.find(leaf => leaf.id === id)).filter(Boolean)
+          .map(episode => ({ episode, ...globalPacketRoutingScore(episode, query, contextFocus) }))
+          .sort((a, b) => b.score - a.score || Number(b.episode.endTurn || 0) - Number(a.episode.endTurn || 0))
+          .slice(0, overviewQuery ? 2 : 1);
+        for (const child of childHits) {
+          if (!selectedById.has(child.episode.id)) selectedById.set(child.episode.id, {
+            ...child,
+            score: Math.max(child.score, parentHit.score * 0.78),
+            inheritedFrom: parentHit.episode.id
+          });
+        }
+      }
+      const selectedEpisodes = [...selectedById.values()].sort((a, b) => b.score - a.score);
+      const packetByKey = new Map(list.map((packet, packetOrdinal) => [globalPacketRoutingIdentity(packet, packetOrdinal), { packet, packetOrdinal }]));
+      const packetScores = new Map();
+      const episodeIdsByPacket = new Map();
+      const routeMemberKeys = (episode = {}) => {
+        const keys = ensureArray(episode.packetKeys).filter(key => packetByKey.has(key));
+        if (!keys.length) return [];
+        const memberScores = keys.map((key, memberIndex) => {
+          const entry = packetByKey.get(key);
+          const descriptor = globalPacketRoutingDescriptor(entry.packet, entry.packetOrdinal, list.length, { allowRawParse: false });
+          const detail = globalPacketRoutingScore(descriptor, query, contextFocus);
+          return { key, memberIndex, detail, importance: descriptor.importance };
+        });
+        let anchors = memberScores.filter(row => row.detail.score > 0)
+          .sort((a, b) => b.detail.score - a.detail.score || b.detail.direct - a.detail.direct || b.importance - a.importance)
+          .slice(0, Math.min(3, GLOBAL_PACKET_ROUTING_TUNING.routePacketsPerEpisode));
+        if (!anchors.length) {
+          anchors = overviewQuery
+            ? globalPacketRoutingEvenSample(memberScores, Math.min(3, GLOBAL_PACKET_ROUTING_TUNING.routePacketsPerEpisode))
+            : [memberScores[memberScores.length - 1]];
+        }
+        const chosen = [];
+        const seen = new Set();
+        const addAt = index => {
+          const row = memberScores[index];
+          if (!row || seen.has(row.key)) return;
+          seen.add(row.key);
+          chosen.push(row);
+        };
+        anchors.forEach(anchor => {
+          addAt(anchor.memberIndex);
+          if (chosen.length < GLOBAL_PACKET_ROUTING_TUNING.routePacketsPerEpisode) addAt(anchor.memberIndex - 1);
+          if (chosen.length < GLOBAL_PACKET_ROUTING_TUNING.routePacketsPerEpisode) addAt(anchor.memberIndex + 1);
+        });
+        if (overviewQuery) {
+          globalPacketRoutingEvenSample(memberScores, GLOBAL_PACKET_ROUTING_TUNING.routePacketsPerEpisode).forEach(row => addAt(row.memberIndex));
+        }
+        return chosen.slice(0, GLOBAL_PACKET_ROUTING_TUNING.routePacketsPerEpisode);
+      };
+      selectedEpisodes.forEach((row, episodeRank) => {
+        routeMemberKeys(row.episode).forEach((member, memberRank) => {
+          const localSignal = Math.max(Number(member.detail.score || 0), overviewQuery ? 0.18 : 0);
+          const attenuated = clamp(Math.max(row.score * 0.72, localSignal) * (1 - episodeRank * 0.06) * (1 - memberRank * 0.035), 0, 1, 0);
+          packetScores.set(member.key, Math.max(Number(packetScores.get(member.key) || 0), attenuated));
+          episodeIdsByPacket.set(member.key, uniq([...(episodeIdsByPacket.get(member.key) || []), row.episode.id], 8));
+        });
+      });
+      Memory.globalRoutingCatalogStats.routes += 1;
+      Memory.globalRoutingCatalogStats.routedPackets += packetScores.size;
+      Memory.lastGlobalRoutingCatalog = {
+        ...(Memory.lastGlobalRoutingCatalog || {}),
+        routing: {
+          queryHash: stableHash64(text(query || '')),
+          overviewQuery,
+          selectedEpisodes: selectedEpisodes.map(row => ({
+            id: row.episode.id, level: row.episode.level, startTurn: row.episode.startTurn,
+            endTurn: row.episode.endTurn, score: Number(row.score.toFixed(4)), inheritedFrom: row.inheritedFrom || ''
+          })),
+          routedPackets: packetScores.size
+        }
+      };
+      return { active: selectedEpisodes.length > 0 && packetScores.size > 0, packetScores, episodeIdsByPacket, selectedEpisodes, index };
+    } catch (error) {
+      Memory.globalRoutingCatalogStats.failures = Math.max(0, Number(Memory.globalRoutingCatalogStats.failures || 0)) + 1;
+      Memory.globalRoutingCatalogStats.lastError = compact(error?.message || error, 240);
+      Memory.lastGlobalRoutingCatalog = {
+        version: GLOBAL_PACKET_ROUTING_VERSION,
+        active: false,
+        reason: 'global_routing_fail_soft',
+        error: Memory.globalRoutingCatalogStats.lastError
+      };
+      return { active: false, packetScores: new Map(), episodeIdsByPacket: new Map(), selectedEpisodes: [], index: null, error: Memory.globalRoutingCatalogStats.lastError };
+    }
+  };
+
   const selectPacketsForIngest = (packets = [], query = '', settings = Memory.settings || DEFAULT_SETTINGS) => {
     const list = ensureArray(packets).map((packet, index) => ({
       ...packet,
@@ -8584,6 +13006,11 @@ const MODE_PROFILES = Object.freeze({
     const total = list.length;
     if (!total) return { packets: [], stats: { total: 0, full: 0, light: 0, skipped: 0, mode: effectivePerformanceModeOf(settings), configuredMode: text(settings?.mode || '') } };
     const profile = performanceProfileForSettings(settings);
+    const recentContext = settings?.retrievalRecentContext?.active ? settings.retrievalRecentContext : null;
+    const globalRouting = routeGlobalPacketCatalog(list, query, recentContext, settings);
+    const contextWeight = recentContext
+      ? clamp(Number(recentContext.supportWeight || 0.25), 0.08, 0.5, 0.25)
+      : 0;
     const byRecent = list.slice().sort((a, b) => a.packetDistanceFromLatest - b.packetDistanceFromLatest || a.messageIndex - b.messageIndex);
     const selected = new Map();
     const add = (packet, reason = 'selected', lightweightIngest = true) => {
@@ -8603,15 +13030,61 @@ const MODE_PROFILES = Object.freeze({
     const old = byRecent.filter(packet => !selected.has(packet.hash || `${packet.messageIndex}:${packet.packetOrdinal}`));
     const scored = old.map(packet => {
       const relevance = packetCheapRelevanceScore(packet, query);
+      const contextRelevance = packetContextRelevanceScore(packet, recentContext);
       const protection = packetProtectionScore(packet);
       const recency = total <= 1 ? 1 : clamp(1 - (packet.packetDistanceFromLatest / Math.max(1, total - 1)), 0, 1, 0);
+      const contextualLift = contextRelevance * contextWeight;
+      const packetKey = globalPacketRoutingIdentity(packet, packet.packetOrdinal);
+      const globalRoute = Number(globalRouting.packetScores.get(packetKey) || 0);
+      const globalEpisodeIds = ensureArray(globalRouting.episodeIdsByPacket.get(packetKey));
       return {
         packet,
+        packetKey,
+        globalRoute,
+        globalEpisodeIds,
         relevance,
+        contextRelevance,
         protection,
-        priority: relevance * 1.35 + protection * 1.1 + recency * 0.25
+        recency,
+        combinedRelevance: relevance + contextualLift + globalRoute * 0.72,
+        priority: relevance * 1.35 + contextualLift * 0.72 + globalRoute * 0.88 + protection * 1.1 + recency * 0.25
       };
     });
+
+    const globalRouteRepresentativeRows = (limit = 1, predicate = () => true) => {
+      const cap = Math.max(0, Number(limit || 0) || 0);
+      if (!cap || !globalRouting.active) return [];
+      const chosen = [];
+      const seen = new Set();
+      for (const episodeRow of ensureArray(globalRouting.selectedEpisodes)) {
+        const episodeId = episodeRow?.episode?.id;
+        if (!episodeId) continue;
+        const candidate = scored.filter(row => !seen.has(row.packetKey)
+          && ensureArray(row.globalEpisodeIds).includes(episodeId)
+          && predicate(row))
+          .sort((a, b) => b.globalRoute - a.globalRoute
+            || b.relevance - a.relevance
+            || b.contextRelevance - a.contextRelevance
+            || b.protection - a.protection
+            || a.packet.packetDistanceFromLatest - b.packet.packetDistanceFromLatest)[0];
+        if (!candidate) continue;
+        seen.add(candidate.packetKey);
+        chosen.push(candidate);
+        if (chosen.length >= cap) return chosen;
+      }
+      scored.filter(row => !seen.has(row.packetKey) && predicate(row))
+        .sort((a, b) => b.globalRoute - a.globalRoute
+          || b.relevance - a.relevance
+          || b.contextRelevance - a.contextRelevance
+          || b.protection - a.protection
+          || a.packet.packetDistanceFromLatest - b.packet.packetDistanceFromLatest)
+        .forEach(row => {
+          if (chosen.length >= cap || seen.has(row.packetKey)) return;
+          seen.add(row.packetKey);
+          chosen.push(row);
+        });
+      return chosen;
+    };
 
     const fullSlots = Math.max(0, (Number(profile.maxFullPackets) || 0) - Array.from(selected.values()).filter(packet => !packet.lightweightIngest).length);
     scored
@@ -8622,6 +13095,30 @@ const MODE_PROFILES = Object.freeze({
       .sort((a, b) => b.relevance - a.relevance || b.protection - a.protection || a.packet.packetDistanceFromLatest - b.packet.packetDistanceFromLatest)
       .slice(0, fullSlots)
       .forEach(row => add(row.packet, 'query_full', false));
+
+    if (globalRouting.active) {
+      const routingFullSlots = Math.max(0, (Number(profile.maxFullPackets) || 0)
+        - Array.from(selected.values()).filter(packet => !packet.lightweightIngest).length);
+      globalRouteRepresentativeRows(
+        Math.min(routingFullSlots, effectivePerformanceModeOf(settings) === 'deep' ? 3 : 1),
+        row => row.globalRoute >= GLOBAL_PACKET_ROUTING_TUNING.routeMinScore && row.relevance <= 0
+      ).forEach(row => add({ ...row.packet, globalRoute: row.globalRoute, globalEpisodeIds: row.globalEpisodeIds }, 'global_route_full', false));
+    }
+
+    // Context can promote an old packet to full detail only when primary-query
+    // matches did not consume the bounded full slots. It never expands the
+    // performance profile's packet count and cannot outrank a direct query hit.
+    if (settings?.multiResolutionRecallEnabled !== false && recentContext?.active) {
+      const contextFullSlots = Math.max(0, (Number(profile.maxFullPackets) || 0)
+        - Array.from(selected.values()).filter(packet => !packet.lightweightIngest).length);
+      scored
+        .filter(row => row.contextRelevance > 0 && row.relevance <= 0)
+        .sort((a, b) => b.contextRelevance - a.contextRelevance
+          || b.protection - a.protection
+          || a.packet.packetDistanceFromLatest - b.packet.packetDistanceFromLatest)
+        .slice(0, Math.min(contextFullSlots, recentContext.ambiguous ? 2 : 1))
+        .forEach(row => add(row.packet, 'context_full', false));
+    }
 
     // A relevant Bridge analysis turn must remain searchable even when recent
     // live packets have consumed the ordinary full-packet slots.
@@ -8645,14 +13142,38 @@ const MODE_PROFILES = Object.freeze({
       .slice(0, Math.max(0, Number(profile.queryOldPackets) || 0))
       .forEach(row => add(row.packet, 'query_light', true));
 
+    if (globalRouting.active) {
+      globalRouteRepresentativeRows(
+        Math.max(1, Math.min(Number(profile.queryOldPackets) || 1, Math.max(GLOBAL_PACKET_ROUTING_TUNING.routePacketsPerEpisode, ensureArray(globalRouting.selectedEpisodes).length))),
+        row => row.globalRoute >= GLOBAL_PACKET_ROUTING_TUNING.routeMinScore
+      ).forEach(row => add({ ...row.packet, globalRoute: row.globalRoute, globalEpisodeIds: row.globalEpisodeIds }, 'global_route_light', true));
+    }
+
+    if (recentContext?.active) {
+      scored
+        .filter(row => row.contextRelevance > 0)
+        .sort((a, b) => b.contextRelevance - a.contextRelevance
+          || b.relevance - a.relevance
+          || b.protection - a.protection
+          || a.packet.packetDistanceFromLatest - b.packet.packetDistanceFromLatest)
+        .slice(0, Math.max(1, Math.min(Number(profile.queryOldPackets) || 1, recentContext.ambiguous ? 4 : 2)))
+        .forEach(row => add(row.packet, 'context_light', true));
+    }
+
     const selectedRows = Array.from(selected.values());
     const fullRows = selectedRows.filter(packet => !packet.lightweightIngest);
     const lightLimit = Math.max(0, Number(profile.maxLightPackets) || 0);
     const lightRows = selectedRows
       .filter(packet => packet.lightweightIngest)
       .sort((a, b) => {
-        const scoreA = packetCheapRelevanceScore(a, query) + packetProtectionScore(a);
-        const scoreB = packetCheapRelevanceScore(b, query) + packetProtectionScore(b);
+        const scoreA = packetCheapRelevanceScore(a, query)
+          + packetContextRelevanceScore(a, recentContext) * contextWeight
+          + Number(a.globalRoute || globalRouting.packetScores.get(globalPacketRoutingIdentity(a, a.packetOrdinal)) || 0) * 0.88
+          + packetProtectionScore(a);
+        const scoreB = packetCheapRelevanceScore(b, query)
+          + packetContextRelevanceScore(b, recentContext) * contextWeight
+          + Number(b.globalRoute || globalRouting.packetScores.get(globalPacketRoutingIdentity(b, b.packetOrdinal)) || 0) * 0.88
+          + packetProtectionScore(b);
         return scoreB - scoreA || a.packetDistanceFromLatest - b.packetDistanceFromLatest;
       })
       .slice(0, lightLimit);
@@ -8668,6 +13189,25 @@ const MODE_PROFILES = Object.freeze({
         skipped: Math.max(0, total - finalRows.length),
         mode: effectivePerformanceModeOf(settings),
         configuredMode: text(settings?.mode || ''),
+        contextFull: fullRows.filter(packet => /(?:^|\+)context_full(?:\+|$)/.test(text(packet.selectionReason || ''))).length,
+        contextLight: lightRows.filter(packet => /(?:^|\+)context_light(?:\+|$)/.test(text(packet.selectionReason || ''))).length,
+        globalRouteFull: fullRows.filter(packet => /(?:^|\+)global_route_full(?:\+|$)/.test(text(packet.selectionReason || ''))).length,
+        globalRouteLight: lightRows.filter(packet => /(?:^|\+)global_route_light(?:\+|$)/.test(text(packet.selectionReason || ''))).length,
+        globalRouting: globalRouting.active ? {
+          version: GLOBAL_PACKET_ROUTING_VERSION,
+          leaves: ensureArray(globalRouting.index?.leaves).length,
+          parents: ensureArray(globalRouting.index?.parents).length,
+          selectedEpisodes: globalRouting.selectedEpisodes.map(row => ({ id: row.episode.id, level: row.episode.level, startTurn: row.episode.startTurn, endTurn: row.episode.endTurn, score: Number(row.score.toFixed(4)) })),
+          routedPackets: globalRouting.packetScores.size
+        } : { version: GLOBAL_PACKET_ROUTING_VERSION, active: false },
+        contextFocus: recentContext ? {
+          active: true,
+          messagesUsed: Number(recentContext.messagesUsed || 0),
+          configuredMessages: Number(recentContext.configuredMessages || 0),
+          reason: text(recentContext.reason || ''),
+          ambiguous: recentContext.ambiguous === true,
+          supportWeight: Number(recentContext.supportWeight || 0)
+        } : { active: false },
         profile: clone(profile, {})
       }
     };
@@ -8682,6 +13222,123 @@ const MODE_PROFILES = Object.freeze({
     if (PREVIOUS_TURN_RECALL_BRIDGE_CONTINUATION_RE.test(raw)) return { use: true, mode: 'strong', reason: 'continuation_query' };
     if (raw.length <= PREVIOUS_TURN_RECALL_BRIDGE_SHORT_QUERY_CHARS || terms.length <= 3) return { use: true, mode: 'strong', reason: 'short_or_sparse_query' };
     return { use: true, mode: 'light', reason: 'contextual_light_bridge' };
+  };
+
+  const HAYAKU_CONTEXT_TOPIC_SHIFT_RE = /(?:새(?:로운)?\s*(?:주제|화제|이야기|장면)|다른\s*(?:주제|화제|이야기|장면|장소)|화제(?:를)?\s*바꾸|그건\s*됐고|별개의\s*(?:질문|이야기)|new\s+(?:topic|scene)|different\s+(?:topic|subject|scene)|change\s+the\s+(?:subject|topic)|unrelated\s+(?:question|topic)|meanwhile|한편)/i;
+  const HAYAKU_CONTEXT_REFERENTIAL_RE = /(?:그거|그건|그게|그걸|그곳|거기|그때|그\s*사람|걔|그녀|그의|그들의|그\s*다음|이어서|이어|계속|다음|앞에서|방금|아까|그렇다면|그래서|그럼|that|it|they|them|there|then|that\s+person|what\s+about|and\s+then|so\s+what|continue|go\s+on|next|彼女|彼|それ|そこ|その時)/i;
+  const HAYAKU_MULTI_TOPIC_SPLIT_RE = /(?:[?？!！.;；。]|\n+|\s+(?:그리고|또한|그런데|하지만|및|그리고도|and|also|but|while|plus|それから|そして|また|しかし)\s+)/i;
+  const decomposeHayakuRecallTopics = (query = '', settings = Memory.settings || DEFAULT_SETTINGS, limit = 4) => {
+    const raw = compact(query, 3200).trim();
+    if (!raw) return [];
+    if (settings?.multiQueryRecall === false) return [raw];
+    const candidates = raw.split(HAYAKU_MULTI_TOPIC_SPLIT_RE)
+      .map(value => compact(value, 560).trim())
+      .filter(value => value.length >= 3);
+    const out = [];
+    const seen = new Set();
+    for (const candidate of [raw, ...candidates]) {
+      const key = normalizeKey(candidate);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      out.push(candidate);
+      if (out.length >= Math.max(1, Math.min(6, Number(limit) || 4))) break;
+    }
+    return out;
+  };
+  const adaptiveRecentContextCount = (query = '', settings = Memory.settings || DEFAULT_SETTINGS) => {
+    const configured = Math.max(0, Math.min(20, Math.floor(Number(settings?.recallContextMessages ?? DEFAULT_SETTINGS.recallContextMessages) || 0)));
+    if (!configured) return { count: 0, configured, reason: 'disabled', ambiguous: false, supportWeight: 0 };
+    const raw = text(query).trim();
+    if (HAYAKU_CONTEXT_TOPIC_SHIFT_RE.test(raw) || detectUserEstablishedSceneBoundary(raw).active) {
+      return { count: 0, configured, reason: 'topic_or_scene_shift', ambiguous: false, supportWeight: 0 };
+    }
+    if (settings?.adaptiveContextWindow === false) {
+      return { count: configured, configured, reason: 'fixed_window', ambiguous: raw.length <= 140, supportWeight: 0.28 };
+    }
+    const bridge = previousTurnBridgeMode(raw);
+    const tokenCount = packetCheapTerms(raw).length;
+    const referential = HAYAKU_CONTEXT_REFERENTIAL_RE.test(raw);
+    const continuation = bridge.reason === 'continuation_query' || PREVIOUS_TURN_RECALL_BRIDGE_CONTINUATION_RE.test(raw);
+    if (!raw || continuation) return { count: configured, configured, reason: 'continuation', ambiguous: true, supportWeight: 0.46 };
+    if (referential && (raw.length <= 160 || tokenCount <= 8)) return { count: configured, configured, reason: 'referential_short', ambiguous: true, supportWeight: 0.42 };
+    if (referential) return { count: Math.max(1, Math.ceil(configured * 0.8)), configured, reason: 'referential', ambiguous: true, supportWeight: 0.34 };
+    if (raw.length >= 600 || tokenCount >= 48) return { count: Math.min(configured, 2), configured, reason: 'self_contained_long', ambiguous: false, supportWeight: 0.14 };
+    if (raw.length >= 280 || tokenCount >= 24) return { count: Math.min(configured, 3), configured, reason: 'self_contained', ambiguous: false, supportWeight: 0.19 };
+    return { count: Math.max(1, Math.ceil(configured * 0.6)), configured, reason: 'normal_context', ambiguous: raw.length <= 140 || tokenCount <= 8, supportWeight: 0.27 };
+  };
+  const hayakuRecentContextMessageText = message => {
+    if (!message || typeof message !== 'object') return '';
+    if (shouldDropOutgoingMessage(message)) return '';
+    const stripped = stripHayakuFromMessagePayloads(message).message;
+    const body = sanitizeEvidenceBody(messageContent(stripped));
+    if (!body || isBackstageUserPayload(body)) return '';
+    return compact(body, 1600);
+  };
+  const buildRecentContextFocus = (messages = [], query = '', settings = Memory.settings || DEFAULT_SETTINGS) => {
+    const profile = adaptiveRecentContextCount(query, settings);
+    const queryTopics = decomposeHayakuRecallTopics(query, settings, 4);
+    if (!profile.count) return {
+      version: 'hayaku_recent_context_focus_v1', active: false, configuredMessages: profile.configured,
+      messagesUsed: 0, reason: profile.reason, ambiguous: profile.ambiguous, supportWeight: 0,
+      text: '', hash: '', topics: [], queryTopics, primaryTokens: tokenize(query, 160), supportTokens: [], canonicalTokens: [],
+      conceptTokens: [], semanticFrameTokens: [], entityTokens: []
+    };
+    const rows = [];
+    const currentKey = normalizeKey(query);
+    let skippedCurrentUser = false;
+    const source = ensureArray(messages);
+    for (let index = source.length - 1; index >= 0 && rows.length < profile.count; index -= 1) {
+      const message = source[index];
+      const role = roleOf(message);
+      if (!/^(?:user|assistant|model)$/.test(role)) continue;
+      const body = hayakuRecentContextMessageText(message);
+      if (!body) continue;
+      const bodyKey = normalizeKey(body);
+      if (!skippedCurrentUser && role === 'user' && currentKey
+        && (bodyKey === currentKey || bodyKey.endsWith(currentKey) || currentKey.endsWith(bodyKey))) {
+        skippedCurrentUser = true;
+        continue;
+      }
+      rows.push({ role: role === 'model' ? 'assistant' : role, text: body, index });
+    }
+    rows.reverse();
+    const body = compact(rows.map(row => `${row.role.toUpperCase()}: ${row.text}`).join('\n'), 6000);
+    const topics = rows.slice(-4).map(row => compact(row.text, 420)).filter(Boolean);
+    const supportTokens = tokenize(body, 260);
+    const canonicalTokens = canonicalRecallTokensForText(body);
+    const conceptTokens = mergeValues([conceptTokensForText(body), canonicalTokens], 160);
+    const semanticFrameTokens = semanticFrameTokensForText(body, conceptTokens);
+    const entityTokens = uniq(supportTokens.filter(token => entityGate(token).allowed), 64);
+    return {
+      version: 'hayaku_recent_context_focus_v1',
+      active: Boolean(body),
+      configuredMessages: profile.configured,
+      requestedMessages: profile.count,
+      messagesUsed: rows.length,
+      reason: profile.reason,
+      ambiguous: profile.ambiguous,
+      supportWeight: body ? profile.supportWeight : 0,
+      text: body,
+      hash: body ? stableHash64(body) : '',
+      topics,
+      queryTopics,
+      primaryTokens: tokenize(query, 160),
+      supportTokens,
+      canonicalTokens,
+      conceptTokens,
+      semanticFrameTokens,
+      entityTokens,
+      rows: rows.map(row => ({ role: row.role, index: row.index, preview: compact(row.text, 180) }))
+    };
+  };
+  const packetContextRelevanceScore = (packet = {}, contextFocus = null) => {
+    if (!contextFocus?.active || !contextFocus.text) return 0;
+    const topicScores = ensureArray(contextFocus.topics)
+      .map(topic => packetCheapRelevanceScore(packet, topic))
+      .filter(score => score > 0)
+      .sort((a, b) => b - a);
+    const broad = packetCheapRelevanceScore(packet, contextFocus.text);
+    return Math.max(broad * 0.42, Number(topicScores[0] || 0) + Number(topicScores[1] || 0) * 0.28);
   };
   const latestCurrentSnapshotPacket = (messages = [], packets = []) => {
     const boundary = recoveryBoundaryIndex(messages);
@@ -9701,6 +14358,11 @@ const MODE_PROFILES = Object.freeze({
       memoryLanguage: normalizeMemoryLanguage(settings?.memoryLanguage || DEFAULT_SETTINGS.memoryLanguage),
       effectiveMode: effectivePerformanceModeOf(settings),
       packetCoverageAudit: settings?.packetCoverageAudit !== false,
+      derivedRoutingCompilerVersion: DERIVED_ROUTING_COMPILER_VERSION,
+      typedMemoryGraphEnabled: settings?.typedMemoryGraphEnabled !== false,
+      hierarchicalEpisodeMemoryEnabled: settings?.hierarchicalEpisodeMemoryEnabled !== false,
+      typedGraphProfileHash: stableHash64(JSON.stringify(TYPED_MEMORY_GRAPH_TUNING)),
+      episodeProfileHash: stableHash64(JSON.stringify(HIERARCHICAL_EPISODE_TUNING)),
       chatSnapshotHash: text(snapshot?.chatSnapshotHash || ''),
       chatTopologyHash: text(ledger?.chatTopologyHash || ''),
       worldline: {
@@ -9762,7 +14424,8 @@ const MODE_PROFILES = Object.freeze({
     return {
       store: clone(entry.store, emptyStore()),
       packetResults: clone(entry.packetResults, []),
-      ingested: Math.max(0, Number(entry.ingested || 0) || 0)
+      ingested: Math.max(0, Number(entry.ingested || 0) || 0),
+      derivedIndexBuild: clone(entry.derivedIndexBuild, null)
     };
   };
   const setProjectionCacheEntry = (plan, value = {}) => {
@@ -9776,7 +14439,8 @@ const MODE_PROFILES = Object.freeze({
       createdAt: now(),
       store: clone(value.store, emptyStore()),
       packetResults: clone(value.packetResults, []),
-      ingested: Math.max(0, Number(value.ingested || 0) || 0)
+      ingested: Math.max(0, Number(value.ingested || 0) || 0),
+      derivedIndexBuild: clone(value.derivedIndexBuild || Memory.lastDerivedIndexBuild, null)
     });
     Memory.projectionCacheStats.writes += 1;
     while (cache.size > PROJECTION_CACHE_LIMIT) {
@@ -9987,23 +14651,25 @@ const MODE_PROFILES = Object.freeze({
     ensureArray(descriptors).length,
     ...ensureArray(descriptors).map(descriptor => `${descriptor.sourceMessageId}:${descriptor.sourceMessageFingerprint}`)
   ].join('\u0003'));
-  const stableMessageSourceId = message => compact(
-    message?.chatId
-      || message?.id
-      || message?.messageId
-      || message?.msgId
-      || message?.uid
-      || message?.uuid
-      || message?.generationInfo?.generationId
-      || message?.generationId
-      || (
-        typeof message?.memo === 'string' || typeof message?.memo === 'number'
-          ? message.memo
-          : ''
-      )
-      || '',
-    160
-  );
+  const stableMessageSourceIdentity = message => {
+    const candidates = [
+      ['chatId', message?.chatId],
+      ['id', message?.id],
+      ['messageId', message?.messageId],
+      ['msgId', message?.msgId],
+      ['uid', message?.uid],
+      ['uuid', message?.uuid],
+      ['generationInfo.generationId', message?.generationInfo?.generationId],
+      ['generationId', message?.generationId],
+      ['memo', (typeof message?.memo === 'string' || typeof message?.memo === 'number') ? message.memo : '']
+    ];
+    for (const [source, raw] of candidates) {
+      const id = compact(raw, 160);
+      if (id) return { id, source, stable: true, canonical: source === 'chatId' };
+    }
+    return { id: '', source: '', stable: false, canonical: false };
+  };
+  const stableMessageSourceId = message => stableMessageSourceIdentity(message).id;
   const messageSourceId = (message, index = -1) => (
     stableMessageSourceId(message)
       || (Number(index) >= 0 ? `index:${Number(index)}` : '')
@@ -10313,6 +14979,1663 @@ const MODE_PROFILES = Object.freeze({
       messages: descriptors.map(descriptor => descriptor.normalized)
     };
   };
+
+  // -------------------------------------------------------------------------
+  // Packet-debt Recovery Vault
+  // -------------------------------------------------------------------------
+  // The vault is not a second chat database. It stores exact visible U+A only
+  // when the finalized active-worldline turn has no usable current packet.
+  // All lexical indexes below are request-local and rebuildable from that text.
+  const recoveryVaultKeyForScope = scopeKey => `${RECOVERY_VAULT_KEY_PREFIX}${compact(scopeKey || '', 196)}`;
+  const recoveryVaultRecordTextChars = record => text(record?.user?.text || '').length + text(record?.assistant?.text || '').length;
+  const recoveryVaultRecordIdentity = record => compact(record?.recordId || '', 196) || stableHash64([
+    Math.max(0, Number(record?.pairIndex || 0) || 0),
+    compact(record?.userMessageIdHash || '', 96),
+    compact(record?.assistantMessageIdHash || '', 96),
+    compact(record?.userHash || '', 96),
+    compact(record?.assistantHash || '', 96)
+  ].join('\u0001'));
+  const recoveryVaultDigest = vault => stableHash64(JSON.stringify({
+    schema: vault?.schema || '',
+    version: Number(vault?.version || 0),
+    scopeKey: vault?.scopeKey || '',
+    records: ensureArray(vault?.records).map(record => [
+      recoveryVaultRecordIdentity(record),
+      Number(record?.pairIndex || 0),
+      record?.userHash || '',
+      record?.assistantHash || '',
+      stableHash64(text(record?.user?.text || '')),
+      stableHash64(text(record?.assistant?.text || '')),
+      record?.status || ''
+    ])
+  }));
+  const emptyRecoveryVault = scopeKey => ({
+    schema: RECOVERY_VAULT_SCHEMA,
+    version: RECOVERY_VAULT_VERSION,
+    pluginVersion: PLUGIN_VERSION,
+    scopeKey: compact(scopeKey || '', 196),
+    createdAt: now(),
+    updatedAt: now(),
+    records: []
+  });
+  const normalizeRecoveryVaultVisibleText = value => text(value || '')
+    .replace(/\r\n?/g, '\n')
+    .replace(/[\u200B-\u200D\uFEFF]/g, '')
+    .slice(0, RECOVERY_VAULT_MAX_TURN_CHARS)
+    .trim();
+  const normalizeRecoveryDebtLease = value => {
+    if (!objectish(value)) return null;
+    const leaseId = compact(value.leaseId || value.id || '', 128);
+    const owner = compact(value.owner || '', 48);
+    const acquiredAt = Math.max(0, Number(value.acquiredAt || 0) || 0);
+    const expiresAt = Math.max(acquiredAt, Number(value.expiresAt || 0) || 0);
+    if (!leaseId || !owner || !acquiredAt || !expiresAt) return null;
+    return {
+      schema: 'hayaku.recovery_debt_lease.v1',
+      leaseId,
+      owner,
+      runId: compact(value.runId || '', 128),
+      sourceHash: compact(value.sourceHash || '', 96),
+      acquiredAt,
+      expiresAt
+    };
+  };
+  const recoveryDebtLeaseIsActive = (record, at = now()) => {
+    const lease = normalizeRecoveryDebtLease(record?.repairLease);
+    return Boolean(lease && lease.expiresAt > Number(at || now()));
+  };
+  const recoveryDebtRetryDelayMs = attempts => RECOVERY_DEBT_RETRY_DELAYS_MS[Math.min(
+    RECOVERY_DEBT_RETRY_DELAYS_MS.length - 1,
+    Math.max(0, Number(attempts || 0) - 1)
+  )] || RECOVERY_DEBT_RETRY_DELAYS_MS.at(-1);
+  const recoveryDebtRepairTarget = record => record ? {
+    contract: RECOVERY_DEBT_WORLDLINE_VERSION,
+    debtId: compact(record.recordId || '', 196),
+    scopeKey: compact(record.scopeKey || '', 196),
+    ownerTurnNodeId: compact(record.ownerTurnNodeId || '', 96),
+    logicalTurnId: compact(record.logicalTurnId || '', 96),
+    variantId: compact(record.variantId || '', 96),
+    parentTurnNodeId: compact(record.parentTurnNodeId || '', 96),
+    pairIndex: Math.max(1, Number(record.pairIndex || 1) || 1),
+    userHash: compact(record.userHash || '', 96),
+    userMessageIdHash: compact(record.userMessageIdHash || '', 96),
+    assistantVisibleHash: compact(record.assistantHash || '', 96),
+    assistantMessageIdHash: compact(record.assistantMessageIdHash || '', 96),
+    sourceEvidenceHash: stableHash64([
+      record.scopeKey || '', record.recordId || '', record.userHash || '', record.assistantHash || '',
+      record.ownerTurnNodeId || '', record.variantId || ''
+    ].join('\u0001')),
+    observedWorldlineRevision: Math.max(0, Number(record.worldlineRevision || 0) || 0)
+  } : null;
+  const normalizeRecoveryVaultRecord = (value = {}, scopeKey = '') => {
+    if (!objectish(value)) return null;
+    const inheritedSessionHistory = value.inheritedSessionHistory === true || value.permanentSessionHistory === true;
+    const sourceScopeKey = compact(value.sourceScopeKey || value.inheritedFromScopeKey || '', 196);
+    const sourceRecordId = compact(value.sourceRecordId || value.permanentHistoryId || '', 196);
+    const pairIndex = Math.max(1, Number(value.pairIndex || value.sourcePairIndex || value.turn || 1) || 1);
+    const userText = normalizeRecoveryVaultVisibleText(value?.user?.text ?? value.userText ?? '');
+    const assistantText = normalizeRecoveryVaultVisibleText(value?.assistant?.text ?? value.assistantText ?? '');
+    if (!userText && !assistantText) return null;
+    const userHash = compact(value.userHash || value?.user?.canonicalHash || stableHash64(canonicalHistoryText(userText, 'user')), 96);
+    const assistantHash = compact(value.assistantHash || value.assistantVisibleHash || value?.assistant?.canonicalHash || stableHash64(canonicalHistoryText(assistantText, 'assistant')), 96);
+    const userMessageIdHash = compact(value.userMessageIdHash || '', 96);
+    const assistantMessageIdHash = compact(value.assistantMessageIdHash || '', 96);
+    const ownerTurnNodeId = compact(value.ownerTurnNodeId || '', 96);
+    const logicalTurnId = compact(value.logicalTurnId || '', 96);
+    const variantId = compact(value.variantId || '', 96);
+    const parentTurnNodeId = compact(value.parentTurnNodeId || '', 96);
+    const branchIdentity = variantId || stableHash64([
+      scopeKey || value.scopeKey || '', pairIndex, userHash, assistantHash, assistantMessageIdHash
+    ].join('\u0001'));
+    const inheritedIdentity = sourceRecordId || stableHash64([pairIndex, userHash, assistantHash].join('\u0001'));
+    const recordId = compact(value.recordId || (inheritedSessionHistory
+      ? `history:${sourceScopeKey || 'unknown'}:${inheritedIdentity}`
+      : `debt:${pairIndex}:${branchIdentity}`), 196);
+    const createdAt = Math.max(1, Number(value.createdAt || value.updatedAt || now()) || now());
+    const updatedAt = Math.max(createdAt, Number(value.updatedAt || createdAt) || createdAt);
+    const worldlineStatus = compact(value.worldlineStatus || (inheritedSessionHistory ? 'historical' : 'active'), 32).toLowerCase();
+    const allowedStatus = new Set([
+      'deterministic_fallback', 'repair_pending', 'suspended', 'superseded', 'orphaned', 'detached', 'inherited_history'
+    ]);
+    let status = allowedStatus.has(text(value.status || '').trim())
+      ? text(value.status).trim()
+      : (inheritedSessionHistory ? 'inherited_history' : 'deterministic_fallback');
+    const repairLease = normalizeRecoveryDebtLease(value.repairLease);
+    if (status === 'repair_pending' && !repairLease) status = 'deterministic_fallback';
+    return {
+      schema: 'hayaku.recovery_vault.record.v1',
+      version: 2,
+      recordId,
+      scopeKey: compact(value.scopeKey || scopeKey || '', 196),
+      pairIndex,
+      sourcePairIndex: Math.max(1, Number(value.sourcePairIndex || pairIndex) || pairIndex),
+      worldlineOrdinal: Math.max(1, Number(value.worldlineOrdinal || pairIndex) || pairIndex),
+      ownerTurnNodeId,
+      logicalTurnId,
+      variantId: variantId || branchIdentity,
+      parentTurnNodeId,
+      worldlineStatus,
+      worldlineRevision: Math.max(0, Number(value.worldlineRevision || 0) || 0),
+      missingObservations: Math.max(0, Number(value.missingObservations || 0) || 0),
+      lastSeenSnapshotHash: compact(value.lastSeenSnapshotHash || '', 96),
+      userMessageIndex: Number.isInteger(Number(value.userMessageIndex)) ? Number(value.userMessageIndex) : -1,
+      assistantMessageIndex: Number.isInteger(Number(value.assistantMessageIndex)) ? Number(value.assistantMessageIndex) : -1,
+      userMessageIdHash,
+      assistantMessageIdHash,
+      userHash,
+      assistantHash,
+      requestNonce: compact(value.requestNonce || '', 96),
+      status,
+      quality: 'deterministic_fallback',
+      reason: compact(value.reason || (inheritedSessionHistory ? 'session_handoff_history' : 'packet_missing'), 96),
+      inheritedSessionHistory,
+      permanentSessionHistory: inheritedSessionHistory,
+      sourceScopeKey,
+      sourceRecordId: sourceRecordId || inheritedIdentity,
+      handoffTransferId: compact(value.handoffTransferId || '', 160),
+      inheritedAt: Math.max(0, Number(value.inheritedAt || 0) || 0),
+      sourceFingerprint: compact(value.sourceFingerprint || '', 96),
+      packetMarkersPresent: value.packetMarkersPresent === true,
+      packetDiagnostics: ensureArray(value.packetDiagnostics).slice(-8).map(item => ({
+        stage: compact(item?.stage || '', 64),
+        reason: compact(item?.reason || item?.semanticReason || '', 128),
+        errors: ensureArray(item?.errors).map(error => compact(error, 120)).slice(0, 8),
+        warnings: ensureArray(item?.warnings).map(warning => compact(warning, 120)).slice(0, 8)
+      })),
+      repairLease,
+      repairAttempts: Math.max(0, Number(value.repairAttempts || 0) || 0),
+      nextRepairAt: Math.max(0, Number(value.nextRepairAt || 0) || 0),
+      lastRepairAt: Math.max(0, Number(value.lastRepairAt || 0) || 0),
+      lastRepairError: compact(value.lastRepairError || '', 240),
+      user: {
+        text: userText,
+        hash: stableHash64(userText),
+        canonicalHash: userHash,
+        chars: userText.length
+      },
+      assistant: {
+        text: assistantText,
+        hash: stableHash64(assistantText),
+        canonicalHash: assistantHash,
+        chars: assistantText.length
+      },
+      createdAt,
+      updatedAt
+    };
+  };
+  const normalizeRecoveryVault = (value = {}, scopeKey = '') => {
+    const parsed = typeof value === 'string' ? safeJsonParse(value, null) : value;
+    const base = emptyRecoveryVault(scopeKey);
+    if (!objectish(parsed) || (parsed.schema && parsed.schema !== RECOVERY_VAULT_SCHEMA)) return base;
+    const recordsByIdentity = new Map();
+    ensureArray(parsed.records).map(record => normalizeRecoveryVaultRecord(record, scopeKey)).filter(Boolean)
+      .sort((a, b) => Number(a.updatedAt || 0) - Number(b.updatedAt || 0))
+      .forEach(record => {
+        const key = record.inheritedSessionHistory
+          ? `history:${record.sourceScopeKey}:${record.sourceRecordId}`
+          : `debt:${record.recordId || recoveryVaultRecordIdentity(record)}`;
+        recordsByIdentity.set(key, record);
+      });
+    return {
+      ...base,
+      createdAt: Math.max(1, Number(parsed.createdAt || base.createdAt) || base.createdAt),
+      updatedAt: Math.max(1, Number(parsed.updatedAt || base.updatedAt) || base.updatedAt),
+      records: [...recordsByIdentity.values()].sort((a, b) => Number(a.inheritedSessionHistory) - Number(b.inheritedSessionHistory)
+        || Number(a.pairIndex || 0) - Number(b.pairIndex || 0)
+        || Number(a.updatedAt || 0) - Number(b.updatedAt || 0))
+    };
+  };
+  const pruneRecoveryVaultRecords = records => {
+    const normalized = ensureArray(records).map(record => normalizeRecoveryVaultRecord(record, record?.scopeKey || '')).filter(Boolean)
+      .sort((a, b) => Number(a.updatedAt || 0) - Number(b.updatedAt || 0));
+    const protectedRecords = normalized.filter(record => (
+      record.inheritedSessionHistory === true
+      || record.permanentSessionHistory === true
+      || RECOVERY_DEBT_ACTIVE_STATUSES.has(record.status)
+      || record.status === 'suspended'
+    ));
+    const inactiveRecords = normalized.filter(record => !protectedRecords.includes(record));
+    const protectedKept = protectedRecords.slice(-RECOVERY_VAULT_MAX_RECORDS);
+    const remainingSlots = Math.max(0, RECOVERY_VAULT_MAX_RECORDS - protectedKept.length);
+    const kept = [...inactiveRecords.slice(-remainingSlots), ...protectedKept]
+      .sort((a, b) => Number(a.updatedAt || 0) - Number(b.updatedAt || 0));
+    let totalChars = kept.reduce((sum, record) => sum + recoveryVaultRecordTextChars(record), 0);
+    while (kept.length && totalChars > RECOVERY_VAULT_MAX_TOTAL_CHARS) {
+      let index = kept.findIndex(record => RECOVERY_DEBT_TERMINAL_STATUSES.has(record.status));
+      if (index < 0) index = kept.findIndex(record => record.inheritedSessionHistory !== true && record.permanentSessionHistory !== true && !RECOVERY_DEBT_ACTIVE_STATUSES.has(record.status));
+      if (index < 0) break;
+      totalChars -= recoveryVaultRecordTextChars(kept[index]);
+      kept.splice(index, 1);
+    }
+    return kept;
+  };
+  const loadRecoveryVault = async (scopeOrKey, options = {}) => {
+    const scopeKey = compact(objectish(scopeOrKey) ? scopeOrKey.key : scopeOrKey, 196);
+    if (!scopeKey) return emptyRecoveryVault('');
+    const cached = Memory.recoveryVaultCache.get(scopeKey);
+    if (options.force !== true && cached && now() - Number(cached.at || 0) <= RECOVERY_VAULT_CACHE_TTL_MS) {
+      Memory.recoveryVaultStats.cacheHits += 1;
+      return clone(cached.vault, emptyRecoveryVault(scopeKey));
+    }
+    try {
+      const raw = await RisuCompat.getStorageItem(recoveryVaultKeyForScope(scopeKey), null);
+      const vault = normalizeRecoveryVault(raw, scopeKey);
+      Memory.recoveryVaultCache.set(scopeKey, { at: now(), vault });
+      Memory.recoveryVaultStats.reads += 1;
+      Memory.recoveryVaultStats.storedRecords = vault.records.length;
+      Memory.recoveryVaultStats.storedChars = vault.records.reduce((sum, record) => sum + recoveryVaultRecordTextChars(record), 0);
+      Memory.recoveryVaultStats.lastError = '';
+      Memory.lastRecoveryVault = {
+        at: now(), scopeKey, records: vault.records.length,
+        chars: Memory.recoveryVaultStats.storedChars, reason: 'loaded'
+      };
+      return clone(vault, emptyRecoveryVault(scopeKey));
+    } catch (error) {
+      Memory.recoveryVaultStats.failures += 1;
+      Memory.recoveryVaultStats.lastError = compact(error?.message || error, 240);
+      Memory.lastWarnings = [...ensureArray(Memory.lastWarnings), `recovery_vault_load_failed:${Memory.recoveryVaultStats.lastError}`].slice(-20);
+      return emptyRecoveryVault(scopeKey);
+    }
+  };
+  const writeRecoveryVaultDirect = async (scopeOrKey, value, reason = 'update') => {
+    const scopeKey = compact(objectish(scopeOrKey) ? scopeOrKey.key : scopeOrKey, 196);
+    if (!scopeKey) return { durable: false, saved: false, reason: 'scope_unavailable', records: 0 };
+    const normalized = normalizeRecoveryVault(value, scopeKey);
+    normalized.pluginVersion = PLUGIN_VERSION;
+    normalized.updatedAt = now();
+    normalized.records = pruneRecoveryVaultRecords(normalized.records);
+    const key = recoveryVaultKeyForScope(scopeKey);
+    const serialized = JSON.stringify(normalized);
+    try {
+      const saved = await RisuCompat.setStorageItem(key, serialized);
+      if (!saved) throw new Error('recovery_vault_write_rejected');
+      const readbackRaw = await RisuCompat.getStorageItem(key, null);
+      const readback = normalizeRecoveryVault(readbackRaw, scopeKey);
+      if (recoveryVaultDigest(readback) !== recoveryVaultDigest(normalized)) {
+        throw new Error('recovery_vault_readback_mismatch');
+      }
+      Memory.recoveryVaultCache.set(scopeKey, { at: now(), vault: readback });
+      Memory.recoveryVaultStats.writes += 1;
+      Memory.recoveryVaultStats.storedRecords = readback.records.length;
+      Memory.recoveryVaultStats.storedChars = readback.records.reduce((sum, record) => sum + recoveryVaultRecordTextChars(record), 0);
+      Memory.recoveryVaultStats.lastError = '';
+      Memory.lastRecoveryVault = {
+        at: now(), scopeKey, records: readback.records.length,
+        chars: Memory.recoveryVaultStats.storedChars, reason, durable: true
+      };
+      return {
+        durable: true,
+        saved: true,
+        reason,
+        scopeKey,
+        storageKey: key,
+        records: readback.records.length,
+        chars: Memory.recoveryVaultStats.storedChars
+      };
+    } catch (error) {
+      Memory.recoveryVaultStats.failures += 1;
+      Memory.recoveryVaultStats.lastError = compact(error?.message || error, 240);
+      Memory.lastRecoveryVault = { at: now(), scopeKey, reason, durable: false, error: Memory.recoveryVaultStats.lastError };
+      pushOperationLog('recovery_vault:write_failed', Memory.lastRecoveryVault, 'error');
+      return { durable: false, saved: false, reason: 'recovery_vault_write_failed', scopeKey, error: Memory.recoveryVaultStats.lastError };
+    }
+  };
+  const recoveryVisibleMessageText = (message = {}, role = '') => {
+    const payload = rawMessagePayload(message);
+    const packetStripped = stripHayakuBlocks(payload, {
+      looseMarkers: true,
+      incompletePacketTail: true,
+      collapsePacketArtifactGap: true,
+      preserveWhitespace: true
+    });
+    let body = stripHayakuRuntimeInstructionEcho(packetStripped, {
+      incompleteTail: true,
+      signatureFallback: true,
+      replacement: ' '
+    }).content
+      .replace(/<Thoughts>[\s\S]*?<\/Thoughts>/gi, ' ')
+      .replace(/<!--[\s\S]*?-->/g, ' ')
+      .replace(/\[HAYAKU SIDE-WRITE FINAL REMINDER\][\s\S]*$/gi, ' ')
+      .replace(/\r\n?/g, '\n')
+      .replace(/[\u200B-\u200D\uFEFF]/g, '')
+      .replace(/[ \t]+\n/g, '\n')
+      .replace(/\n{4,}/g, '\n\n\n')
+      .trim();
+    if (/^(?:assistant|model)$/i.test(role)) body = body.replace(/^(?:assistant|model)\s*:\s*/i, '').trim();
+    return normalizeRecoveryVaultVisibleText(body);
+  };
+  const recoveryEvidenceForAuthoritativePair = (liveScope = {}, pair = {}) => {
+    const messages = ensureArray(liveScope?.chatMessages);
+    const userIndex = Number(pair?.userMessageIndex);
+    const assistantIndex = Number(pair?.assistantMessageIndex);
+    if (!Number.isInteger(userIndex) || userIndex < 0 || !Number.isInteger(assistantIndex) || assistantIndex < 0) return null;
+    const userMessage = messages[userIndex];
+    const assistantMessage = messages[assistantIndex];
+    if (!userMessage || !assistantMessage) return null;
+    if (!/^(?:user|human)$/i.test(normalizeMessageRole(userMessage?.role || roleFromUserFlag(userMessage)))) return null;
+    if (!/^(?:assistant|model)$/i.test(normalizeMessageRole(assistantMessage?.role || roleFromUserFlag(assistantMessage)))) return null;
+    const userPayload = packetEvidencePayloadCandidates(userMessage).map(value => text(value)).join('\u0002');
+    const assistantPayload = packetEvidencePayloadCandidates(assistantMessage).map(value => text(value)).join('\u0002');
+    const canonicalUser = canonicalHistoryText(userPayload, 'user');
+    const canonicalAssistant = canonicalHistoryText(assistantPayload, 'assistant');
+    const userHash = canonicalUser ? stableHash64(canonicalUser) : '';
+    const assistantHash = canonicalAssistant ? stableHash64(canonicalAssistant) : '';
+    if (pair?.userHash && userHash !== pair.userHash) return null;
+    if (pair?.assistantVisibleHash && assistantHash !== pair.assistantVisibleHash) return null;
+    const userText = recoveryVisibleMessageText(userMessage, 'user');
+    const assistantText = recoveryVisibleMessageText(assistantMessage, 'assistant');
+    if (!userText && !assistantText) return null;
+    return {
+      userText,
+      assistantText,
+      userHash,
+      assistantHash,
+      userMessageIdHash: compact(pair?.userMessageIdHash || stableHash64(messageSourceId(userMessage, userIndex)), 96),
+      assistantMessageIdHash: compact(pair?.assistantMessageIdHash || stableHash64(messageSourceId(assistantMessage, assistantIndex)), 96),
+      userMessageIndex: userIndex,
+      assistantMessageIndex: assistantIndex
+    };
+  };
+  const recoveryDebtWorldlineStatus = ownerStatus => ({
+    active: 'active',
+    quarantined: 'quarantined',
+    superseded: 'superseded',
+    inactive_variant: 'superseded',
+    retired: 'superseded',
+    orphaned: 'orphaned',
+    detached_branch: 'detached'
+  })[compact(ownerStatus || '', 32)] || 'unbound';
+  const recoveryDebtStatusForWorldline = (worldlineStatus, record) => {
+    if (record?.inheritedSessionHistory === true || record?.permanentSessionHistory === true) return 'inherited_history';
+    if (worldlineStatus === 'active') return recoveryDebtLeaseIsActive(record) ? 'repair_pending' : 'deterministic_fallback';
+    if (worldlineStatus === 'quarantined') return 'suspended';
+    if (worldlineStatus === 'superseded') return 'superseded';
+    if (worldlineStatus === 'orphaned') return 'orphaned';
+    if (worldlineStatus === 'detached') return 'detached';
+    return 'suspended';
+  };
+  const recoveryDebtOwnerForRecord = (record, snapshot, worldline) => {
+    const nodes = normalizeTurnWorldline(worldline).nodes;
+    const exactOwner = record?.ownerTurnNodeId
+      ? nodes.find(node => node.turnNodeId === record.ownerTurnNodeId) || null
+      : null;
+    if (exactOwner) return exactOwner;
+    const pair = ensureArray(snapshot?.conversationPairs).find(candidate => (
+      Number(candidate?.pairIndex || 0) === Number(record?.pairIndex || 0)
+      && (!record?.userHash || !candidate?.userHash || record.userHash === candidate.userHash)
+      && (!record?.assistantHash || !candidate?.assistantVisibleHash || record.assistantHash === candidate.assistantVisibleHash)
+      && (!record?.assistantMessageIdHash || !candidate?.assistantMessageIdHash || record.assistantMessageIdHash === candidate.assistantMessageIdHash)
+    )) || null;
+    if (!pair) return null;
+    return activeWorldlineNodeForPair(worldline, pair) || null;
+  };
+  const reconcileRecoveryVaultWorldlineLifecycleDirect = async (scope, snapshot, worldline, options = {}) => {
+    const scopeKey = compact(scope?.key || scope?.scopeKey || '', 196);
+    if (!scopeKey) return { durable: false, changed: false, reason: 'scope_unavailable', vault: emptyRecoveryVault(''), activeRecords: [], leasedPairIndices: [] };
+    const vault = await loadRecoveryVault(scopeKey, { force: options.force === true });
+    const previousLifecycleById = new Map(ensureArray(vault.records).map(record => [
+      recoveryVaultRecordIdentity(record),
+      { status: compact(record?.status || '', 32), worldlineStatus: compact(record?.worldlineStatus || '', 32) }
+    ]));
+    const nowAt = now();
+    let changed = false;
+    const records = ensureArray(vault.records).map(raw => {
+      const record = normalizeRecoveryVaultRecord(raw, scopeKey);
+      if (!record || record.inheritedSessionHistory === true || record.permanentSessionHistory === true) return record;
+      const owner = recoveryDebtOwnerForRecord(record, snapshot, worldline);
+      const ownerStatus = recoveryDebtWorldlineStatus(owner?.status || '');
+      const exactPair = ensureArray(snapshot?.conversationPairs).find(pair => (
+        Number(pair?.pairIndex || 0) === Number(record.pairIndex || 0)
+        && (!record.userHash || !pair?.userHash || record.userHash === pair.userHash)
+        && (!record.assistantHash || !pair?.assistantVisibleHash || record.assistantHash === pair.assistantVisibleHash)
+        && (!record.assistantMessageIdHash || !pair?.assistantMessageIdHash || record.assistantMessageIdHash === pair.assistantMessageIdHash)
+      )) || null;
+      const usablePacket = exactPair ? recoveryVaultPairHasUsablePacket(exactPair) : false;
+      if (ownerStatus === 'active' && usablePacket) return null;
+      let repairLease = normalizeRecoveryDebtLease(record.repairLease);
+      if (repairLease && repairLease.expiresAt <= nowAt) {
+        repairLease = null;
+        changed = true;
+      }
+      const next = normalizeRecoveryVaultRecord({
+        ...record,
+        ownerTurnNodeId: owner?.turnNodeId || record.ownerTurnNodeId || '',
+        logicalTurnId: owner?.logicalTurnId || record.logicalTurnId || '',
+        variantId: owner?.variantId || record.variantId || '',
+        parentTurnNodeId: owner?.parentTurnNodeId || record.parentTurnNodeId || '',
+        worldlineStatus: ownerStatus,
+        worldlineRevision: Math.max(0, Number(worldline?.revision || 0) || 0),
+        missingObservations: Math.max(0, Number(owner?.missingObservations || 0) || 0),
+        lastSeenSnapshotHash: compact(owner?.lastSeenSnapshotHash || snapshot?.chatSnapshotHash || '', 96),
+        repairLease,
+        status: recoveryDebtStatusForWorldline(ownerStatus, { ...record, repairLease }),
+        updatedAt: record.updatedAt
+      }, scopeKey);
+      if (stableHash64(JSON.stringify(next)) !== stableHash64(JSON.stringify(record))) changed = true;
+      return next;
+    }).filter(Boolean);
+    const nextVault = { ...vault, records };
+    const write = changed
+      ? await writeRecoveryVaultDirect(scopeKey, nextVault, options.reason || 'worldline_reconcile')
+      : { durable: true, saved: false, reason: 'unchanged', records: records.length, vault: nextVault };
+    const finalVault = changed && write.durable === true ? await loadRecoveryVault(scopeKey, { force: true }) : normalizeRecoveryVault(nextVault, scopeKey);
+    const activeRecords = ensureArray(finalVault.records).filter(record => (
+      RECOVERY_DEBT_ACTIVE_STATUSES.has(record.status)
+      && record.worldlineStatus === 'active'
+    ));
+    if (changed && write.durable === true) {
+      for (const record of activeRecords) {
+        const previous = previousLifecycleById.get(recoveryVaultRecordIdentity(record));
+        if (!previous) continue;
+        if (previous.worldlineStatus !== 'active' || !RECOVERY_DEBT_ACTIVE_STATUSES.has(previous.status)) {
+          scheduleRecoveryDebtEvent(record, 'packet_debt_reactivated');
+        }
+      }
+    }
+    return {
+      ...write,
+      durable: write.durable !== false,
+      changed,
+      reason: write.reason || (changed ? 'worldline_reconciled' : 'unchanged'),
+      vault: finalVault,
+      activeRecords,
+      leasedPairIndices: activeRecords.filter(recoveryDebtLeaseIsActive).map(record => Number(record.pairIndex || 0)).filter(Boolean),
+      suspendedRecords: ensureArray(finalVault.records).filter(record => record.status === 'suspended').length,
+      terminalRecords: ensureArray(finalVault.records).filter(record => RECOVERY_DEBT_TERMINAL_STATUSES.has(record.status)).length
+    };
+  };
+  const scheduleRecoveryDebtEvent = (record, event = 'packet_debt_ready') => {
+    if (!record || record.inheritedSessionHistory === true || record.worldlineStatus !== 'active') return false;
+    const api = apiCandidates().find(candidate => typeof candidate?.postPluginChannelMessage === 'function') || RisuCompat.api();
+    if (typeof api?.postPluginChannelMessage !== 'function') return false;
+    const payload = {
+      schema: RECOVERY_DEBT_EVENT_SCHEMA,
+      kind: 'event',
+      event,
+      ownerPluginId: HAYAKU_PLUGIN_ID,
+      debtId: record.recordId,
+      scopeKey: record.scopeKey,
+      pairIndex: record.pairIndex,
+      ownerTurnNodeId: record.ownerTurnNodeId,
+      variantId: record.variantId,
+      quality: record.quality || 'deterministic_fallback',
+      status: record.status,
+      sourceEvidenceHash: recoveryDebtRepairTarget(record)?.sourceEvidenceHash || '',
+      at: now()
+    };
+    setTimeout(() => {
+      Promise.resolve(api.postPluginChannelMessage(
+        MEMORY_SESSION_BRIDGE_PLUGIN_ID,
+        MEMORY_SESSION_BRIDGE_HAYAKU_EVENT_CHANNEL,
+        payload
+      )).catch(error => {
+        Memory.lastWarnings = [...ensureArray(Memory.lastWarnings), `recovery_debt_event_failed:${compact(error?.message || error, 120)}`].slice(-20);
+      });
+    }, 0);
+    return true;
+  };
+  const pruneInBandRecoveryReservations = () => {
+    const at = now();
+    for (const [key, value] of Memory.recoveryDebtInBandReservations.entries()) {
+      if (Number(value?.expiresAt || 0) <= at) Memory.recoveryDebtInBandReservations.delete(key);
+    }
+    return Memory.recoveryDebtInBandReservations;
+  };
+  const reserveInBandRecoveryDebt = (recovery, snapshot) => {
+    if (recovery?.active !== true) return [];
+    const reserved = [];
+    for (const debt of ensureArray(recovery?.recoveryDebt?.debts)) {
+      const pair = ensureArray(snapshot?.conversationPairs).find(candidate => Number(candidate?.pairIndex || 0) === Number(debt?.pairIndex || 0)) || null;
+      if (!pair) continue;
+      const key = `${Number(pair.pairIndex || 0)}:${pair.userHash || ''}:${pair.assistantVisibleHash || pair.assistantMessageIdHash || ''}`;
+      const value = {
+        key,
+        pairIndex: Number(pair.pairIndex || 0),
+        userHash: compact(pair.userHash || '', 96),
+        assistantVisibleHash: compact(pair.assistantVisibleHash || '', 96),
+        assistantMessageIdHash: compact(pair.assistantMessageIdHash || '', 96),
+        expiresAt: now() + CAPTURE_ORIGIN_TTL_MS
+      };
+      Memory.recoveryDebtInBandReservations.set(key, value);
+      reserved.push(value);
+    }
+    pruneInBandRecoveryReservations();
+    return reserved;
+  };
+  const releaseInBandRecoveryReservation = target => {
+    if (!target) return false;
+    let removed = false;
+    for (const [key, value] of pruneInBandRecoveryReservations().entries()) {
+      if (Number(value?.pairIndex || 0) !== Number(target?.pairIndex || 0)) continue;
+      if (target?.userHash && value?.userHash && target.userHash !== value.userHash) continue;
+      if (target?.assistantVisibleHash && value?.assistantVisibleHash && target.assistantVisibleHash !== value.assistantVisibleHash) continue;
+      Memory.recoveryDebtInBandReservations.delete(key);
+      removed = true;
+    }
+    return removed;
+  };
+  const inBandRecoveryPendingForDebt = record => {
+    const pendingCapture = ensureArray(Memory.pendingCaptures).some(entry => (
+      entry?.recoveryRequired === true
+      && Number(entry?.recoveryTarget?.pairIndex || 0) === Number(record?.pairIndex || 0)
+      && (!record?.userHash || !entry?.recoveryTarget?.userHash || record.userHash === entry.recoveryTarget.userHash)
+      && (!record?.assistantHash || !entry?.recoveryTarget?.assistantVisibleHash || record.assistantHash === entry.recoveryTarget.assistantVisibleHash)
+    ));
+    if (pendingCapture) return true;
+    return [...pruneInBandRecoveryReservations().values()].some(value => (
+      Number(value?.pairIndex || 0) === Number(record?.pairIndex || 0)
+      && (!record?.userHash || !value?.userHash || record.userHash === value.userHash)
+      && (!record?.assistantHash || !value?.assistantVisibleHash || record.assistantHash === value.assistantVisibleHash)
+    ));
+  };
+  const inspectRecoveryDebtsForRetrace = async (payload = {}) => {
+    const scope = await RisuCompat.currentChatScope();
+    if (!scope?.confident || !scope?.key || scope.chatMessagesAvailable !== true) {
+      return { available: false, reason: scope?.reason || 'authoritative_chat_unavailable', debts: [] };
+    }
+    const snapshot = authoritativeChatSnapshot(scope.chatMessages, scope);
+    const ledger = await loadStorageLedger(scope, { hydrateArchive: false });
+    const worldline = reconcileTurnWorldline(ledger.worldline, snapshot, scope);
+    const lifecycle = await reconcileRecoveryVaultWorldlineLifecycleDirect(scope, snapshot, worldline, { force: true, reason: 'retrace_debt_inspect' });
+    const targetDebtId = compact(payload?.debtId || '', 196);
+    const limit = Math.max(1, Math.min(32, Number(payload?.limit || 8) || 8));
+    const includeEvidence = payload?.includeEvidence === true;
+    const debts = lifecycle.activeRecords
+      .filter(record => !targetDebtId || record.recordId === targetDebtId)
+      .filter(record => Number(record.nextRepairAt || 0) <= now())
+      .filter(record => Number(record.repairAttempts || 0) < RECOVERY_DEBT_MAX_AUTO_ATTEMPTS)
+      .sort((a, b) => Number(a.pairIndex || 0) - Number(b.pairIndex || 0) || Number(a.createdAt || 0) - Number(b.createdAt || 0))
+      .slice(0, limit)
+      .map(record => ({
+        ...recoveryDebtRepairTarget(record),
+        status: record.status,
+        quality: record.quality,
+        reason: record.reason,
+        repairAttempts: record.repairAttempts,
+        nextRepairAt: record.nextRepairAt,
+        lease: normalizeRecoveryDebtLease(record.repairLease),
+        evidence: includeEvidence ? { user: record.user.text, assistant: record.assistant.text } : undefined
+      }));
+    return {
+      available: true,
+      reason: debts.length ? 'packet_debt_available' : 'no_active_packet_debt',
+      scopeKey: scope.key,
+      worldlineRevision: Number(worldline.revision || 0) || 0,
+      debts,
+      totalActiveDebts: lifecycle.activeRecords.length,
+      leasedPairIndices: lifecycle.leasedPairIndices,
+      contract: RECOVERY_DEBT_WORLDLINE_VERSION
+    };
+  };
+  const acquireRecoveryDebtLeaseForRetrace = async (payload = {}) => enqueueStorageOperation(async () => {
+    const debtId = compact(payload?.debtId || '', 196);
+    const runId = compact(payload?.runId || '', 128);
+    if (!debtId || !runId) return { ok: false, acquired: false, reason: 'recovery_debt_lease_identity_missing' };
+    const scope = await RisuCompat.currentChatScope();
+    if (!scope?.confident || !scope?.key || scope.chatMessagesAvailable !== true) return { ok: false, acquired: false, reason: 'authoritative_chat_unavailable' };
+    const snapshot = authoritativeChatSnapshot(scope.chatMessages, scope);
+    const ledger = await loadStorageLedger(scope, { hydrateArchive: false });
+    const worldline = reconcileTurnWorldline(ledger.worldline, snapshot, scope);
+    const lifecycle = await reconcileRecoveryVaultWorldlineLifecycleDirect(scope, snapshot, worldline, { force: true, reason: 'retrace_lease_reconcile' });
+    const record = ensureArray(lifecycle.vault.records).find(item => item.recordId === debtId) || null;
+    if (!record || record.worldlineStatus !== 'active' || !RECOVERY_DEBT_ACTIVE_STATUSES.has(record.status)) {
+      return { ok: false, acquired: false, reason: 'recovery_debt_not_active' };
+    }
+    if (inBandRecoveryPendingForDebt(record)) return { ok: false, acquired: false, reason: 'hayaku_inband_recovery_pending' };
+    if (Number(record.nextRepairAt || 0) > now()) return { ok: false, acquired: false, reason: 'recovery_debt_backoff_active', nextRepairAt: record.nextRepairAt };
+    if (Number(record.repairAttempts || 0) >= RECOVERY_DEBT_MAX_AUTO_ATTEMPTS) return { ok: false, acquired: false, reason: 'recovery_debt_attempt_limit' };
+    const existingLease = normalizeRecoveryDebtLease(record.repairLease);
+    if (existingLease && existingLease.expiresAt > now()) {
+      if (existingLease.owner === 'retrace_auto' && existingLease.runId === runId) {
+        return { ok: true, acquired: true, reused: true, lease: existingLease, debt: { ...recoveryDebtRepairTarget(record), evidence: { user: record.user.text, assistant: record.assistant.text } } };
+      }
+      return { ok: false, acquired: false, reason: 'recovery_debt_already_leased', lease: existingLease };
+    }
+    const acquiredAt = now();
+    const lease = normalizeRecoveryDebtLease({
+      leaseId: stableHash64([debtId, runId, acquiredAt].join('\u0001')),
+      owner: 'retrace_auto',
+      runId,
+      sourceHash: recoveryDebtRepairTarget(record)?.sourceEvidenceHash || '',
+      acquiredAt,
+      expiresAt: acquiredAt + RECOVERY_DEBT_LEASE_TTL_MS
+    });
+    const records = ensureArray(lifecycle.vault.records).map(item => item.recordId === debtId
+      ? normalizeRecoveryVaultRecord({ ...item, status: 'repair_pending', repairLease: lease, lastRepairAt: acquiredAt, updatedAt: acquiredAt }, scope.key)
+      : item);
+    const write = await writeRecoveryVaultDirect(scope.key, { ...lifecycle.vault, records }, 'retrace_auto_lease_acquired');
+    if (write.durable !== true) return { ok: false, acquired: false, reason: write.reason || 'lease_write_failed' };
+    const readback = await loadRecoveryVault(scope.key, { force: true });
+    const leased = ensureArray(readback.records).find(item => item.recordId === debtId) || null;
+    if (!leased || normalizeRecoveryDebtLease(leased.repairLease)?.leaseId !== lease.leaseId) return { ok: false, acquired: false, reason: 'lease_readback_mismatch' };
+    return {
+      ok: true,
+      acquired: true,
+      lease,
+      debt: {
+        ...recoveryDebtRepairTarget(leased),
+        status: leased.status,
+        quality: leased.quality,
+        reason: leased.reason,
+        evidence: { user: leased.user.text, assistant: leased.assistant.text }
+      }
+    };
+  });
+  const releaseRecoveryDebtLeaseForRetrace = async (payload = {}) => enqueueStorageOperation(async () => {
+    const debtId = compact(payload?.debtId || '', 196);
+    const leaseId = compact(payload?.leaseId || '', 128);
+    if (!debtId || !leaseId) return { ok: false, released: false, reason: 'recovery_debt_release_identity_missing' };
+    const scope = await RisuCompat.currentChatScope();
+    if (!scope?.confident || !scope?.key) return { ok: false, released: false, reason: 'scope_unavailable' };
+    let vault;
+    if (scope.chatMessagesAvailable === true) {
+      const snapshot = authoritativeChatSnapshot(scope.chatMessages, scope);
+      const ledger = await loadStorageLedger(scope, { hydrateArchive: false });
+      const worldline = reconcileTurnWorldline(ledger.worldline, snapshot, scope);
+      const lifecycle = await reconcileRecoveryVaultWorldlineLifecycleDirect(scope, snapshot, worldline, {
+        force: true,
+        reason: 'retrace_lease_release_worldline_reconcile'
+      });
+      vault = lifecycle.vault;
+    } else {
+      vault = await loadRecoveryVault(scope.key, { force: true });
+    }
+    const record = ensureArray(vault.records).find(item => item.recordId === debtId) || null;
+    if (!record) return { ok: true, released: false, resolved: true, reason: 'recovery_debt_absent' };
+    const lease = normalizeRecoveryDebtLease(record.repairLease);
+    if (!lease || lease.leaseId !== leaseId) return { ok: false, released: false, reason: 'recovery_debt_lease_mismatch' };
+    const outcome = compact(payload?.outcome || 'failed', 32).toLowerCase();
+    const attempts = Math.max(0, Number(record.repairAttempts || 0) || 0) + (outcome === 'failed' ? 1 : 0);
+    const nextRepairAt = outcome === 'failed' ? now() + recoveryDebtRetryDelayMs(attempts) : 0;
+    const records = ensureArray(vault.records).map(item => item.recordId === debtId
+      ? normalizeRecoveryVaultRecord({
+          ...item,
+          status: item.worldlineStatus === 'active' ? 'deterministic_fallback' : recoveryDebtStatusForWorldline(item.worldlineStatus, { ...item, repairLease: null }),
+          repairLease: null,
+          repairAttempts: attempts,
+          nextRepairAt,
+          lastRepairError: compact(payload?.error || '', 240),
+          lastRepairAt: now(),
+          updatedAt: now()
+        }, scope.key)
+      : item);
+    const write = await writeRecoveryVaultDirect(scope.key, { ...vault, records }, `retrace_auto_lease_${outcome}`);
+    const updated = records.find(item => item.recordId === debtId) || null;
+    if (write.durable === true && updated?.worldlineStatus === 'active' && outcome === 'failed') scheduleRecoveryDebtEvent(updated, 'packet_debt_retry_scheduled');
+    return { ok: write.durable === true, released: write.durable === true, reason: write.reason, attempts, nextRepairAt };
+  });
+  const upsertRecoveryVaultEvidence = async (pending = {}, candidate = {}, reason = 'packet_missing') => {
+    const settings = Memory.settings || DEFAULT_SETTINGS;
+    if (settings.recoveryVaultEnabled === false) return { durable: false, saved: false, reason: 'recovery_vault_disabled' };
+    const scopeKey = compact(pending?.scope?.key || candidate?.scopeKey || '', 196);
+    const pair = candidate?.pair;
+    const liveScope = candidate?.liveScope;
+    if (!scopeKey || !pair || !liveScope) return { durable: false, saved: false, reason: 'recovery_evidence_identity_unavailable' };
+    const evidence = recoveryEvidenceForAuthoritativePair(liveScope, pair);
+    if (!evidence) return { durable: false, saved: false, reason: 'recovery_evidence_source_mismatch' };
+    const snapshot = authoritativeChatSnapshot(liveScope.chatMessages, liveScope);
+    const ledger = await loadStorageLedger(liveScope, { hydrateArchive: false });
+    const worldline = reconcileTurnWorldline(ledger.worldline, snapshot, liveScope);
+    const owner = activeWorldlineNodeForPair(worldline, pair);
+    if (!owner || owner.status !== 'active') return { durable: false, saved: false, reason: 'recovery_worldline_owner_unavailable' };
+    const record = normalizeRecoveryVaultRecord({
+      scopeKey,
+      pairIndex: pair.pairIndex,
+      worldlineOrdinal: pair.pairIndex,
+      ownerTurnNodeId: owner.turnNodeId,
+      logicalTurnId: owner.logicalTurnId,
+      variantId: owner.variantId,
+      parentTurnNodeId: owner.parentTurnNodeId,
+      worldlineStatus: owner.status,
+      worldlineRevision: worldline.revision,
+      missingObservations: owner.missingObservations,
+      lastSeenSnapshotHash: owner.lastSeenSnapshotHash || snapshot.chatSnapshotHash,
+      userMessageIndex: evidence.userMessageIndex,
+      assistantMessageIndex: evidence.assistantMessageIndex,
+      userMessageIdHash: evidence.userMessageIdHash,
+      assistantMessageIdHash: evidence.assistantMessageIdHash,
+      userHash: evidence.userHash,
+      assistantHash: evidence.assistantHash,
+      requestNonce: pending?.lineage?.requestNonce || pair?.requestNonce || '',
+      status: 'deterministic_fallback',
+      reason,
+      packetMarkersPresent: Number(candidate?.markerStartCount || 0) > 0 || Number(candidate?.markerEndCount || 0) > 0,
+      packetDiagnostics: candidate?.captureDiagnostics,
+      user: { text: evidence.userText },
+      assistant: { text: evidence.assistantText },
+      createdAt: now(),
+      updatedAt: now()
+    }, scopeKey);
+    if (!record) return { durable: false, saved: false, reason: 'recovery_record_empty' };
+    return await enqueueStorageOperation(async () => {
+      const vault = await loadRecoveryVault(scopeKey, { force: true });
+      const records = ensureArray(vault.records).filter(existing => existing?.recordId !== record.recordId);
+      records.push(record);
+      const result = await writeRecoveryVaultDirect(scopeKey, { ...vault, records }, reason);
+      if (result.durable === true) {
+        Memory.recoveryVaultStats.upserts += 1;
+        pushOperationLog('recovery_vault:evidence_saved', {
+          scopeKey,
+          pairIndex: record.pairIndex,
+          ownerTurnNodeId: record.ownerTurnNodeId,
+          variantId: record.variantId,
+          reason,
+          userChars: record.user.chars,
+          assistantChars: record.assistant.chars,
+          records: result.records,
+          durable: true
+        }, 'success');
+        scheduleRecoveryDebtEvent(record, 'packet_debt_ready');
+      }
+      return { ...result, pairIndex: record.pairIndex, recordId: record.recordId, repairTarget: recoveryDebtRepairTarget(record) };
+    });
+  };
+  const dischargeRecoveryVaultEvidenceDirect = async (scopeOrKey, identity = {}, reason = 'verified_packet') => {
+    const scopeKey = compact(objectish(scopeOrKey) ? scopeOrKey.key : scopeOrKey, 196);
+    const pairIndex = Math.max(0, Number(identity?.pairIndex || identity?.targetPairIndex || 0) || 0);
+    if (!scopeKey || !pairIndex) return { durable: false, removed: 0, reason: 'identity_unavailable' };
+    const vault = await loadRecoveryVault(scopeKey, { force: true });
+    const expectedUserHash = compact(identity?.userHash || '', 96);
+    const expectedAssistantHash = compact(identity?.assistantHash || identity?.assistantVisibleHash || '', 96);
+    const expectedAssistantId = compact(identity?.assistantMessageIdHash || '', 96);
+    const expectedDebtId = compact(identity?.debtId || identity?.recordId || '', 196);
+    const expectedOwnerTurnNodeId = compact(identity?.ownerTurnNodeId || '', 96);
+    const expectedVariantId = compact(identity?.variantId || '', 96);
+    const removedRecords = [];
+    const records = ensureArray(vault.records).filter(record => {
+      if (record?.inheritedSessionHistory === true || record?.permanentSessionHistory === true) return true;
+      if (expectedDebtId && record?.recordId !== expectedDebtId) return true;
+      if (Number(record?.pairIndex || 0) !== pairIndex) return true;
+      if (expectedOwnerTurnNodeId && record?.ownerTurnNodeId && record.ownerTurnNodeId !== expectedOwnerTurnNodeId) return true;
+      if (expectedVariantId && record?.variantId && record.variantId !== expectedVariantId) return true;
+      if (expectedUserHash && record?.userHash && record.userHash !== expectedUserHash) return true;
+      if (expectedAssistantHash && record?.assistantHash && record.assistantHash !== expectedAssistantHash) return true;
+      if (expectedAssistantId && record?.assistantMessageIdHash && record.assistantMessageIdHash !== expectedAssistantId) return true;
+      removedRecords.push(record);
+      return false;
+    });
+    if (!removedRecords.length) return { durable: true, removed: 0, reason: 'no_matching_debt', scopeKey, pairIndex };
+    const result = await writeRecoveryVaultDirect(scopeKey, { ...vault, records }, reason);
+    if (result.durable === true) {
+      Memory.recoveryVaultStats.discharges += removedRecords.length;
+      pushOperationLog('recovery_vault:debt_discharged', {
+        scopeKey, pairIndex, removed: removedRecords.length, reason, durable: true
+      }, 'success');
+    }
+    return { ...result, removed: result.durable === true ? removedRecords.length : 0, pairIndex };
+  };
+  const dischargeRecoveryVaultEvidence = async (scopeOrKey, identity = {}, reason = 'verified_packet') => (
+    await enqueueStorageOperation(() => dischargeRecoveryVaultEvidenceDirect(scopeOrKey, identity, reason))
+  );
+  const scheduleRecoveryVaultDischarge = (scopeOrKey, identity = {}, reason = 'verified_packet') => {
+    void dischargeRecoveryVaultEvidence(scopeOrKey, identity, reason).catch(error => {
+      Memory.recoveryVaultStats.failures += 1;
+      Memory.recoveryVaultStats.lastError = compact(error?.message || error, 240);
+    });
+  };
+  const recoveryVaultPairHasUsablePacket = pair => ensureArray(pair?.packetHashes).length > 0
+    || ensureArray(pair?.validPacketHashes).length > 0
+    || ensureArray(pair?.repairablePacketHashes).length > 0;
+  const recoveryVaultStorageFingerprint = async scopeKey => {
+    const key = compact(scopeKey || '', 196);
+    if (!key) return { scopeKey: '', fingerprint: '', digest: '', records: 0, chars: 0 };
+    const vault = await loadRecoveryVault(key, { force: true });
+    const digest = recoveryVaultDigest(vault);
+    return {
+      scopeKey: key,
+      fingerprint: stableHash64([key, digest, vault.records.length, vault.updatedAt || 0].join('\u0001')),
+      digest,
+      records: vault.records.length,
+      chars: vault.records.reduce((sum, record) => sum + recoveryVaultRecordTextChars(record), 0)
+    };
+  };
+  const inheritRecoveryVaultForBridgeSession = async (sourceScopeKey = '', targetScopeKey = '', transferId = '') => {
+    const sourceKey = compact(sourceScopeKey || '', 196);
+    const targetKey = compact(targetScopeKey || '', 196);
+    const transfer = compact(transferId || '', 160);
+    if (!sourceKey || !targetKey || sourceKey === targetKey) {
+      return { version: RECOVERY_VAULT_HANDOFF_VERSION, ok: false, durable: false, reason: 'recovery_vault_handoff_identity_invalid', records: 0 };
+    }
+    try {
+      const sourceBefore = await recoveryVaultStorageFingerprint(sourceKey);
+      const sourceVault = await loadRecoveryVault(sourceKey, { force: true });
+      const targetVault = await loadRecoveryVault(targetKey, { force: true });
+      const inheritedAt = now();
+      const existing = new Map(ensureArray(targetVault.records).map(record => {
+        const key = record.inheritedSessionHistory
+          ? `history:${record.sourceScopeKey}:${record.sourceRecordId}`
+          : `debt:${record.recordId || recoveryVaultRecordIdentity(record)}`;
+        return [key, record];
+      }));
+      let copied = 0;
+      for (const sourceRecord of ensureArray(sourceVault.records)) {
+        const sourceRecordId = recoveryVaultRecordIdentity(sourceRecord);
+        const key = `history:${sourceKey}:${sourceRecordId}`;
+        if (existing.has(key)) continue;
+        const inherited = normalizeRecoveryVaultRecord({
+          ...sourceRecord,
+          recordId: `history:${sourceKey}:${sourceRecordId}`,
+          scopeKey: targetKey,
+          sourcePairIndex: sourceRecord.sourcePairIndex || sourceRecord.pairIndex,
+          inheritedSessionHistory: true,
+          permanentSessionHistory: true,
+          sourceScopeKey: sourceKey,
+          sourceRecordId,
+          handoffTransferId: transfer,
+          inheritedAt,
+          sourceFingerprint: sourceBefore.fingerprint,
+          status: 'inherited_history',
+          reason: 'session_handoff_history',
+          updatedAt: inheritedAt
+        }, targetKey);
+        if (!inherited) continue;
+        existing.set(key, inherited);
+        copied += 1;
+      }
+      const write = copied > 0
+        ? await writeRecoveryVaultDirect(targetKey, { ...targetVault, records: [...existing.values()] }, 'bridge_session_recovery_vault_handoff')
+        : { durable: true, saved: false, reason: 'already_adopted', records: targetVault.records.length };
+      if (write.durable !== true) throw new Error(write.reason || 'recovery_vault_target_write_failed');
+      const targetReadback = await loadRecoveryVault(targetKey, { force: true });
+      const adopted = targetReadback.records.filter(record => record.inheritedSessionHistory === true
+        && record.sourceScopeKey === sourceKey
+        && (!transfer || record.handoffTransferId === transfer));
+      const sourceAfter = await recoveryVaultStorageFingerprint(sourceKey);
+      const sourcePreserved = !!sourceBefore.fingerprint && sourceBefore.fingerprint === sourceAfter.fingerprint;
+      const verified = sourcePreserved && adopted.length >= sourceVault.records.length;
+      const result = {
+        version: RECOVERY_VAULT_HANDOFF_VERSION,
+        ok: verified,
+        durable: verified,
+        reason: verified ? (copied ? 'recovery_vault_history_copied_non_destructive' : 'recovery_vault_history_already_adopted') : 'recovery_vault_handoff_verification_failed',
+        sourceScopeKey: sourceKey,
+        targetScopeKey: targetKey,
+        transferId: transfer,
+        sourceRecords: sourceVault.records.length,
+        copiedRecords: copied,
+        adoptedRecords: adopted.length,
+        sourceFingerprintBefore: sourceBefore.fingerprint,
+        sourceFingerprintAfter: sourceAfter.fingerprint,
+        sourcePreserved,
+        targetDigest: recoveryVaultDigest(targetReadback)
+      };
+      Memory.lastRecoveryVaultHandoff = result;
+      if (verified) {
+        Memory.recoveryVaultStats.handoffCopies += 1;
+        Memory.recoveryVaultStats.handoffRecords += copied;
+      } else {
+        Memory.recoveryVaultStats.handoffFailures += 1;
+      }
+      return result;
+    } catch (error) {
+      Memory.recoveryVaultStats.handoffFailures += 1;
+      const result = {
+        version: RECOVERY_VAULT_HANDOFF_VERSION,
+        ok: false,
+        durable: false,
+        reason: 'recovery_vault_handoff_failed',
+        sourceScopeKey: compact(sourceScopeKey || '', 196),
+        targetScopeKey: compact(targetScopeKey || '', 196),
+        transferId: compact(transferId || '', 160),
+        error: compact(error?.message || error, 240)
+      };
+      Memory.lastRecoveryVaultHandoff = result;
+      return result;
+    }
+  };
+  const verifyInheritedRecoveryVaultHandoff = async (metadata = {}, targetScopeKey = '') => {
+    if (!objectish(metadata) || metadata.version !== RECOVERY_VAULT_HANDOFF_VERSION) {
+      return { ok: true, reason: 'recovery_vault_handoff_not_required', records: 0 };
+    }
+    const targetKey = compact(targetScopeKey || metadata.targetScopeKey || '', 196);
+    const sourceKey = compact(metadata.sourceScopeKey || '', 196);
+    const transfer = compact(metadata.transferId || '', 160);
+    const targetVault = await loadRecoveryVault(targetKey, { force: true });
+    const records = targetVault.records.filter(record => record.inheritedSessionHistory === true
+      && record.sourceScopeKey === sourceKey
+      && (!transfer || record.handoffTransferId === transfer));
+    const sourceNow = await recoveryVaultStorageFingerprint(sourceKey);
+    const sourcePreserved = !metadata.sourceFingerprintBefore || metadata.sourceFingerprintBefore === sourceNow.fingerprint;
+    const expected = Math.max(0, Number(metadata.sourceRecords || 0) || 0);
+    return {
+      ok: sourcePreserved && records.length >= expected,
+      reason: sourcePreserved && records.length >= expected ? 'recovery_vault_handoff_verified' : 'recovery_vault_handoff_verification_failed',
+      records: records.length,
+      expected,
+      sourcePreserved,
+      sourceFingerprint: sourceNow.fingerprint,
+      targetDigest: recoveryVaultDigest(targetVault)
+    };
+  };
+  const activeRecoveryVaultRecords = (vault = {}, snapshot = null, worldline = null) => {
+    const records = [];
+    const staleRecordIds = [];
+    const packetDischargedIds = [];
+    for (const record of ensureArray(vault.records)) {
+      if (record?.inheritedSessionHistory === true || record?.permanentSessionHistory === true) {
+        records.push(record);
+        continue;
+      }
+      if (!RECOVERY_DEBT_ACTIVE_STATUSES.has(record?.status) || record?.worldlineStatus !== 'active') continue;
+      if (Number(record?.nextRepairAt || 0) > now() && record.status !== 'repair_pending') {
+        // Backoff affects automatic repair only; verbatim recall remains available.
+      }
+      const pair = objectish(snapshot) && Array.isArray(snapshot.conversationPairs)
+        ? ensureArray(snapshot.conversationPairs).find(candidate => (
+            Number(candidate?.pairIndex || 0) === Number(record?.pairIndex || 0)
+            && (!record.userHash || !candidate?.userHash || record.userHash === candidate.userHash)
+            && (!record.assistantHash || !candidate?.assistantVisibleHash || record.assistantHash === candidate.assistantVisibleHash)
+            && (!record.assistantMessageIdHash || !candidate?.assistantMessageIdHash || record.assistantMessageIdHash === candidate.assistantMessageIdHash)
+          )) || null
+        : null;
+      if (snapshot && !pair) continue;
+      if (pair && recoveryVaultPairHasUsablePacket(pair)) {
+        packetDischargedIds.push(record.recordId);
+        continue;
+      }
+      if (worldline && record.ownerTurnNodeId) {
+        const owner = normalizeTurnWorldline(worldline).nodes.find(node => node.turnNodeId === record.ownerTurnNodeId) || null;
+        if (!owner || owner.status !== 'active') continue;
+      }
+      records.push(record);
+    }
+    return { records, staleRecordIds, packetDischargedIds };
+  };
+  const pruneRecoveryVaultRecordIds = async (scopeKey, recordIds = [], reason = 'snapshot_reconcile') => {
+    const ids = new Set(ensureArray(recordIds).map(value => compact(value, 196)).filter(Boolean));
+    if (!scopeKey || !ids.size) return { durable: true, removed: 0, reason: 'nothing_to_prune' };
+    return await enqueueStorageOperation(async () => {
+      const vault = await loadRecoveryVault(scopeKey, { force: true });
+      const before = vault.records.length;
+      const records = vault.records.filter(record => !ids.has(recoveryVaultRecordIdentity(record)) && !ids.has(record.recordId));
+      if (records.length === before) return { durable: true, removed: 0, reason: 'already_pruned' };
+      const result = await writeRecoveryVaultDirect(scopeKey, { ...vault, records }, reason);
+      const removed = result.durable === true ? before - records.length : 0;
+      if (removed) Memory.recoveryVaultStats.stalePrunes += removed;
+      return { ...result, removed };
+    });
+  };
+
+  // -------------------------------------------------------------------------
+  // Request-local, embedding-free Raw Passage Recall
+  // -------------------------------------------------------------------------
+  const RAW_RECOVERY_GENERIC_QUERY_TERMS = new Set([
+    '그때', '그거', '그것', '그녀', '그', '그들', '이어서', '계속', '그래서', '그러면',
+    'then', 'that', 'it', 'there', 'continue', 'next', 'what', 'when',
+    'その時', 'それ', '彼', '彼女', '続けて', '然后', '那个', '继续'
+  ].map(normalizeKey));
+  const rawRecoverySurfaceTokens = value => uniq(cleanSearchText(value).split(/\s+/)
+    .map(token => stripKoreanParticles(token).trim())
+    .filter(token => token.length >= 2), 96);
+  const rawRecoveryTrimRange = (source = '', start = 0, end = 0) => {
+    const body = text(source);
+    let left = Math.max(0, Math.min(body.length, Number(start) || 0));
+    let right = Math.max(left, Math.min(body.length, Number(end) || 0));
+    while (left < right && /\s/.test(body[left])) left += 1;
+    while (right > left && /\s/.test(body[right - 1])) right -= 1;
+    return { start: left, end: right };
+  };
+  const rawRecoverySentenceUnits = source => {
+    const body = text(source || '');
+    if (!body) return [];
+    const units = [];
+    const closingChars = new Set(['"', "'", '”', '’', '」', '』', ')', ']', '】']);
+    const quotePairs = new Map([['“', '”'], ['「', '」'], ['『', '』']]);
+    let openQuote = '';
+    let start = 0;
+    const push = end => {
+      const range = rawRecoveryTrimRange(body, start, end);
+      if (range.end > range.start) units.push(range);
+      start = Math.max(start, end);
+    };
+    for (let index = 0; index < body.length; index += 1) {
+      const char = body[index];
+      if (char === '"' || char === "'") {
+        const escaped = index > 0 && body[index - 1] === '\\';
+        if (!escaped) openQuote = openQuote === char ? '' : (openQuote || char);
+        continue;
+      }
+      if (quotePairs.has(char)) {
+        if (!openQuote) openQuote = quotePairs.get(char);
+        continue;
+      }
+      if (openQuote && char === openQuote) {
+        openQuote = '';
+        continue;
+      }
+      if (char === '\n') {
+        if (!openQuote) {
+          push(index);
+          start = index + 1;
+        }
+        continue;
+      }
+      if (!/[.!?。！？]/.test(char)) continue;
+      let end = index + 1;
+      let closesQuote = false;
+      while (end < body.length && closingChars.has(body[end])) {
+        if (openQuote && body[end] === openQuote) closesQuote = true;
+        if ((openQuote === '"' || openQuote === "'") && body[end] === openQuote) closesQuote = true;
+        end += 1;
+      }
+      if (openQuote && !closesQuote) continue;
+      if (end >= body.length || /\s/.test(body[end])) {
+        push(end);
+        start = end;
+        if (closesQuote) openQuote = '';
+        index = end - 1;
+      }
+    }
+    if (start < body.length) push(body.length);
+    if (!units.length && body.trim()) units.push(rawRecoveryTrimRange(body, 0, body.length));
+    return units;
+  };
+  const rawRecoverySplitLongRange = (source, range, maxChars = RAW_RECOVERY_PASSAGE_MAX_CHARS) => {
+    const body = text(source || '');
+    const out = [];
+    let cursor = range.start;
+    while (cursor < range.end) {
+      let end = Math.min(range.end, cursor + maxChars);
+      if (end < range.end) {
+        const candidate = body.slice(cursor, end);
+        const split = Math.max(candidate.lastIndexOf('\n'), candidate.lastIndexOf(' '));
+        if (split >= Math.floor(maxChars * 0.55)) end = cursor + split;
+      }
+      const trimmed = rawRecoveryTrimRange(body, cursor, end);
+      if (trimmed.end > trimmed.start) out.push(trimmed);
+      if (end >= range.end) break;
+      cursor = Math.max(cursor + 1, end - 120);
+    }
+    return out;
+  };
+  const rawRecoveryPassagesForRole = (record = {}, role = 'assistant', maxChars = RAW_RECOVERY_PASSAGE_MAX_CHARS) => {
+    const source = text(record?.[role]?.text || '');
+    if (!source) return [];
+    let units = rawRecoverySentenceUnits(source);
+    const expandedUnits = [];
+    for (const unit of units) {
+      if (unit.end - unit.start > maxChars) expandedUnits.push(...rawRecoverySplitLongRange(source, unit, maxChars));
+      else expandedUnits.push(unit);
+    }
+    units = expandedUnits;
+    if (!units.length) return [];
+    const passages = [];
+    const seen = new Set();
+    for (let index = 0; index < units.length; index += 1) {
+      const focus = units[index];
+      let left = Math.max(0, index - 1);
+      let right = Math.min(units.length - 1, index + 1);
+      let start = units[left].start;
+      let end = units[right].end;
+      while (end - start > maxChars && (left < index || right > index)) {
+        if ((right - index) >= (index - left) && right > index) right -= 1;
+        else if (left < index) left += 1;
+        start = units[left].start;
+        end = units[right].end;
+      }
+      if (end - start > maxChars) {
+        start = focus.start;
+        end = focus.end;
+      }
+      const range = rawRecoveryTrimRange(source, start, end);
+      const key = `${range.start}:${range.end}`;
+      if (seen.has(key) || range.end - range.start < RAW_RECOVERY_PASSAGE_MIN_CHARS) continue;
+      seen.add(key);
+      const passageText = source.slice(range.start, range.end);
+      passages.push({
+        passageId: stableHash64([record.recordId, role, range.start, range.end].join('\u0001')),
+        vaultRecordId: record.recordId,
+        pairIndex: record.pairIndex,
+        role,
+        startOffset: range.start,
+        endOffset: range.end,
+        focusStartOffset: focus.start,
+        focusEndOffset: focus.end,
+        text: passageText,
+        focusText: source.slice(focus.start, focus.end),
+        sourceHash: record?.[role]?.hash || stableHash64(source),
+        recordUpdatedAt: record.updatedAt,
+        reason: record.reason
+      });
+    }
+    return passages;
+  };
+  const rawRecoveryQueryPhrases = query => {
+    const body = text(query || '').trim();
+    const phrases = [];
+    const re = /["“「『]([^"”」』\n]{2,160})["”」』]/g;
+    let match;
+    while ((match = re.exec(body))) phrases.push(cleanSearchText(match[1]));
+    const cleaned = cleanSearchText(body);
+    const surface = rawRecoverySurfaceTokens(body);
+    if (cleaned.length >= 6 && cleaned.length <= 140 && surface.length >= 2 && surface.length <= 10) phrases.push(cleaned);
+    for (let index = 0; index < surface.length - 1; index += 1) phrases.push(`${surface[index]} ${surface[index + 1]}`);
+    return uniq(phrases.filter(value => value.length >= 4), 12);
+  };
+  const rawRecoveryDocFrequency = passages => {
+    const docFreq = new Map();
+    for (const passage of passages) {
+      const unique = new Set(passage.docTokens || []);
+      unique.forEach(token => docFreq.set(token, (docFreq.get(token) || 0) + 1));
+    }
+    return docFreq;
+  };
+  const rawRecoveryIdf = (term, docFreq, docCount) => {
+    const df = Math.max(0, Number(docFreq.get(normalizeKey(term)) || 0));
+    return Math.log(1 + ((Math.max(1, docCount) - df + 0.5) / (df + 0.5)));
+  };
+  const rawRecoveryWeightedCoverage = (terms = [], passageSet = new Set(), docFreq = new Map(), docCount = 1) => {
+    const query = uniq(terms.map(normalizeKey).filter(Boolean), 96);
+    let total = 0;
+    let matched = 0;
+    let maxMatchedIdf = 0;
+    const matchedTerms = [];
+    for (const term of query) {
+      const idf = rawRecoveryIdf(term, docFreq, docCount);
+      total += idf;
+      if (passageSet.has(term)) {
+        matched += idf;
+        maxMatchedIdf = Math.max(maxMatchedIdf, idf);
+        matchedTerms.push(term);
+      }
+    }
+    return {
+      score: total > 0 ? matched / total : 0,
+      totalWeight: total,
+      matchedWeight: matched,
+      maxMatchedIdf,
+      matchedTerms
+    };
+  };
+  const rawRecoveryProximity = (body = '', terms = []) => {
+    const normalized = cleanSearchText(body);
+    const positions = uniq(terms.map(normalizeKey).filter(term => term.length >= 2), 20)
+      .map(term => ({ term, at: normalized.indexOf(term) }))
+      .filter(row => row.at >= 0)
+      .sort((a, b) => a.at - b.at);
+    if (!positions.length) return { score: 0, matched: 0, span: 0 };
+    if (positions.length === 1) return { score: 0.22, matched: 1, span: 0 };
+    let bestSpan = Number.POSITIVE_INFINITY;
+    for (let left = 0; left < positions.length; left += 1) {
+      for (let right = left + 1; right < positions.length; right += 1) {
+        bestSpan = Math.min(bestSpan, positions[right].at - positions[left].at);
+      }
+    }
+    return {
+      score: clamp((positions.length / Math.max(2, terms.length)) * (1 / (1 + bestSpan / 90)) * 1.7, 0, 1, 0),
+      matched: positions.length,
+      span: Number.isFinite(bestSpan) ? bestSpan : 0
+    };
+  };
+  const rawRecoveryRrf = (rows = [], selectors = []) => {
+    const rankMaps = selectors.map(selector => {
+      const ranked = rows.slice().filter(selector.filter || (() => true))
+        .sort((a, b) => selector.score(b) - selector.score(a));
+      return new Map(ranked.map((row, index) => [row.passageId, index + 1]));
+    });
+    let max = 0;
+    const scores = new Map();
+    for (const row of rows) {
+      let score = 0;
+      for (const ranks of rankMaps) {
+        const rank = ranks.get(row.passageId);
+        if (rank) score += 1 / (RAW_RECOVERY_RRF_K + rank);
+      }
+      scores.set(row.passageId, score);
+      max = Math.max(max, score);
+    }
+    return rows.map(row => ({ ...row, rrfScore: max > 0 ? (scores.get(row.passageId) || 0) / max : 0 }));
+  };
+  const rawRecoverySupportTerms = (contextFocus = null, primaryTerms = [], docFreq = new Map(), docCount = 1) => {
+    if (!contextFocus?.active || !contextFocus?.ambiguous) return [];
+    const primary = new Set(primaryTerms.map(normalizeKey));
+    return uniq([
+      ...ensureArray(contextFocus.entityTokens),
+      ...ensureArray(contextFocus.supportTokens),
+      ...ensureArray(contextFocus.primaryTokens)
+    ].map(normalizeKey).filter(term => term.length >= 2 && !primary.has(term) && Number(docFreq.get(term) || 0) > 0), 160)
+      .sort((a, b) => rawRecoveryIdf(b, docFreq, docCount) - rawRecoveryIdf(a, docFreq, docCount))
+      .slice(0, 14);
+  };
+  const RAW_RECOVERY_PRIVATE_THOUGHT_RE = /(?:속으로|마음속|내심|혼자\s*생각|생각했다|생각하며|독백|아무에게도\s*(?:말하지|알리지)|누구에게도\s*(?:말하지|알리지)|몰래|비밀로|숨기고|감추고|private\s*thought|internally|to\s*(?:himself|herself|themselves)|unspoken|without\s*telling|secretly|心の中|内心|誰にも言わ|秘密に|心里|内心|没有告诉任何人|秘密地)/i;
+  const RAW_RECOVERY_PUBLIC_SPEECH_RE = /(?:말했다|대답했다|외쳤다|물었다|알렸다|고백했다|전했다|들었다|보았다|목격했다|said|asked|answered|told|heard|saw|witnessed|言った|聞いた|見た|说道|问道|听到|看到)/i;
+  const rawRecoveryEpistemicProfile = (value = '', role = 'assistant') => {
+    const body = text(value || '');
+    const privateSignal = RAW_RECOVERY_PRIVATE_THOUGHT_RE.test(body);
+    const publicSignal = RAW_RECOVERY_PUBLIC_SPEECH_RE.test(body);
+    if (privateSignal && !publicSignal) return {
+      status: 'private_or_narrator_only_possible',
+      caution: true,
+      reason: 'private_thought_or_unshared_information'
+    };
+    if (privateSignal && publicSignal) return {
+      status: 'mixed_visibility',
+      caution: true,
+      reason: 'mixed_private_and_observable_information'
+    };
+    return {
+      status: /^(?:user|human)$/i.test(text(role)) ? 'user_action_or_intent' : 'visibility_unspecified',
+      caution: false,
+      reason: ''
+    };
+  };
+  const rawRecoveryScorePassage = (passage, queryPlan) => {
+    const normalizedText = cleanSearchText(passage.text);
+    const docSet = new Set(passage.docTokens || []);
+    const surfaceSet = new Set(passage.surfaceTokens || []);
+    const primaryLexical = lexicalStats(queryPlan.primarySurfaceTerms, passage.surfaceTokens || []);
+    const primaryBm25 = bm25Score(queryPlan.primaryTerms, passage.docTokens, queryPlan.docFreq, queryPlan.docCount, queryPlan.avgDocLen);
+    const primaryRare = rawRecoveryWeightedCoverage(queryPlan.primaryTerms, docSet, queryPlan.docFreq, queryPlan.docCount);
+    const primarySurfaceRare = rawRecoveryWeightedCoverage(queryPlan.primarySurfaceTerms, surfaceSet, queryPlan.surfaceDocFreq, queryPlan.docCount);
+    const trigram = lexicalStats(queryPlan.queryNgrams, passage.ngrams || []);
+    const proximity = rawRecoveryProximity(passage.text, queryPlan.primarySurfaceTerms);
+    let exact = 0;
+    const exactPhrases = [];
+    for (const phrase of queryPlan.phrases) {
+      const normalizedPhrase = cleanSearchText(phrase);
+      if (!normalizedPhrase || !normalizedText.includes(normalizedPhrase)) continue;
+      exactPhrases.push(normalizedPhrase);
+      exact = Math.max(exact, normalizedPhrase === queryPlan.cleanedQuery ? 0.9 : (normalizedPhrase.includes(' ') ? 0.78 : 0.64));
+    }
+    const supportLexical = lexicalStats(queryPlan.supportTerms, passage.docTokens || []);
+    const supportBm25 = queryPlan.supportTerms.length
+      ? bm25Score(queryPlan.supportTerms, passage.docTokens, queryPlan.docFreq, queryPlan.docCount, queryPlan.avgDocLen)
+      : 0;
+    const supportRare = rawRecoveryWeightedCoverage(queryPlan.supportTerms, docSet, queryPlan.docFreq, queryPlan.docCount);
+    const primaryEvidence = Math.max(exact, primaryBm25, primaryRare.score, primarySurfaceRare.score, trigram.coverage * 0.72);
+    const supportContribution = queryPlan.contextAmbiguous
+      ? (supportBm25 * 0.12 + supportRare.score * 0.09 + supportLexical.coverage * 0.06)
+      : 0;
+    const baseScore = clamp(
+      primaryBm25 * 0.40
+      + exact * 0.25
+      + Math.max(primaryRare.score, primarySurfaceRare.score) * 0.15
+      + proximity.score * 0.10
+      + Math.max(trigram.jaccard, trigram.coverage * 0.75) * 0.10
+      + supportContribution,
+      0, 1, 0
+    );
+    const genericPrimary = queryPlan.primarySurfaceTerms.length === 0
+      || queryPlan.primarySurfaceTerms.every(term => RAW_RECOVERY_GENERIC_QUERY_TERMS.has(normalizeKey(term)));
+    const exactGate = exact >= 0.72;
+    const multiTermGate = primaryLexical.overlap >= 2
+      && (primaryBm25 >= 0.05 || primarySurfaceRare.score >= 0.20 || proximity.score >= 0.42)
+      && primaryLexical.coverage >= 0.22;
+    const rareSingleGate = primaryLexical.overlap >= 1
+      && primarySurfaceRare.maxMatchedIdf >= queryPlan.rareSingleIdfFloor
+      && (primaryBm25 >= 0.12 || exact >= 0.60);
+    const contextGate = queryPlan.contextAmbiguous
+      && (genericPrimary || queryPlan.primarySurfaceTerms.length <= 2)
+      && supportLexical.overlap >= 2
+      && supportRare.score >= 0.28
+      && supportBm25 >= 0.07;
+    const passed = exactGate || multiTermGate || rareSingleGate || contextGate;
+    const reasons = [];
+    if (exactGate) reasons.push('exact_phrase');
+    if (multiTermGate) reasons.push('multi_term_lexical');
+    if (rareSingleGate) reasons.push('rare_term');
+    if (contextGate) reasons.push('recent_context_support');
+    const epistemic = rawRecoveryEpistemicProfile(passage.text, passage.role);
+    return {
+      ...passage,
+      epistemic,
+      baseScore,
+      passed,
+      reasons,
+      components: {
+        exact,
+        exactPhrases,
+        bm25: primaryBm25,
+        rareTermCoverage: Math.max(primaryRare.score, primarySurfaceRare.score),
+        primarySurfaceOverlap: primaryLexical.overlap,
+        primarySurfaceCoverage: primaryLexical.coverage,
+        proximity: proximity.score,
+        proximitySpan: proximity.span,
+        trigram: Math.max(trigram.jaccard, trigram.coverage * 0.75),
+        supportBm25,
+        supportCoverage: supportRare.score,
+        primaryEvidence
+      }
+    };
+  };
+  const ensureRawRecoveryTurnPairCoverage = (gated = [], fused = [], minScore = 0.16) => {
+    const out = gated.slice();
+    const ids = new Set(out.map(row => row.passageId));
+    const seedRows = out.slice(0, 4);
+    for (const seed of seedRows) {
+      const partner = fused
+        .filter(row => row.vaultRecordId === seed.vaultRecordId && row.role !== seed.role && !ids.has(row.passageId))
+        .filter(row => Number(row.score || 0) >= minScore * 0.72)
+        .filter(row => Number(row.components?.primarySurfaceOverlap || 0) >= 1
+          || Number(row.components?.supportCoverage || 0) >= 0.20
+          || Number(row.components?.primaryEvidence || 0) >= 0.12)
+        .sort((a, b) => b.score - a.score)[0] || null;
+      if (!partner) continue;
+      const paired = {
+        ...partner,
+        passed: true,
+        score: Math.max(Number(partner.score || 0), Number(seed.score || 0) * 0.82),
+        reasons: uniq([...ensureArray(partner.reasons), 'paired_turn_context'], 12)
+      };
+      out.push(paired);
+      ids.add(paired.passageId);
+    }
+    return out.sort((a, b) => b.score - a.score || b.pairIndex - a.pairIndex || a.startOffset - b.startOffset);
+  };
+  const rawRecoveryMergeSelections = (rows = [], maxItems = 3, maxChars = 2400) => {
+    const selected = [];
+    let usedChars = 0;
+    for (const row of rows) {
+      if (selected.length >= maxItems) break;
+      const duplicate = selected.find(existing => existing.vaultRecordId === row.vaultRecordId
+        && existing.role === row.role
+        && row.startOffset <= existing.endOffset + 80
+        && row.endOffset >= existing.startOffset - 80);
+      if (duplicate) {
+        const mergedStart = Math.min(duplicate.startOffset, row.startOffset);
+        const mergedEnd = Math.max(duplicate.endOffset, row.endOffset);
+        const mergedText = text(row.fullSourceText || '').slice(mergedStart, mergedEnd);
+        if (mergedText && usedChars - duplicate.text.length + mergedText.length <= maxChars) {
+          usedChars = usedChars - duplicate.text.length + mergedText.length;
+          duplicate.startOffset = mergedStart;
+          duplicate.endOffset = mergedEnd;
+          duplicate.text = mergedText;
+          duplicate.score = Math.max(duplicate.score, row.score);
+          duplicate.reasons = uniq([...duplicate.reasons, ...row.reasons], 12);
+        }
+        continue;
+      }
+      let evidenceText = row.text;
+      let startOffset = row.startOffset;
+      let endOffset = row.endOffset;
+      const remaining = maxChars - usedChars;
+      if (evidenceText.length > remaining) {
+        const focusText = text(row.focusText || '').trim();
+        if (!focusText || focusText.length > remaining || focusText.length < RAW_RECOVERY_PASSAGE_MIN_CHARS) continue;
+        evidenceText = focusText;
+        startOffset = row.focusStartOffset;
+        endOffset = row.focusEndOffset;
+      }
+      if (!evidenceText || evidenceText.length > remaining) continue;
+      selected.push({ ...row, text: evidenceText, startOffset, endOffset });
+      usedChars += evidenceText.length;
+    }
+    return { selected, usedChars };
+  };
+  const searchRecoveryVaultRawPassages = async (scope = {}, query = '', messages = [], settings = Memory.settings || DEFAULT_SETTINGS, snapshot = null, worldline = null) => {
+    const startedAt = now();
+    const empty = reason => {
+      const result = {
+        version: RAW_RECOVERY_RECALL_VERSION,
+        active: false,
+        reason,
+        scopeKey: compact(scope?.key || '', 196),
+        records: [],
+        vaultRecords: 0,
+        passages: 0,
+        candidates: 0,
+        gateRejected: 0,
+        supportTerms: [],
+        elapsedMs: now() - startedAt
+      };
+      Memory.lastRawRecoveryRecall = result;
+      return result;
+    };
+    if (settings?.recoveryVaultEnabled === false || settings?.rawPassageRecallEnabled === false) return empty('disabled');
+    if (!scope?.confident || !scope?.key) return empty('scope_unavailable');
+    const cleanedQuery = cleanSearchText(query);
+    if (!cleanedQuery) return empty('query_empty');
+    const lifecycle = snapshot && worldline
+      ? await reconcileRecoveryVaultWorldlineLifecycleDirect(scope, snapshot, worldline, { reason: 'raw_recall_worldline_reconcile' })
+      : { vault: await loadRecoveryVault(scope.key), activeRecords: [] };
+    const vault = lifecycle.vault || await loadRecoveryVault(scope.key);
+    const active = activeRecoveryVaultRecords(vault, snapshot, worldline);
+    const pruneIds = [...active.packetDischargedIds];
+    if (pruneIds.length) void pruneRecoveryVaultRecordIds(scope.key, pruneIds, 'packet_discharge_reconcile').catch(() => {});
+    if (!active.records.length) return empty(vault.records.length ? 'no_active_packet_debt' : 'vault_empty');
+    const passageMaxChars = Math.max(240, Math.min(RAW_RECOVERY_PASSAGE_MAX_CHARS, Number(settings.rawRecallMaxChars || DEFAULT_SETTINGS.rawRecallMaxChars)));
+    const passages = active.records.flatMap(record => [
+      ...rawRecoveryPassagesForRole(record, 'user', passageMaxChars),
+      ...rawRecoveryPassagesForRole(record, 'assistant', passageMaxChars)
+    ]).slice(-640);
+    if (!passages.length) return empty('passage_empty');
+    for (const passage of passages) {
+      passage.fullSourceText = text(active.records.find(record => record.recordId === passage.vaultRecordId)?.[passage.role]?.text || '');
+      passage.docTokens = bm25DocumentTokens(passage.text, 220).map(normalizeKey).filter(Boolean);
+      passage.surfaceTokens = rawRecoverySurfaceTokens(passage.text);
+      passage.ngrams = charNgramTokens(passage.text, 220);
+    }
+    const docFreq = rawRecoveryDocFrequency(passages);
+    const surfaceDocFreq = new Map();
+    for (const passage of passages) {
+      new Set(passage.surfaceTokens).forEach(token => surfaceDocFreq.set(token, (surfaceDocFreq.get(token) || 0) + 1));
+    }
+    const docCount = Math.max(1, passages.length);
+    const avgDocLen = passages.reduce((sum, passage) => sum + passage.docTokens.length, 0) / docCount;
+    const primaryTerms = tokenize(query, 120).map(normalizeKey).filter(Boolean);
+    const primarySurfaceTerms = rawRecoverySurfaceTokens(query);
+    const recentContext = settings?.retrievalRecentContext || buildRecentContextFocus(messages, query, settings);
+    const supportTerms = rawRecoverySupportTerms(recentContext, primaryTerms, docFreq, docCount);
+    const queryPlan = {
+      cleanedQuery,
+      phrases: rawRecoveryQueryPhrases(query),
+      primaryTerms,
+      primarySurfaceTerms,
+      queryNgrams: charNgramTokens(query, 180),
+      supportTerms,
+      contextAmbiguous: recentContext?.ambiguous === true,
+      docFreq,
+      surfaceDocFreq,
+      docCount,
+      avgDocLen,
+      rareSingleIdfFloor: Math.max(0.75, Math.log(1 + ((docCount - 1 + 0.5) / 1.5)) * 0.72)
+    };
+    const scored = passages.map(passage => rawRecoveryScorePassage(passage, queryPlan));
+    const fused = rawRecoveryRrf(scored, [
+      { score: row => Number(row.components?.exact || 0) },
+      { score: row => Number(row.components?.bm25 || 0) },
+      { score: row => Number(row.components?.rareTermCoverage || 0) },
+      { score: row => Number(row.components?.proximity || 0) },
+      { score: row => Number(row.components?.trigram || 0) }
+    ]).map(row => {
+      const sourceRecord = active.records.find(record => record.recordId === row.vaultRecordId);
+      const recency = sourceRecord?.inheritedSessionHistory === true
+        ? 0.08
+        : clamp(Number(row.pairIndex || 0) / Math.max(1, ...active.records.filter(record => record.inheritedSessionHistory !== true).map(record => Number(record.pairIndex || 0)), 1), 0, 1, 0);
+      return { ...row, historyScope: sourceRecord?.inheritedSessionHistory === true ? 'predecessor_session' : 'current_session', score: clamp(row.baseScore * 0.77 + row.rrfScore * 0.215 + recency * 0.015, 0, 1, 0) };
+    });
+    const minScore = clamp(Number(settings.rawRecallMinScore ?? DEFAULT_SETTINGS.rawRecallMinScore), 0.04, 0.8, DEFAULT_SETTINGS.rawRecallMinScore);
+    let gated = fused.filter(row => row.passed && row.score >= minScore)
+      .sort((a, b) => b.score - a.score || b.pairIndex - a.pairIndex || a.startOffset - b.startOffset)
+      .slice(0, RAW_RECOVERY_CANDIDATE_LIMIT);
+    gated = ensureRawRecoveryTurnPairCoverage(gated, fused, minScore).slice(0, RAW_RECOVERY_CANDIDATE_LIMIT);
+    const maxItems = Math.max(1, Math.min(8, Number(settings.rawRecallMaxItems || DEFAULT_SETTINGS.rawRecallMaxItems)));
+    const maxChars = Math.max(600, Math.min(8000, Number(settings.rawRecallMaxChars || DEFAULT_SETTINGS.rawRecallMaxChars)));
+    const packed = rawRecoveryMergeSelections(gated, maxItems, maxChars);
+    const records = packed.selected.map(row => ({
+      id: `raw:${row.vaultRecordId}:${row.role}:${row.startOffset}:${row.endOffset}`,
+      vaultRecordId: row.vaultRecordId,
+      pairIndex: row.pairIndex,
+      role: row.role,
+      startOffset: row.startOffset,
+      endOffset: row.endOffset,
+      sourceHash: row.sourceHash,
+      text: row.text,
+      score: Number(row.score.toFixed(4)),
+      rrfScore: Number(row.rrfScore.toFixed(4)),
+      reasons: row.reasons,
+      historyScope: row.historyScope || 'current_session',
+      epistemicStatus: text(row?.epistemic?.status || 'visibility_unspecified'),
+      epistemicCaution: row?.epistemic?.caution === true,
+      epistemicReason: text(row?.epistemic?.reason || ''),
+      components: Object.fromEntries(Object.entries(row.components || {}).map(([key, value]) => [key,
+        typeof value === 'number' ? Number(value.toFixed(4)) : value
+      ]))
+    }));
+    const result = {
+      version: RAW_RECOVERY_RECALL_VERSION,
+      active: records.length > 0,
+      reason: records.length ? 'gated_verbatim_evidence' : 'no_lexical_evidence',
+      scopeKey: scope.key,
+      records,
+      vaultRecords: active.records.length,
+      passages: passages.length,
+      candidates: scored.length,
+      gateRejected: Math.max(0, scored.length - fused.filter(row => row.passed).length),
+      scoreRejected: Math.max(0, fused.filter(row => row.passed).length - gated.length),
+      supportTerms,
+      topCandidates: fused.slice().sort((a, b) => b.score - a.score).slice(0, 8).map(row => ({
+        pairIndex: row.pairIndex,
+        role: row.role,
+        score: Number(row.score.toFixed(4)),
+        passed: row.passed === true,
+        reasons: row.reasons,
+        components: Object.fromEntries(Object.entries(row.components || {}).map(([key, value]) => [key,
+          typeof value === 'number' ? Number(value.toFixed(4)) : value
+        ])),
+        preview: compact(row.text, 220)
+      })),
+      contextMessages: Number(recentContext?.messagesUsed || 0),
+      contextReason: text(recentContext?.reason || ''),
+      usedChars: packed.usedChars,
+      maxChars,
+      elapsedMs: now() - startedAt
+    };
+    Memory.lastRawRecoveryRecall = {
+      ...result,
+      records: records.map(record => ({
+        id: record.id,
+        pairIndex: record.pairIndex,
+        role: record.role,
+        score: record.score,
+        reasons: record.reasons,
+        preview: compact(record.text, 260)
+      }))
+    };
+    return result;
+  };
+
+  const buildRawRecoveryAnchorStub = (record = {}) => {
+    const body = text(record?.text || '');
+    const surfaceTokens = rawRecoverySurfaceTokens(body).filter(token => !RAW_RECOVERY_GENERIC_QUERY_TERMS.has(normalizeKey(token))).slice(0, 64);
+    const canonicalAnchors = canonicalRecallTokensForText(body)
+      .filter(value => CANONICAL_RECALL_TOKEN_PREFIX_RE.test(text(value)))
+      .filter(value => !GLOBAL_PACKET_ROUTING_GENERIC_CANONICAL_RE.test(text(value)))
+      .slice(0, 40);
+    return {
+      version: RAW_RECOVERY_ANCHOR_VERSION,
+      id: text(record?.id || ''),
+      pairIndex: Math.max(1, Number(record?.pairIndex || 1) || 1),
+      role: text(record?.role || 'assistant'),
+      historyScope: text(record?.historyScope || 'current_session'),
+      sourceHash: text(record?.sourceHash || ''),
+      surfaceTokens,
+      canonicalAnchors,
+      epistemicStatus: text(record?.epistemicStatus || 'visibility_unspecified'),
+      epistemicCaution: record?.epistemicCaution === true
+    };
+  };
+  const integrateRawRecoveryAnchors = (records = [], selected = {}, query = '') => {
+    const rawRows = ensureArray(records);
+    const structuredRows = ['entity', 'world', 'narrative', 'planner']
+      .flatMap(axis => ensureArray(selected?.[axis]).map(row => ({ axis, row })))
+      .filter(entry => entry.row);
+    if (!rawRows.length || !structuredRows.length) {
+      const result = {
+        version: RAW_RECOVERY_ANCHOR_VERSION,
+        active: false,
+        rawRecords: rawRows.length,
+        structuredRows: structuredRows.length,
+        linkedRecords: 0,
+        links: 0,
+        records: rawRows
+      };
+      Memory.lastRawAnchorIntegration = { ...result, records: undefined };
+      return result;
+    }
+    const queryTokens = new Set(rawRecoverySurfaceTokens(query).map(normalizeKey));
+    let totalLinks = 0;
+    const linked = rawRows.map(record => {
+      const stub = buildRawRecoveryAnchorStub(record);
+      const rawTokens = new Set(stub.surfaceTokens.map(normalizeKey));
+      const rawCanonical = new Set(stub.canonicalAnchors.map(normalizeKey));
+      const candidates = structuredRows.map(({ axis, row }) => {
+        const rowTokens = new Set(mergeValues([
+          row?.retrieval?.tokens,
+          row?.retrieval?.priorityTerms,
+          tokenize(row?.publicText || row?.publicProfile || '', 160)
+        ], 260).map(normalizeKey).filter(Boolean));
+        const rowCanonical = new Set(mergeValues([
+          row?.retrieval?.canonicalAnchors,
+          row?.links?.canonicalAnchors
+        ], 80).map(normalizeKey).filter(Boolean));
+        const sharedTokens = [...rawTokens].filter(token => rowTokens.has(token) && token.length >= 2);
+        const sharedCanonical = [...rawCanonical].filter(token => rowCanonical.has(token));
+        const queryAgreement = sharedTokens.filter(token => queryTokens.has(token)).length;
+        const tokenCoverage = sharedTokens.length / Math.max(1, Math.min(rawTokens.size, rowTokens.size));
+        const score = clamp(
+          Math.min(0.64, sharedCanonical.length * 0.34)
+          + Math.min(0.28, tokenCoverage * 0.42)
+          + Math.min(0.08, queryAgreement * 0.04),
+          0, 1, 0
+        );
+        const passed = sharedCanonical.length > 0 || sharedTokens.length >= 2;
+        return {
+          axis,
+          ref: text(row?.publicRef || row?.id || ''),
+          key: row?.unifiedMemoryKey || unifiedMemoryKeyFor(row),
+          score,
+          sharedTokens: sharedTokens.slice(0, 12),
+          sharedCanonical: sharedCanonical.slice(0, 12),
+          passed
+        };
+      }).filter(candidate => candidate.passed && candidate.score >= 0.16)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 3);
+      totalLinks += candidates.length;
+      const maxLinkScore = Math.max(0, ...candidates.map(candidate => Number(candidate.score || 0)));
+      return {
+        ...record,
+        rawAnchorStub: stub,
+        linkedStructuredRefs: candidates.map(candidate => ({
+          axis: candidate.axis,
+          ref: candidate.ref,
+          score: Number(candidate.score.toFixed(4)),
+          sharedTokens: candidate.sharedTokens,
+          sharedCanonical: candidate.sharedCanonical
+        })),
+        rawAnchorLinkScore: Number(maxLinkScore.toFixed(4))
+      };
+    }).sort((a, b) => Number(b.rawAnchorLinkScore || 0) - Number(a.rawAnchorLinkScore || 0)
+      || Number(b.score || 0) - Number(a.score || 0));
+    const result = {
+      version: RAW_RECOVERY_ANCHOR_VERSION,
+      active: totalLinks > 0,
+      rawRecords: rawRows.length,
+      structuredRows: structuredRows.length,
+      linkedRecords: linked.filter(record => ensureArray(record.linkedStructuredRefs).length > 0).length,
+      links: totalLinks,
+      records: linked
+    };
+    Memory.lastRawAnchorIntegration = {
+      version: result.version,
+      active: result.active,
+      rawRecords: result.rawRecords,
+      structuredRows: result.structuredRows,
+      linkedRecords: result.linkedRecords,
+      links: result.links,
+      records: linked.map(record => ({
+        id: record.id,
+        pairIndex: record.pairIndex,
+        role: record.role,
+        epistemicCaution: record.epistemicCaution === true,
+        rawAnchorLinkScore: record.rawAnchorLinkScore,
+        linkedStructuredRefs: ensureArray(record.linkedStructuredRefs)
+      }))
+    };
+    return result;
+  };
+
   const requestLineageFor = (messages, snapshot, scope, worldline) => {
     const sourceMessages = ensureArray(messages);
     if (!scope?.confident) return null;
@@ -10363,7 +16686,8 @@ const MODE_PROFILES = Object.freeze({
     );
     const userHash = visibleUser ? stableHash64(visibleUser) : '';
     if (!userHash) return null;
-    const stableUserSourceId = stableMessageSourceId(lastUser?.message);
+    const stableUserIdentity = stableMessageSourceIdentity(lastUser?.message);
+    const stableUserSourceId = stableUserIdentity.id;
     const userSourceId = stableUserSourceId || `request-index:${lastUser?.index ?? resolvedIndex}`;
     const userMessageIdHash = stableHash64(userSourceId);
     const pairs = ensureArray(snapshot?.conversationPairs);
@@ -10416,6 +16740,8 @@ const MODE_PROFILES = Object.freeze({
       userHash,
       userMessageIdHash,
       userMessageIdentityStable: Boolean(stableUserSourceId),
+      userMessageIdentitySource: stableUserIdentity.source || (stableUserSourceId ? 'stable_fallback' : 'request_index'),
+      userMessageIdentityCanonical: stableUserIdentity.canonical === true,
       parentTurnNodeId,
       logicalTurnId,
       requestNonce: stableHash64(['request_lineage_v1', scope.key, snapshot?.chatSnapshotHash || '', parentTurnNodeId, logicalTurnId].join('\u0001'))
@@ -14454,6 +20780,290 @@ const MODE_PROFILES = Object.freeze({
     if (!key || key.length < 2 || UNIFIED_MEMORY_GENERIC_NODE_RE.test(key)) return '';
     return key;
   };
+  const typedGraphRefValues = (...sources) => {
+    const out = [];
+    const seen = new Set();
+    const visit = value => {
+      if (value == null) return;
+      if (Array.isArray(value)) { value.forEach(visit); return; }
+      if (objectish(value)) {
+        const directKeys = [
+          'ref', 'id', 'publicRef', 'public_ref', 'uri', '_sourceRef',
+          'sourceRef', 'source_ref', 'targetRef', 'target_ref',
+          'memoryRef', 'memory_ref', 'eventRef', 'event_ref',
+          'promiseRef', 'promise_ref', 'sourceId', 'source_id',
+          'targetId', 'target_id'
+        ];
+        let found = false;
+        directKeys.forEach(key => {
+          if (!Object.prototype.hasOwnProperty.call(value, key)) return;
+          found = true;
+          visit(value[key]);
+        });
+        if (!found && typeof value.value === 'string') visit(value.value);
+        return;
+      }
+      const raw = text(value).trim();
+      const key = normalizeKey(raw);
+      if (!key || key.length < 3 || seen.has(key)) return;
+      seen.add(key);
+      out.push(raw);
+    };
+    sources.forEach(visit);
+    return out.slice(0, 96);
+  };
+  const typedGraphOwnReferenceKeys = row => uniq(typedGraphRefValues([
+    row?.publicRef,
+    row?.id,
+    row?.unifiedMemoryKey,
+    row?.locator?.uri,
+    row?.locator?.anchorHash,
+    row?.retrieval?.publicRef
+  ]).map(normalizeKey).filter(Boolean), 24);
+  const typedGraphRowOrder = (row = {}, store = {}) => {
+    const currentTurn = Math.max(0, Number(store?.worldlineHeadOrdinal || store?.turn || 0) || 0);
+    const turn = Math.max(0, Number(packetMemoryTurnOf(row, currentTurn) || 0) || 0);
+    const pair = Math.max(0, Number(row?.locator?.sourcePairIndex || 0) || 0);
+    const message = Math.max(0, Number(row?.locator?.messageIndex || 0) || 0);
+    const timestamp = Math.max(0, Number(row?.updatedAt || row?.locator?.createdAt || 0) || 0);
+    return turn * 1e12 + pair * 1e8 + message * 1e4 + (timestamp % 10000);
+  };
+  const typedGraphRowBody = row => text([
+    row?.publicText,
+    row?.publicProfile,
+    row?.lifecycle?.status,
+    row?.lifecycle?.timeScope,
+    row?.visibility?.truthState,
+    row?.retrieval?.atomicRecord?.predicate,
+    row?.retrieval?.priorityTerms,
+    row?.links?.canonicalAnchors
+  ].flatMap(ensureArray).join(' ')).normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim();
+  const typedGraphRowStateSignature = row => normalizeKey([
+    row?.lifecycle?.status,
+    row?.lifecycle?.timeScope,
+    row?.visibility?.truthState,
+    row?.retrieval?.atomicRecord?.predicate,
+    row?.publicText
+  ].flatMap(ensureArray).join('|'));
+  const typedGraphFeatureSet = values => new Set(ensureArray(values).map(unifiedMemorySpecificNode).filter(Boolean));
+  const typedGraphSetOverlap = (left = [], right = []) => {
+    const a = left instanceof Set ? left : typedGraphFeatureSet(left);
+    const b = right instanceof Set ? right : typedGraphFeatureSet(right);
+    if (!a.size || !b.size) return 0;
+    let overlap = 0;
+    a.forEach(value => { if (b.has(value)) overlap += 1; });
+    return overlap / Math.max(1, Math.min(a.size, b.size));
+  };
+  const typedGraphSharedSignal = (left = {}, right = {}) => {
+    const a = unifiedMemoryRelationFeatures(left);
+    const b = unifiedMemoryRelationFeatures(right);
+    return clamp(Math.max(
+      typedGraphSetOverlap(a.entities, b.entities) * 0.92,
+      typedGraphSetOverlap(a.canonical, b.canonical),
+      typedGraphSetOverlap(a.places, b.places) * 0.94,
+      typedGraphSetOverlap(a.objects, b.objects) * 0.90,
+      a.scene && b.scene && a.scene === b.scene ? 0.58 : 0,
+      a.packet && b.packet && a.packet === b.packet ? 0.44 : 0
+    ), 0, 1, 0);
+  };
+  const TYPED_GRAPH_GENERIC_CANONICAL_RE = /^(?:promise:(?:active|pending)|state:(?:active|current|unknown)|event:(?:active|current|event)|info:(?:state|status|memory)|intent:(?:future|next)|narrative:(?:conflict|story)|relation:(?:state|status))$/i;
+  const TYPED_GRAPH_GENERIC_LEXICAL_TERMS = new Set([
+    'active', 'current', 'state', 'status', 'event', 'memory', 'scene', 'summary', 'promise',
+    'promised', 'pending', 'related', 'relevant', 'kept', 'fulfilled', 'resolved',
+    'the', 'and', 'but', 'for', 'from', 'into', 'that', 'this', 'then', 'there', 'here',
+    'was', 'were', 'had', 'has', 'have', 'did', 'does', 'doing', 'with', 'without',
+    '현재', '상태', '사건', '기억', '장면', '요약', '약속', '진행', '관련',
+    'する', 'した', '状態', '事件', '記憶', '場面', '約束'
+  ].map(normalizeKey));
+  const TYPED_GRAPH_GENERIC_CANONICAL_KEYS = new Set([
+    'promise:active', 'promise:pending',
+    'state:active', 'state:current', 'state:unknown',
+    'event:active', 'event:current', 'event:event',
+    'info:state', 'info:status', 'info:memory',
+    'intent:future', 'intent:next',
+    'narrative:conflict', 'narrative:story',
+    'relation:state', 'relation:status'
+  ].map(normalizeKey));
+  const typedGraphSpecificCanonicalValues = row => mergeValues([
+    row?.retrieval?.canonicalAnchors,
+    row?.links?.canonicalAnchors
+  ], 48).filter(value => CANONICAL_RECALL_TOKEN_PREFIX_RE.test(text(value))
+    && !TYPED_GRAPH_GENERIC_CANONICAL_RE.test(text(value).trim()));
+  const typedGraphLexicalAnchorTerms = row => {
+    // Canonical tokens already have their own exact channel. Feeding generic
+    // canonical labels such as `promise:active` back through tokenization can
+    // make unrelated promise rows look lexically identical, so exclude them
+    // from the prose-overlap channel.
+    const priorityTerms = ensureArray(row?.retrieval?.priorityTerms)
+      .filter(value => !CANONICAL_RECALL_TOKEN_PREFIX_RE.test(text(value).trim()));
+    return uniq(tokenize([
+      row?.publicText,
+      row?.publicProfile,
+      priorityTerms
+    ].flatMap(ensureArray).join(' '), 120).map(normalizeKey)
+      .filter(value => value.length >= 3
+        && !TYPED_GRAPH_GENERIC_LEXICAL_TERMS.has(value)
+        && !TYPED_GRAPH_GENERIC_CANONICAL_KEYS.has(value)), 80);
+  };
+  const typedGraphInferenceAnchorSignals = (left = {}, right = {}) => {
+    const a = unifiedMemoryRelationFeatures(left);
+    const b = unifiedMemoryRelationFeatures(right);
+    const entity = typedGraphSetOverlap(a.entities, b.entities);
+    const place = typedGraphSetOverlap(a.places, b.places);
+    const object = typedGraphSetOverlap(a.objects, b.objects);
+    const refs = typedGraphSetOverlap(a.refs, b.refs);
+    const canonical = typedGraphSetOverlap(
+      typedGraphSpecificCanonicalValues(left),
+      typedGraphSpecificCanonicalValues(right)
+    );
+    const leftLexical = typedGraphLexicalAnchorTerms(left);
+    const rightLexical = typedGraphLexicalAnchorTerms(right);
+    const rightLexicalSet = new Set(rightLexical);
+    const sharedLexicalTerms = leftLexical.filter(value => rightLexicalSet.has(value));
+    const lexicalRaw = typedGraphSetOverlap(leftLexical, rightLexical);
+    // One incidental function word must never be enough to infer an event
+    // transition. Accept either multiple concrete overlaps or one long,
+    // specific surface anchor; Korean/Japanese n-grams naturally provide
+    // multiple overlaps for a genuinely shared phrase.
+    const lexical = sharedLexicalTerms.length >= 2
+      ? lexicalRaw
+      : (sharedLexicalTerms.some(value => value.length >= 6) ? Math.min(lexicalRaw, 0.24) : 0);
+    const general = clamp(Math.max(
+      entity * 0.92, canonical, place * 0.90, object * 0.92, refs, lexical * 0.80
+    ), 0, 1, 0);
+    // Cross-axis event/constraint inference must not be supported by a generic
+    // `promise:active` or `narrative:conflict` token alone. Require a concrete
+    // non-entity anchor, or an entity together with lexical event overlap.
+    const transition = clamp(Math.max(
+      canonical, place * 0.90, object * 0.92, refs, lexical * 0.84,
+      Math.min(entity, lexical * 1.35)
+    ), 0, 1, 0);
+    return {
+      entity, place, object, refs, canonical, lexical, general, transition,
+      lexicalRaw, sharedLexicalTerms: sharedLexicalTerms.slice(0, 12)
+    };
+  };
+  const typedGraphAtomicTopicKeys = row => {
+    const atomic = row?.retrieval?.atomicRecord || {};
+    const subjects = mergeValues([
+      atomic.subjectRefs,
+      row?.retrieval?.subject,
+      row?.retrieval?.entityNames
+    ], 16).map(unifiedMemorySpecificNode).filter(Boolean);
+    const participants = mergeValues([
+      atomic.participants,
+      row?.retrieval?.relationEndpoints
+    ], 16).map(unifiedMemorySpecificNode).filter(Boolean).sort();
+    const predicate = unifiedMemorySpecificNode(atomic.predicate || row?.category || '');
+    const kind = unifiedMemorySpecificNode(atomic.kind || row?.axis || '');
+    const canonicalRaw = mergeValues([
+      row?.retrieval?.canonicalAnchors,
+      row?.links?.canonicalAnchors
+    ], 32).filter(value => /^(?:relation|state|promise|event|object|place|info|intent):/i.test(text(value)));
+    const canonical = canonicalRaw.map(unifiedMemorySpecificNode).filter(Boolean);
+    const crossAxisCanonical = new Set(canonicalRaw
+      .filter(value => /^(?:promise|relation|state|event|info|intent):/i.test(text(value)))
+      .map(unifiedMemorySpecificNode).filter(Boolean));
+    const keys = [];
+    if (row?.category === 'relation' && participants.length >= 2) keys.push(`relation|${participants.slice(0, 4).join('|')}`);
+    if (subjects.length && predicate) keys.push(`${kind || row?.axis}|${subjects[0]}|${predicate}`);
+    canonical.slice(0, 8).forEach(token => {
+      const subject = subjects[0] || participants[0] || 'global';
+      keys.push(`${row?.axis}|${subject}|${token}`);
+      if (crossAxisCanonical.has(token)) keys.push(`cross_axis|${subject}|${token}`);
+    });
+    return uniq(keys.map(normalizeKey).filter(key => key.length >= 6), 12);
+  };
+  const typedGraphExplicitLinkSpecs = row => {
+    const links = row?.links || {};
+    const spec = (type, inverse, refs, evidence = 'explicit_ref') => ({
+      type,
+      inverse,
+      refs: typedGraphRefValues(refs),
+      weight: Number(TYPED_MEMORY_GRAPH_TUNING.relationWeights[type] || 0.3),
+      evidence
+    });
+    return [
+      spec('SUPERSEDES', 'SUPERSEDED_BY', links.replacesRefs),
+      spec('CONTRADICTS', 'CONTRADICTS', links.contradictsRefs),
+      spec('RESOLVES', 'RESOLVED_BY', links.resolvesRefs),
+      spec('RESOLVED_BY', 'RESOLVES', links.resolvedByRefs),
+      spec('FULFILLS', 'FULFILLED_BY', links.fulfillsRefs),
+      spec('FULFILLED_BY', 'FULFILLS', links.fulfilledByRefs),
+      spec('VIOLATES', 'VIOLATED_BY', links.violatesRefs),
+      spec('VIOLATED_BY', 'VIOLATES', links.violatedByRefs),
+      spec('CAUSES', 'CAUSED_BY', links.causesRefs),
+      spec('CAUSED_BY', 'CAUSES', links.causedByRefs),
+      spec('RESULT_OF', 'CAUSES', links.resultOfRefs),
+      spec('DEPENDS_ON', 'PREREQUISITE_OF', links.dependsOnRefs),
+      spec('PREREQUISITE_OF', 'DEPENDS_ON', links.prerequisiteRefs),
+      spec('CONTINUES', 'CONTINUES', links.continuesRefs)
+    ].filter(item => item.refs.length > 0);
+  };
+  const TYPED_GRAPH_STATE_CATEGORY_RE = /^(?:character|relation|current_state|state)$/i;
+  const TYPED_GRAPH_UNRESOLVED_CATEGORY_RE = /^(?:conflict_trace|continuity_lock|do_not_resolve_yet|open_invitation|payoff)$/i;
+  const TYPED_GRAPH_EVENT_CATEGORY_RE = /^(?:active_event|historical_event|scene_delta|consequence|payoff|critical_dialogue)$/i;
+  const TYPED_GRAPH_RESOLVED_RE = /(?:resolved|closed|completed|fulfilled|settled|reconciled|해결|종료|완료|화해|이행|성사|解決|終了|完了|和解|履行)/i;
+  const TYPED_GRAPH_FULFILLED_RE = /(?:fulfilled|kept\s+(?:the\s+)?promise|promise\s+kept|carried\s+out|completed|약속(?:을|을\s*)?(?:지켰|이행|실행|완수)|이행했|성사됐|履行|約束を守|果たした)/i;
+  const TYPED_GRAPH_VIOLATED_RE = /(?:violated|broke\s+(?:the\s+)?promise|promise\s+broken|betrayed|failed\s+to\s+keep|약속(?:을|을\s*)?(?:어겼|깨뜨|파기)|불이행|배신|違反|約束を破|裏切)/i;
+  const TYPED_GRAPH_CAUSAL_RE = /(?:because|therefore|as\s+a\s+result|caused|led\s+to|resulted\s+in|때문에|그\s*결과|원인|초래|이어져|결과로|ため|結果|原因|导致|因此)/i;
+  const typedGraphPromiseLike = row => /^(?:open_invitation|continuity_lock|payoff)$/i.test(text(row?.category || ''))
+    || ensureArray(row?.links?.canonicalAnchors).some(value => /^promise:|^info:promise$/i.test(text(value)))
+    || /(?:promise|vow|약속|맹세|約束|誓)/i.test(text(row?.publicText || ''));
+  const typedGraphRowsContradict = (earlier, later) => {
+    const leftTruth = normalizeKey(earlier?.visibility?.truthState || '');
+    const rightTruth = normalizeKey(later?.visibility?.truthState || '');
+    if ((leftTruth === 'true' && rightTruth === 'false') || (leftTruth === 'false' && rightTruth === 'true')) return true;
+    const leftStatus = normalizeKey(earlier?.lifecycle?.status || '');
+    const rightStatus = normalizeKey(later?.lifecycle?.status || '');
+    const disputed = /(?:contested|disputed|contradicted|conflict|uncertain|모순|상충|논쟁|矛盾|争議)/i.test(`${leftStatus} ${rightStatus}`);
+    const anchors = typedGraphInferenceAnchorSignals(earlier, later);
+    return disputed && typedGraphSharedSignal(earlier, later) >= 0.30 && anchors.general >= 0.18
+      && typedGraphRowStateSignature(earlier) !== typedGraphRowStateSignature(later);
+  };
+  const typedGraphRowsSupersede = (earlier, later, store = {}) => {
+    if (!TYPED_GRAPH_STATE_CATEGORY_RE.test(text(earlier?.category || '')) || !TYPED_GRAPH_STATE_CATEGORY_RE.test(text(later?.category || ''))) return false;
+    const before = typedGraphRowOrder(earlier, store);
+    const after = typedGraphRowOrder(later, store);
+    if (!(after > before)) return false;
+    const gap = Math.max(0, packetMemoryTurnOf(later, store?.worldlineHeadOrdinal || store?.turn || 0) - packetMemoryTurnOf(earlier, store?.worldlineHeadOrdinal || store?.turn || 0));
+    if (gap > TYPED_MEMORY_GRAPH_TUNING.maxInferredTurnGap) return false;
+    if (typedGraphRowStateSignature(earlier) === typedGraphRowStateSignature(later)) return false;
+    const anchors = typedGraphInferenceAnchorSignals(earlier, later);
+    return typedGraphSharedSignal(earlier, later) >= 0.28 && anchors.general >= 0.18;
+  };
+  const typedGraphRowsResolve = (earlier, later) => {
+    const anchors = typedGraphInferenceAnchorSignals(earlier, later);
+    return TYPED_GRAPH_UNRESOLVED_CATEGORY_RE.test(text(earlier?.category || ''))
+      && (TYPED_GRAPH_RESOLVED_RE.test(typedGraphRowBody(later)) || /^(?:resolved|closed|completed)$/i.test(text(later?.lifecycle?.status || '')))
+      && typedGraphSharedSignal(earlier, later) >= 0.18
+      && anchors.transition >= 0.16;
+  };
+  const typedGraphRowsFulfill = (earlier, later) => {
+    const anchors = typedGraphInferenceAnchorSignals(earlier, later);
+    return typedGraphPromiseLike(earlier)
+      && (TYPED_GRAPH_FULFILLED_RE.test(typedGraphRowBody(later)) || /^(?:payoff|consequence)$/i.test(text(later?.category || '')))
+      && typedGraphSharedSignal(earlier, later) >= 0.18
+      && anchors.transition >= 0.16;
+  };
+  const typedGraphRowsViolate = (earlier, later) => {
+    const anchors = typedGraphInferenceAnchorSignals(earlier, later);
+    return typedGraphPromiseLike(earlier)
+      && TYPED_GRAPH_VIOLATED_RE.test(typedGraphRowBody(later))
+      && typedGraphSharedSignal(earlier, later) >= 0.18
+      && anchors.transition >= 0.16;
+  };
+  const typedGraphRowsContinue = (earlier, later, store = {}) => {
+    const leftScene = unifiedMemorySpecificNode(earlier?.scene_id || earlier?.locator?.sceneId);
+    const rightScene = unifiedMemorySpecificNode(later?.scene_id || later?.locator?.sceneId);
+    if (!leftScene || leftScene !== rightScene) return false;
+    const leftTurn = packetMemoryTurnOf(earlier, store?.worldlineHeadOrdinal || store?.turn || 0);
+    const rightTurn = packetMemoryTurnOf(later, store?.worldlineHeadOrdinal || store?.turn || 0);
+    if (rightTurn < leftTurn || rightTurn - leftTurn > 4) return false;
+    const eventLike = TYPED_GRAPH_EVENT_CATEGORY_RE.test(text(earlier?.category || '')) || TYPED_GRAPH_EVENT_CATEGORY_RE.test(text(later?.category || ''));
+    return eventLike && typedGraphSharedSignal(earlier, later) >= 0.16;
+  };
+
   const unifiedMemoryRelationFeatures = (row = {}) => {
     const retrieval = row.retrieval || {};
     const atomic = retrieval.atomicRecord || {};
@@ -14490,22 +21100,52 @@ const MODE_PROFILES = Object.freeze({
       ], 72).map(unifiedMemorySpecificNode).filter(value => value && value.length >= 2), 36)
     };
   };
-  const attachUnifiedMemoryAssociations = (rows = []) => {
+  const attachUnifiedMemoryAssociations = (rows = [], store = {}, settings = Memory.settings || DEFAULT_SETTINGS) => {
     const input = ensureArray(rows);
-    if (!input.length) return input;
+    if (!input.length) {
+      Memory.lastTypedMemoryGraph = {
+        version: TYPED_MEMORY_GRAPH_VERSION,
+        enabled: settings?.typedMemoryGraphEnabled !== false,
+        rows: 0,
+        edges: 0,
+        typedEdges: 0,
+        inferredEdges: 0,
+        explicitEdges: 0,
+        types: {}
+      };
+      return input;
+    }
     const features = input.map(unifiedMemoryRelationFeatures);
     const adjacency = input.map(() => new Map());
-    const addEdge = (left, right, type, weight) => {
+    const edgeStats = { edges: 0, typedEdges: 0, inferredEdges: 0, explicitEdges: 0, types: {} };
+    const addEdge = (left, right, type, weight, meta = {}) => {
       if (left === right || weight <= 0) return;
       const previous = adjacency[left].get(right);
-      const types = uniq([...(previous?.types || []), type], 5);
+      const types = uniq([...(previous?.types || []), type], 10);
+      const typedTypes = uniq([
+        ...(previous?.typedTypes || []),
+        ...(TYPED_MEMORY_GRAPH_EDGE_SET.has(type) ? [type] : [])
+      ], TYPED_MEMORY_GRAPH_EDGE_TYPES.length);
       const agreementLift = previous && !previous.types?.includes(type) ? 0.025 : 0;
+      const candidateWeight = clamp(Math.max(Number(previous?.weight || 0), weight) + agreementLift, 0, 0.94, weight);
+      const preferCandidateType = !previous
+        || weight > Number(previous.weight || 0)
+        || (TYPED_MEMORY_GRAPH_EDGE_SET.has(type) && !TYPED_MEMORY_GRAPH_EDGE_SET.has(previous.type));
       adjacency[left].set(right, {
         targetMemoryKey: unifiedMemoryKeyFor(input[right]),
-        type: previous && Number(previous.weight || 0) > weight ? previous.type : type,
+        type: preferCandidateType ? type : previous.type,
         types,
-        weight: Number(clamp(Math.max(Number(previous?.weight || 0), weight) + agreementLift, 0, 0.9, weight).toFixed(4))
+        typedTypes,
+        typed: typedTypes.length > 0,
+        weight: Number(candidateWeight.toFixed(4)),
+        evidence: uniq([...(previous?.evidence || []), meta.evidence || ''], 6).filter(Boolean),
+        inferred: Boolean(previous?.inferred || meta.inferred === true),
+        explicit: Boolean(previous?.explicit || meta.explicit === true)
       });
+    };
+    const addTypedPair = (left, right, type, inverse, weight, meta = {}) => {
+      addEdge(left, right, type, weight, meta);
+      addEdge(right, left, inverse || type, Number(TYPED_MEMORY_GRAPH_TUNING.relationWeights[inverse] || weight), meta);
     };
     const connectBuckets = (type, valuesFor, baseWeight) => {
       const buckets = new Map();
@@ -14522,8 +21162,8 @@ const MODE_PROFILES = Object.freeze({
         const weight = baseWeight * specificity;
         for (let i = 0; i < indexes.length; i += 1) {
           for (let j = i + 1; j < indexes.length; j += 1) {
-            addEdge(indexes[i], indexes[j], type, weight);
-            addEdge(indexes[j], indexes[i], type, weight);
+            addEdge(indexes[i], indexes[j], type, weight, { evidence: `bucket:${type}` });
+            addEdge(indexes[j], indexes[i], type, weight, { evidence: `bucket:${type}` });
           }
         }
       });
@@ -14535,26 +21175,432 @@ const MODE_PROFILES = Object.freeze({
     connectBuckets('same_place', feature => feature.places, UNIFIED_MEMORY_TUNING.relationWeights.same_place);
     connectBuckets('same_object', feature => feature.objects, UNIFIED_MEMORY_TUNING.relationWeights.same_object);
     connectBuckets('same_scene', feature => feature.scene ? [feature.scene] : [], UNIFIED_MEMORY_TUNING.relationWeights.same_scene);
-    return input.map((row, index) => {
+
+    if (settings?.typedMemoryGraphEnabled !== false) {
+      const refToIndexes = new Map();
+      input.forEach((row, index) => {
+        typedGraphOwnReferenceKeys(row).forEach(ref => {
+          if (!refToIndexes.has(ref)) refToIndexes.set(ref, []);
+          refToIndexes.get(ref).push(index);
+        });
+      });
+      input.forEach((row, sourceIndex) => {
+        typedGraphExplicitLinkSpecs(row).forEach(spec => {
+          spec.refs.forEach(rawRef => {
+            const ref = normalizeKey(rawRef);
+            const targets = refToIndexes.get(ref) || [];
+            targets.slice(0, 6).forEach(targetIndex => {
+              if (targetIndex === sourceIndex) return;
+              addTypedPair(sourceIndex, targetIndex, spec.type, spec.inverse, spec.weight, {
+                evidence: `${spec.evidence}:${ref}`,
+                explicit: true
+              });
+            });
+          });
+        });
+      });
+
+      const topicBuckets = new Map();
+      input.forEach((row, index) => {
+        typedGraphAtomicTopicKeys(row).forEach(topic => {
+          if (!topicBuckets.has(topic)) topicBuckets.set(topic, []);
+          topicBuckets.get(topic).push(index);
+        });
+      });
+      topicBuckets.forEach(indexesRaw => {
+        const indexes = [...new Set(indexesRaw)]
+          .sort((a, b) => typedGraphRowOrder(input[a], store) - typedGraphRowOrder(input[b], store))
+          .slice(-TYPED_MEMORY_GRAPH_TUNING.maxTopicBucket);
+        for (let cursor = 1; cursor < indexes.length; cursor += 1) {
+          const earlierIndex = indexes[cursor - 1];
+          const laterIndex = indexes[cursor];
+          const earlier = input[earlierIndex];
+          const later = input[laterIndex];
+          if (typedGraphRowsContradict(earlier, later)) {
+            addTypedPair(laterIndex, earlierIndex, 'CONTRADICTS', 'CONTRADICTS', TYPED_MEMORY_GRAPH_TUNING.relationWeights.CONTRADICTS, {
+              evidence: 'inferred:truth_or_dispute', inferred: true
+            });
+          }
+          if (typedGraphRowsSupersede(earlier, later, store)) {
+            addTypedPair(laterIndex, earlierIndex, 'SUPERSEDES', 'SUPERSEDED_BY', TYPED_MEMORY_GRAPH_TUNING.relationWeights.SUPERSEDES, {
+              evidence: 'inferred:state_transition', inferred: true
+            });
+          }
+          if (typedGraphRowsResolve(earlier, later)) {
+            addTypedPair(laterIndex, earlierIndex, 'RESOLVES', 'RESOLVED_BY', TYPED_MEMORY_GRAPH_TUNING.relationWeights.RESOLVES, {
+              evidence: 'inferred:resolution_marker', inferred: true
+            });
+          }
+          if (typedGraphRowsFulfill(earlier, later)) {
+            addTypedPair(laterIndex, earlierIndex, 'FULFILLS', 'FULFILLED_BY', TYPED_MEMORY_GRAPH_TUNING.relationWeights.FULFILLS, {
+              evidence: 'inferred:fulfillment_marker', inferred: true
+            });
+          }
+          if (typedGraphRowsViolate(earlier, later)) {
+            addTypedPair(laterIndex, earlierIndex, 'VIOLATES', 'VIOLATED_BY', TYPED_MEMORY_GRAPH_TUNING.relationWeights.VIOLATES, {
+              evidence: 'inferred:violation_marker', inferred: true
+            });
+          }
+          if (typedGraphRowsContinue(earlier, later, store)) {
+            addTypedPair(earlierIndex, laterIndex, 'CONTINUES', 'CONTINUES', TYPED_MEMORY_GRAPH_TUNING.relationWeights.CONTINUES, {
+              evidence: 'inferred:same_scene_chain', inferred: true
+            });
+          }
+          const causalAnchors = typedGraphInferenceAnchorSignals(earlier, later);
+          if (TYPED_GRAPH_CAUSAL_RE.test(typedGraphRowBody(later))
+            && typedGraphSharedSignal(earlier, later) >= 0.30
+            && causalAnchors.transition >= 0.16) {
+            addTypedPair(earlierIndex, laterIndex, 'CAUSES', 'CAUSED_BY', TYPED_MEMORY_GRAPH_TUNING.relationWeights.CAUSES, {
+              evidence: 'inferred:explicit_causal_language', inferred: true
+            });
+          }
+        }
+      });
+    }
+
+    const output = input.map((row, index) => {
       const associations = [...adjacency[index].values()]
-        .sort((a, b) => Number(b.weight || 0) - Number(a.weight || 0))
+        .sort((a, b) => Number(b.typed) - Number(a.typed)
+          || Number(b.weight || 0) - Number(a.weight || 0))
         .slice(0, UNIFIED_MEMORY_TUNING.maxAssociationsPerRow)
         .map(edge => ({
           targetMemoryKey: edge.targetMemoryKey,
           type: edge.type,
-          weight: edge.weight
+          types: edge.types,
+          typedTypes: edge.typedTypes,
+          typed: edge.typed,
+          weight: edge.weight,
+          evidence: edge.evidence,
+          inferred: edge.inferred,
+          explicit: edge.explicit
         }));
+      associations.forEach(edge => {
+        edgeStats.edges += 1;
+        if (!edge.typed) return;
+        edgeStats.typedEdges += 1;
+        if (edge.inferred) edgeStats.inferredEdges += 1;
+        if (edge.explicit) edgeStats.explicitEdges += 1;
+        ensureArray(edge.typedTypes).forEach(type => {
+          edgeStats.types[type] = Number(edgeStats.types[type] || 0) + 1;
+        });
+      });
       return {
         ...row,
         unifiedMemoryKey: unifiedMemoryKeyFor(row),
         retrieval: {
           ...(row.retrieval || {}),
-          unifiedAssociations: associations
+          unifiedAssociations: associations,
+          typedAssociations: associations.filter(edge => edge.typed).slice(0, TYPED_MEMORY_GRAPH_TUNING.maxTypedEdgesPerRow)
         }
       };
     });
+    Memory.lastTypedMemoryGraph = {
+      version: TYPED_MEMORY_GRAPH_VERSION,
+      enabled: settings?.typedMemoryGraphEnabled !== false,
+      rows: output.length,
+      edges: edgeStats.edges,
+      typedEdges: edgeStats.typedEdges,
+      inferredEdges: edgeStats.inferredEdges,
+      explicitEdges: edgeStats.explicitEdges,
+      types: edgeStats.types
+    };
+    return output;
   };
-  const rebuildIndex = store => {
+  const hierarchicalEpisodeRowTurn = (row = {}, store = {}) => {
+    const currentTurn = Math.max(0, Number(store?.worldlineHeadOrdinal || store?.turn || 0) || 0);
+    const turn = Math.max(0, Number(packetMemoryTurnOf(row, currentTurn) || 0) || 0);
+    if (turn > 0) return turn;
+    const pair = Number(row?.locator?.sourcePairIndex || row?.retrieval?.sourcePairIndex || 0);
+    if (Number.isFinite(pair) && pair > 0) return pair;
+    const message = Number(row?.locator?.messageIndex || 0);
+    return Number.isFinite(message) && message >= 0 ? message + 1 : 0;
+  };
+  const hierarchicalEpisodeFeatureValues = (rows = [], limit = HIERARCHICAL_EPISODE_TUNING.maxFeatureValues) => {
+    const entities = [];
+    const canonical = [];
+    const places = [];
+    const objects = [];
+    const scenes = [];
+    const categories = [];
+    const statuses = [];
+    const priorityTerms = [];
+    ensureArray(rows).forEach(row => {
+      const feature = unifiedMemoryRelationFeatures(row);
+      entities.push(...feature.entities);
+      canonical.push(...feature.canonical);
+      places.push(...feature.places);
+      objects.push(...feature.objects);
+      if (feature.scene) scenes.push(feature.scene);
+      categories.push(text(row?.category || ''));
+      statuses.push(text(row?.lifecycle?.status || ''), text(row?.lifecycle?.timeScope || ''));
+      priorityTerms.push(...ensureArray(row?.retrieval?.priorityTerms));
+    });
+    return {
+      entities: uniq(entities.map(unifiedMemorySpecificNode).filter(Boolean), limit),
+      canonicalAnchors: uniq(canonical.map(unifiedMemorySpecificNode).filter(Boolean), limit),
+      places: uniq(places.map(unifiedMemorySpecificNode).filter(Boolean), Math.min(24, limit)),
+      objects: uniq(objects.map(unifiedMemorySpecificNode).filter(Boolean), Math.min(24, limit)),
+      sceneIds: uniq(scenes.map(unifiedMemorySpecificNode).filter(Boolean), Math.min(16, limit)),
+      categories: uniq(categories.map(normalizeKey).filter(Boolean), Math.min(24, limit)),
+      statuses: uniq(statuses.map(normalizeKey).filter(Boolean), Math.min(24, limit)),
+      priorityTerms: uniq(priorityTerms.map(value => text(value).trim()).filter(Boolean), limit)
+    };
+  };
+  const hierarchicalEpisodeFeatureOverlap = (left = {}, right = {}) => clamp(Math.max(
+    typedGraphSetOverlap(left.entities, right.entities) * 0.92,
+    typedGraphSetOverlap(left.canonicalAnchors, right.canonicalAnchors),
+    typedGraphSetOverlap(left.places, right.places) * 0.95,
+    typedGraphSetOverlap(left.objects, right.objects) * 0.88,
+    typedGraphSetOverlap(left.sceneIds, right.sceneIds) * 0.96
+  ), 0, 1, 0);
+  const hierarchicalEpisodeRowPriority = row => {
+    const category = text(row?.category || '');
+    const protectedLift = /continuity_lock|do_not_resolve_yet|conflict_trace|consequence|payoff|open_invitation|historical_event|active_event|scene_delta|relation|current_state|critical_dialogue/i.test(category) ? 0.28 : 0;
+    const typedLift = ensureArray(row?.retrieval?.typedAssociations).length ? 0.12 : 0;
+    return Number(row?.importance || 0) + protectedLift + typedLift + Math.max(0, Number(row?.scoreBreakdown?.relevanceEvidence || 0));
+  };
+  const hierarchicalEpisodeFromRows = (rows = [], level = 1, children = [], store = {}) => {
+    const input = ensureArray(rows).filter(Boolean);
+    if (!input.length) return null;
+    const turns = input.map(row => hierarchicalEpisodeRowTurn(row, store)).filter(Number.isFinite);
+    const turnStart = turns.length ? Math.min(...turns) : 0;
+    const turnEnd = turns.length ? Math.max(...turns) : turnStart;
+    const features = hierarchicalEpisodeFeatureValues(input);
+    const memoryKeys = uniq(input.map(row => row?.unifiedMemoryKey || unifiedMemoryKeyFor(row)).filter(Boolean), HIERARCHICAL_EPISODE_TUNING.maxMemoryKeysPerEpisode);
+    const topRows = input.slice().sort((a, b) => hierarchicalEpisodeRowPriority(b) - hierarchicalEpisodeRowPriority(a)
+      || hierarchicalEpisodeRowTurn(a, store) - hierarchicalEpisodeRowTurn(b, store)).slice(0, 10);
+    const excerpts = topRows.map(row => compact(row?.publicText || row?.publicProfile || '', 180)).filter(Boolean);
+    const childIds = uniq(ensureArray(children).map(child => child?.id).filter(Boolean), HIERARCHICAL_EPISODE_TUNING.parentFanIn * 2);
+    const searchParts = [
+      `turn:${turnStart}-${turnEnd}`,
+      `level:${level}`,
+      features.entities.join(' '),
+      features.places.join(' '),
+      features.objects.join(' '),
+      features.canonicalAnchors.join(' '),
+      features.categories.join(' '),
+      features.statuses.join(' '),
+      features.priorityTerms.join(' '),
+      excerpts.join(' ')
+    ].filter(Boolean);
+    const searchText = compact(searchParts.join('\n'), 6800);
+    const id = `episode:${level}:${stableHash64([turnStart, turnEnd, features.sceneIds.join(','), memoryKeys.slice(0, 12).join(',')].join('|'))}`;
+    return {
+      version: HIERARCHICAL_EPISODE_MEMORY_VERSION,
+      id,
+      level,
+      routerOnly: true,
+      turnStart,
+      turnEnd,
+      spanTurns: Math.max(1, turnEnd - turnStart + 1),
+      sceneIds: features.sceneIds,
+      entities: features.entities,
+      places: features.places,
+      objects: features.objects,
+      canonicalAnchors: features.canonicalAnchors,
+      categories: features.categories,
+      statuses: features.statuses,
+      priorityTerms: features.priorityTerms,
+      childEpisodeIds: childIds,
+      childMemoryKeys: memoryKeys,
+      searchText,
+      tokens: tokenize(searchText, 700),
+      charTokens: charNgramTokens(searchText, 420),
+      importance: Number((input.reduce((sum, row) => sum + Number(row?.importance || 0), 0) / Math.max(1, input.length)).toFixed(4)),
+      rowCount: input.length
+    };
+  };
+  const hierarchicalEpisodeEvenSample = (values = [], limit = 0) => {
+    const list = ensureArray(values);
+    const cap = Math.max(0, Number(limit || 0) || 0);
+    if (!cap || list.length <= cap) return list.slice();
+    if (cap === 1) return [list[list.length - 1]];
+    const out = [];
+    const used = new Set();
+    for (let index = 0; index < cap; index += 1) {
+      const at = Math.round(index * (list.length - 1) / (cap - 1));
+      if (used.has(at)) continue;
+      used.add(at);
+      out.push(list[at]);
+    }
+    return out;
+  };
+  const hierarchicalEpisodeBalancedMemoryKeys = (children = [], limit = HIERARCHICAL_EPISODE_TUNING.maxMemoryKeysPerEpisode) => {
+    const list = ensureArray(children).filter(Boolean);
+    const out = [];
+    const seen = new Set();
+    let cursor = 0;
+    while (out.length < limit && list.some(child => cursor < ensureArray(child?.childMemoryKeys).length)) {
+      for (const child of list) {
+        const key = ensureArray(child?.childMemoryKeys)[cursor];
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        out.push(key);
+        if (out.length >= limit) break;
+      }
+      cursor += 1;
+    }
+    return out;
+  };
+  const hierarchicalEpisodeFromChildren = (children = [], level = 2, rowByKey = new Map(), store = {}) => {
+    const list = ensureArray(children).filter(Boolean);
+    if (list.length < 2) return null;
+    const representativeKeys = hierarchicalEpisodeBalancedMemoryKeys(list, HIERARCHICAL_EPISODE_TUNING.maxMemoryKeysPerEpisode);
+    const rows = representativeKeys.map(key => rowByKey.get(key)).filter(Boolean);
+    if (!rows.length) return null;
+    const episode = hierarchicalEpisodeFromRows(rows, level, list, store);
+    if (!episode) return null;
+    episode.turnStart = Math.min(...list.map(child => Number(child.turnStart || 0)));
+    episode.turnEnd = Math.max(...list.map(child => Number(child.turnEnd || 0)));
+    episode.spanTurns = Math.max(1, episode.turnEnd - episode.turnStart + 1);
+    episode.childEpisodeIds = list.map(child => child.id);
+    episode.childMemoryKeys = representativeKeys;
+    episode.descendantLeafCount = list.reduce((sum, child) => sum + Math.max(1, Number(child.descendantLeafCount || (child.level === 1 ? 1 : 0))), 0);
+    episode.searchText = compact([
+      `turn:${episode.turnStart}-${episode.turnEnd}`,
+      `level:${level}`,
+      list.map(child => child.searchText).join('\n')
+    ].join('\n'), 9200);
+    episode.tokens = tokenize(episode.searchText, 900);
+    episode.charTokens = charNgramTokens(episode.searchText, 520);
+    episode.id = `episode:${level}:${stableHash64([episode.turnStart, episode.turnEnd, episode.childEpisodeIds.join(',')].join('|'))}`;
+    return episode;
+  };
+  const buildHierarchicalEpisodeIndex = (rows = [], store = {}, settings = Memory.settings || DEFAULT_SETTINGS) => {
+    if (settings?.hierarchicalEpisodeMemoryEnabled === false) {
+      const disabled = { version: HIERARCHICAL_EPISODE_MEMORY_VERSION, enabled: false, episodes: [], routingEpisodes: [], leaves: 0, levels: 0, rows: ensureArray(rows).length };
+      Memory.lastEpisodeIndex = disabled;
+      return disabled;
+    }
+    const sourceRows = ensureArray(rows)
+      .filter(row => row?.unifiedMemoryKey)
+      .filter(row => !/^(?:secret|pov_memory|speaker_boundary|overpromotion_risk)$/i.test(text(row?.category || '')))
+      .sort((a, b) => hierarchicalEpisodeRowTurn(a, store) - hierarchicalEpisodeRowTurn(b, store)
+        || Number(a?.updatedAt || 0) - Number(b?.updatedAt || 0));
+    if (!sourceRows.length) {
+      const empty = { version: HIERARCHICAL_EPISODE_MEMORY_VERSION, enabled: true, episodes: [], routingEpisodes: [], leaves: 0, levels: 0, rows: 0 };
+      Memory.lastEpisodeIndex = empty;
+      return empty;
+    }
+    const turnBuckets = new Map();
+    sourceRows.forEach(row => {
+      const turn = hierarchicalEpisodeRowTurn(row, store);
+      if (!turnBuckets.has(turn)) turnBuckets.set(turn, []);
+      turnBuckets.get(turn).push(row);
+    });
+    const turnNodes = [...turnBuckets.entries()].sort((a, b) => a[0] - b[0]).map(([turn, turnRows]) => ({
+      turn, rows: turnRows, features: hierarchicalEpisodeFeatureValues(turnRows)
+    }));
+    const clusters = [];
+    let current = [];
+    const flush = () => { if (current.length) clusters.push(current); current = []; };
+    for (const node of turnNodes) {
+      if (!current.length) { current.push(node); continue; }
+      const first = current[0];
+      const previous = current[current.length - 1];
+      const clusterRows = current.flatMap(item => item.rows);
+      const clusterFeatures = hierarchicalEpisodeFeatureValues(clusterRows);
+      const gap = Math.max(0, node.turn - previous.turn);
+      const span = Math.max(1, node.turn - first.turn + 1);
+      const overlap = hierarchicalEpisodeFeatureOverlap(clusterFeatures, node.features);
+      const sceneChanged = clusterFeatures.sceneIds.length && node.features.sceneIds.length
+        && typedGraphSetOverlap(clusterFeatures.sceneIds, node.features.sceneIds) <= 0;
+      const boundary = gap > HIERARCHICAL_EPISODE_TUNING.maxTurnGap
+        || span > HIERARCHICAL_EPISODE_TUNING.leafMaxTurnSpan
+        || (sceneChanged && current.length >= 2 && (span >= HIERARCHICAL_EPISODE_TUNING.leafSoftTargetTurns || overlap < 0.18));
+      if (boundary) flush();
+      current.push(node);
+    }
+    flush();
+    const mergedClusters = [];
+    for (const cluster of clusters) {
+      const rowsInCluster = cluster.flatMap(node => node.rows);
+      const previous = mergedClusters[mergedClusters.length - 1];
+      if (previous) {
+        const previousRows = previous.flatMap(node => node.rows);
+        const combinedStart = previous[0].turn;
+        const combinedEnd = cluster[cluster.length - 1].turn;
+        const overlap = hierarchicalEpisodeFeatureOverlap(hierarchicalEpisodeFeatureValues(previousRows), hierarchicalEpisodeFeatureValues(rowsInCluster));
+        const small = rowsInCluster.length < HIERARCHICAL_EPISODE_TUNING.minLeafRows || cluster.length <= 1;
+        if (small && combinedEnd - combinedStart + 1 <= HIERARCHICAL_EPISODE_TUNING.leafMaxTurnSpan && overlap >= 0.10) {
+          previous.push(...cluster);
+          continue;
+        }
+      }
+      mergedClusters.push(cluster.slice());
+    }
+    const rowByKey = new Map(sourceRows.map(row => [row.unifiedMemoryKey || unifiedMemoryKeyFor(row), row]));
+    const leaves = mergedClusters.map(cluster => {
+      const episode = hierarchicalEpisodeFromRows(cluster.flatMap(node => node.rows).slice(0, HIERARCHICAL_EPISODE_TUNING.maxLeafRows), 1, [], store);
+      if (episode) episode.descendantLeafCount = 1;
+      return episode;
+    }).filter(Boolean);
+    const episodes = leaves.slice();
+    let levelEpisodes = leaves;
+    let level = 2;
+    while (levelEpisodes.length > 1 && level <= HIERARCHICAL_EPISODE_TUNING.maxLevels) {
+      const parents = [];
+      for (let index = 0; index < levelEpisodes.length; index += HIERARCHICAL_EPISODE_TUNING.parentFanIn) {
+        const group = levelEpisodes.slice(index, index + HIERARCHICAL_EPISODE_TUNING.parentFanIn);
+        const parent = hierarchicalEpisodeFromChildren(group, level, rowByKey, store);
+        if (parent) parents.push(parent);
+      }
+      if (!parents.length) break;
+      episodes.push(...parents);
+      levelEpisodes = parents;
+      level += 1;
+    }
+    const stored = episodes.length <= HIERARCHICAL_EPISODE_TUNING.maxStoredEpisodes
+      ? episodes
+      : [
+          ...episodes.filter(episode => Number(episode.level || 1) > 1),
+          ...hierarchicalEpisodeEvenSample(episodes.filter(episode => Number(episode.level || 1) === 1), Math.max(0, HIERARCHICAL_EPISODE_TUNING.maxStoredEpisodes - episodes.filter(episode => Number(episode.level || 1) > 1).length))
+        ].slice(0, HIERARCHICAL_EPISODE_TUNING.maxStoredEpisodes);
+    const parents = stored.filter(episode => Number(episode.level || 1) > 1)
+      .sort((a, b) => Number(b.level || 1) - Number(a.level || 1) || Number(b.turnEnd || 0) - Number(a.turnEnd || 0));
+    const routingParents = parents.slice(0, HIERARCHICAL_EPISODE_TUNING.maxParentRoutingEpisodes);
+    const leafBudget = Math.max(0, Math.min(HIERARCHICAL_EPISODE_TUNING.maxLeafRoutingEpisodes,
+      HIERARCHICAL_EPISODE_TUNING.maxRoutingEpisodes - routingParents.length));
+    const routingLeaves = hierarchicalEpisodeEvenSample(stored.filter(episode => Number(episode.level || 1) === 1), leafBudget);
+    const routingEpisodes = [...routingParents, ...routingLeaves].slice(0, HIERARCHICAL_EPISODE_TUNING.maxRoutingEpisodes);
+    const index = {
+      version: HIERARCHICAL_EPISODE_MEMORY_VERSION,
+      enabled: true,
+      builtAt: now(),
+      rows: sourceRows.length,
+      leaves: leaves.length,
+      levels: Math.max(0, ...stored.map(episode => Number(episode.level || 0))),
+      episodes: stored,
+      routingEpisodes,
+      routingEpisodeIds: routingEpisodes.map(episode => episode.id)
+    };
+    Memory.lastEpisodeIndex = {
+      version: index.version, enabled: true, rows: index.rows, leaves: index.leaves, levels: index.levels,
+      episodes: stored.length, routingEpisodes: routingEpisodes.length, parentEpisodes: parents.length,
+      turnStart: stored.length ? Math.min(...stored.map(episode => Number(episode.turnStart || 0))) : 0,
+      turnEnd: stored.length ? Math.max(...stored.map(episode => Number(episode.turnEnd || 0))) : 0
+    };
+    return index;
+  };
+  const derivedIndexBuildPolicy = (rowCount = 0, remainingBudgetMs = Number.POSITIVE_INFINITY, settings = Memory.settings || DEFAULT_SETTINGS) => {
+    const rows = Math.max(0, Number(rowCount || 0) || 0);
+    const remaining = Number.isFinite(Number(remainingBudgetMs)) ? Math.max(0, Number(remainingBudgetMs)) : Number.POSITIVE_INFINITY;
+    const typedRequested = settings?.typedMemoryGraphEnabled !== false;
+    const episodeRequested = settings?.hierarchicalEpisodeMemoryEnabled !== false;
+    const skipTyped = typedRequested && rows >= 180 && remaining < 1800;
+    const skipEpisode = episodeRequested && rows >= 160 && remaining < (skipTyped ? 900 : 1200);
+    return {
+      version: DERIVED_ROUTING_COMPILER_VERSION,
+      rowCount: rows,
+      remainingBudgetMs: Number.isFinite(remaining) ? Math.floor(remaining) : null,
+      typedGraphEnabled: typedRequested && !skipTyped,
+      episodeEnabled: episodeRequested && !skipEpisode,
+      reason: skipTyped || skipEpisode ? 'prebuild_budget_guard' : 'full_derived_build'
+    };
+  };
+  const rebuildIndex = (store, options = {}) => {
+    const buildStartedAt = now();
+    const settings = options?.settings || Memory.settings || DEFAULT_SETTINGS;
     decayCharacterStateProjectionsForRecall(store);
     const memoryNotesByPacket = new Map(ensureArray(store?.memory?.notes)
       .filter(note => note?.sourcePacket)
@@ -14574,9 +21620,7 @@ const MODE_PROFILES = Object.freeze({
       };
       const row = {
         axis, category,
-        structuredChannel: axis === 'entity'
-          ? 'entity'
-          : (axis === 'world' && category === 'active_event' ? 'event' : axis),
+        structuredChannel: axis === 'entity' ? 'entity' : (axis === 'world' && category === 'active_event' ? 'event' : axis),
         packetHash: text(item?._locator?.sourceHash || item?._locator?.anchorHash || item?._packetHash || ''),
         recallQualityWeight: clamp(item?._packetRecallQuality?.score, 0.9, 1, 1),
         recallQualityFlags: mergeValues([item?._packetRecallQuality?.flags], 8),
@@ -14593,8 +21637,7 @@ const MODE_PROFILES = Object.freeze({
           if (activeSceneId && sourceSceneId) return activeSceneId === sourceSceneId ? 'same_scene' : 'prior_scene';
           return Number(locator?.distanceFromLatest) > 0 ? 'prior_snapshot_unconfirmed' : 'current_or_unknown';
         })(),
-        locator,
-        retrieval,
+        locator, retrieval,
         publicText: publicSummary(axis, item),
         publicProfile: axis === 'entity' && category === 'character' ? characterProfileSummary(item) : '',
         lifecycle: {
@@ -14606,7 +21649,21 @@ const MODE_PROFILES = Object.freeze({
         },
         links: {
           relatedRefs: mergeValues([item.related_refs, item.relatedRefs, item.source_refs, item.sourceRefs, item._sourceRef], 48),
-          canonicalAnchors: mergeValues([item.canonicalAnchors, item.canonical_anchors, item.canonicalTokens, item.canonical_tokens, retrieval.canonicalAnchors], 48)
+          canonicalAnchors: mergeValues([item.canonicalAnchors, item.canonical_anchors, item.canonicalTokens, item.canonical_tokens, retrieval.canonicalAnchors], 48),
+          replacesRefs: typedGraphRefValues([item.replaces, item.supersedes, item.invalidates, item.lifecycle?.replaces, item.lifecycle?.supersedes, item.lifecycle?.invalidates, item.retrieval?.replaces, item.retrieval?.supersedes]),
+          contradictsRefs: typedGraphRefValues([item.contradicts, item.contradictedBy, item.conflictsWith, item.conflict_refs, item.conflictRefs]),
+          resolvesRefs: typedGraphRefValues([item.resolves, item.resolved, item.resolution_of, item.resolutionOf, item.closes, item.settles]),
+          resolvedByRefs: typedGraphRefValues([item.resolved_by, item.resolvedBy, item.resolution, item.closure]),
+          fulfillsRefs: typedGraphRefValues([item.fulfills, item.fulfilled, item.fulfillment_of, item.fulfillmentOf, item.pays_off, item.paysOff]),
+          fulfilledByRefs: typedGraphRefValues([item.fulfilled_by, item.fulfilledBy, item.payoff, item.payoffRef]),
+          violatesRefs: typedGraphRefValues([item.violates, item.violated, item.breaks, item.breaches]),
+          violatedByRefs: typedGraphRefValues([item.violated_by, item.violatedBy, item.broken_by, item.brokenBy]),
+          causesRefs: typedGraphRefValues([item.causes, item.caused, item.leads_to, item.leadsTo, item.results_in, item.resultsIn]),
+          causedByRefs: typedGraphRefValues([item.caused_by, item.causedBy, item.because_of, item.becauseOf, item.source_cause, item.sourceCause]),
+          resultOfRefs: typedGraphRefValues([item.result_of, item.resultOf, item.consequence_of, item.consequenceOf, item.after_effect_of, item.afterEffectOf]),
+          dependsOnRefs: typedGraphRefValues([item.depends_on, item.dependsOn, item.requires, item.required_by, item.requiredBy]),
+          prerequisiteRefs: typedGraphRefValues([item.prerequisite_for, item.prerequisiteFor, item.enables, item.precondition_for, item.preconditionFor]),
+          continuesRefs: typedGraphRefValues([item.continues, item.continued_by, item.continuedBy, item.next_ref, item.nextRef, item.previous_ref, item.previousRef])
         },
         visibility: {
           ownerEntityId: semanticIdentifierText(item.ownerEntityId || ''),
@@ -14621,40 +21678,44 @@ const MODE_PROFILES = Object.freeze({
         updatedAt: Number(retrieval.updatedAt || item._locator?.createdAt || 0),
         importance: Number.isFinite(Number(retrieval.importance)) ? Number(retrieval.importance) : 0.4
       };
-      row.memoryNote = memoryNoteContextForRow(
-        memoryNotesByPacket.get(row.packetHash),
-        row,
-        item,
-        memoryNoteContextsByPacket.get(row.packetHash)
-      );
+      row.memoryNote = memoryNoteContextForRow(memoryNotesByPacket.get(row.packetHash), row, item, memoryNoteContextsByPacket.get(row.packetHash));
       if (axis === 'entity' && category === 'character' && item?._characterStateProjection?.active === true && row.publicText) {
-        row.memoryNote = {
-          ...(row.memoryNote || {}),
-          sectionText: row.publicText,
-          coreMemory: row.publicText,
-          characterStateProjection: true,
-          characterStateProjectionVersion: CHARACTER_STATE_PROJECTION_VERSION,
-          characterStateSlotSources: clone(item._characterStateProjection?.slotSources || {}, {}),
-          characterStateSlotDecay: clone(item._characterStateProjection?.slotDecay || {}, {}),
-          characterStateExpiredSlots: ensureArray(item._characterStateProjection?.expiredSlots)
-        };
+        row.memoryNote = { ...(row.memoryNote || {}), sectionText: row.publicText, coreMemory: row.publicText, characterStateProjection: true,
+          characterStateProjectionVersion: CHARACTER_STATE_PROJECTION_VERSION, characterStateSlotSources: clone(item._characterStateProjection?.slotSources || {}, {}),
+          characterStateSlotDecay: clone(item._characterStateProjection?.slotDecay || {}, {}), characterStateExpiredSlots: ensureArray(item._characterStateProjection?.expiredSlots) };
       }
       const retrievalAliases = ensureArray(row.memoryNote?.retrievalAliases);
       if (retrievalAliases.length) {
         row.retrieval.priorityTerms = mergeValues([row.retrieval.priorityTerms, retrievalAliases], 128);
-        row.retrieval.crossLingualTokens = mergeValues([
-          row.retrieval.crossLingualTokens,
-          canonicalRecallTokensForText(retrievalAliases.join(' '))
-        ], 160);
+        row.retrieval.crossLingualTokens = mergeValues([row.retrieval.crossLingualTokens, canonicalRecallTokensForText(retrievalAliases.join(' '))], 160);
       }
       return attachSparseAtomicRecord(row, item);
     }).filter(row => !isLowSignalContinuityRow(row));
     const inheritedRows = inheritPacketKnowledgeBoundaries(baseRows);
-    const rows = [
-      ...inheritedRows.map(row => attachPacketMemoryLifecycle(row, store)),
-      ...buildDerivedEventMemoryRows(inheritedRows, store)
-    ];
-    store.index = attachUnifiedMemoryAssociations(selectProtectedIndexRows(rows, INDEX_ROW_LIMIT));
+    const rows = [...inheritedRows.map(row => attachPacketMemoryLifecycle(row, store)), ...buildDerivedEventMemoryRows(inheritedRows, store)];
+    const remainingBeforeGraph = Number.isFinite(Number(options?.deadlineAt)) ? Math.max(0, Number(options.deadlineAt) - now()) : Number.POSITIVE_INFINITY;
+    const policy = derivedIndexBuildPolicy(rows.length, remainingBeforeGraph, settings);
+    const derivedSettings = { ...settings, typedMemoryGraphEnabled: policy.typedGraphEnabled, hierarchicalEpisodeMemoryEnabled: policy.episodeEnabled };
+    const graphStartedAt = now();
+    store.index = attachUnifiedMemoryAssociations(selectProtectedIndexRows(rows, INDEX_ROW_LIMIT), store, derivedSettings);
+    const graphMs = now() - graphStartedAt;
+    const remainingBeforeEpisode = Number.isFinite(Number(options?.deadlineAt)) ? Math.max(0, Number(options.deadlineAt) - now()) : Number.POSITIVE_INFINITY;
+    const episodeAllowed = policy.episodeEnabled && !(store.index.length >= 160 && remainingBeforeEpisode < 650);
+    const episodeStartedAt = now();
+    const episodeIndex = buildHierarchicalEpisodeIndex(store.index, store, { ...derivedSettings, hierarchicalEpisodeMemoryEnabled: episodeAllowed });
+    const episodeMs = now() - episodeStartedAt;
+    if (!store.memory || typeof store.memory !== 'object') store.memory = { summaries: [], notes: [], episodes: [], episodeIndex: null };
+    store.memory.episodeIndex = episodeIndex;
+    store.memory.episodes = ensureArray(episodeIndex?.episodes);
+    Memory.lastDerivedIndexBuild = {
+      version: DERIVED_ROUTING_COMPILER_VERSION,
+      policy: { ...policy, episodeEnabled: episodeAllowed },
+      baseRows: baseRows.length,
+      indexRows: store.index.length,
+      graphMs,
+      episodeMs,
+      totalMs: now() - buildStartedAt
+    };
   };
   const axisWeights = query => {
     const body = text(query);
@@ -15256,7 +22317,7 @@ const MODE_PROFILES = Object.freeze({
   const buildRetrievalQuerySignature = (store, query, settings = Memory.settings) => {
     const aliasDictionary = buildAliasDictionary(store);
     const knowledgeContext = buildKnowledgeContext(store, query, settings);
-    const contextFocus = null;
+    const contextFocus = settings?.retrievalRecentContext?.active ? settings.retrievalRecentContext : null;
     const expandedQuery = expandQueryWithAliases(store, query, aliasDictionary, knowledgeContext);
     const expandedText = expandedQuery.text;
     const rawQuery = text(query);
@@ -15308,6 +22369,7 @@ const MODE_PROFILES = Object.freeze({
       mentionedEntities,
       knowledgeContext,
       contextFocus,
+      queryTopics: decomposeHayakuRecallTopics(rawQuery, settings, 4),
       latentEpisodicCue,
       tokens: tokensList,
       phraseBigrams: bigramTokens(tokensList, 220),
@@ -15405,7 +22467,82 @@ const MODE_PROFILES = Object.freeze({
   const requestKnowledgeUnavailableForRow = (row, query, knowledgeContext, settings = Memory.settings) => requestCachedQueryRowFeature(
     settings, query, row, 'knowledge_unavailable', () => isKnowledgeUnavailableForQuery(row, query, knowledgeContext)
   );
-  const requestContextFocusSignalForRow = () => ({ signal: 0, boost: 0, primary: 0, support: 0, topic: 0 });
+  const requestContextFocusSignalForRow = (row = {}, contextFocus = null, settings = Memory.settings || DEFAULT_SETTINGS) => {
+    if (!contextFocus?.active || !contextFocus.text) return { signal: 0, boost: 0, primary: 0, support: 0, topic: 0 };
+    const r = row?.retrieval || {};
+    const rowTokens = mergeValues([
+      r.tokens,
+      r.subjectTokens,
+      r.relationEndpoints,
+      r.priorityTerms,
+      tokenize(row?.publicText || '', 180)
+    ], 320);
+    const rowCanonical = mergeValues([
+      r.canonicalAnchors,
+      r.crossLingualTokens,
+      canonicalRecallTokensForValue(row?.item || row)
+    ], 220).filter(token => CANONICAL_RECALL_TOKEN_PREFIX_RE.test(token));
+    const rowEntities = mergeValues([
+      r.subjectTokens,
+      r.relationEndpoints,
+      r.entityNames,
+      r.knowledgeEntities,
+      row?.item?.name,
+      row?.item?.title,
+      row?.item?.from,
+      row?.item?.to
+    ], 128);
+    const rowConcepts = mergeValues([r.conceptTokens, r.crossLingualTokens, conceptTokensForRetrieval(r)], 220);
+    const rowFrames = mergeValues([r.semanticFrameTokens, semanticFrameTokensForText(row?.publicText || '')], 160);
+    const metric = (left, right) => {
+      if (!ensureArray(left).length || !ensureArray(right).length) return 0;
+      const stats = weightedJaccard(left, right);
+      return Math.max(Number(stats.jaccard || 0), Number(stats.coverage || 0));
+    };
+    const primary = metric(contextFocus.primaryTokens, rowTokens);
+    const tokenSignal = metric(contextFocus.supportTokens, rowTokens);
+    const canonicalSignal = metric(contextFocus.canonicalTokens, rowCanonical);
+    const entitySignal = metric(contextFocus.entityTokens, rowEntities);
+    const conceptSignal = metric(contextFocus.conceptTokens, rowConcepts);
+    const frameSignal = metric(contextFocus.semanticFrameTokens, rowFrames);
+    let topic = 0;
+    for (const segment of ensureArray(contextFocus.topics).slice(1, 5)) {
+      const segmentTokens = tokenize(segment, 96);
+      topic = Math.max(topic, metric(segmentTokens, rowTokens));
+    }
+    const support = clamp(
+      Math.max(
+        tokenSignal * 0.86,
+        canonicalSignal,
+        entitySignal * 0.92,
+        conceptSignal * 0.78,
+        frameSignal * 0.78,
+        topic * 0.84
+      ),
+      0, 1, 0
+    );
+    const authorityScale = contextFocus.ambiguous === true ? 1 : 0.72;
+    const signal = clamp(support * authorityScale, 0, 1, 0);
+    const supportWeight = clamp(Number(contextFocus.supportWeight || 0.25), 0.08, 0.5, 0.25);
+    const boostCap = contextFocus.ambiguous === true ? 0.06 : 0.038;
+    const boost = clamp(signal * supportWeight * 0.19, 0, boostCap, 0);
+    return {
+      signal,
+      boost,
+      primary,
+      support,
+      topic,
+      tokenSignal,
+      canonicalSignal,
+      entitySignal,
+      conceptSignal,
+      frameSignal,
+      supportWeight,
+      contextHash: text(contextFocus.hash || ''),
+      messagesUsed: Number(contextFocus.messagesUsed || 0),
+      reason: text(contextFocus.reason || '')
+    };
+  };
   const buildRetrievalBm25DocumentRaw = row => {
     const r = row.retrieval || {};
     const out = [];
@@ -15781,6 +22918,187 @@ const MODE_PROFILES = Object.freeze({
       };
     });
   };
+  const hierarchicalEpisodeBroadQuery = (signature = {}) => {
+    const raw = text(signature?.rawQuery || '');
+    return isPastStateLookupQuery(raw)
+      || isExplicitStateHistoryComparisonQuery(raw)
+      || /(?:전체|흐름|과정|경과|타임라인|연대|기억나|무슨\s*일|what\s+happened|whole\s+story|timeline|history|arc|経緯|全体|流れ|何があった)/i.test(raw)
+      || ensureArray(signature?.tokens).length <= 5;
+  };
+  const hierarchicalEpisodeScore = (episode = {}, signature = {}, settings = Memory.settings || DEFAULT_SETTINGS, store = {}) => {
+    const queryTokens = ensureArray(signature?.tokens);
+    const contextTokens = mergeValues([
+      signature?.contextFocus?.tokens,
+      signature?.contextFocus?.priorityTerms,
+      ensureArray(signature?.contextFocus?.topics).flatMap(topic => tokenize(topic, 80))
+    ], 240);
+    const episodeTokens = ensureArray(episode?.tokens);
+    const word = weightedJaccard(queryTokens, episodeTokens);
+    const context = weightedJaccard(contextTokens, episodeTokens);
+    const canonical = weightedJaccard(
+      ensureArray(signature?.canonicalTokens),
+      ensureArray(episode?.canonicalAnchors)
+    );
+    const entity = weightedJaccard(
+      mergeValues([signature?.entityTokens, signature?.mentionedEntities], 128),
+      ensureArray(episode?.entities)
+    );
+    const place = weightedJaccard(
+      ensureArray(signature?.canonicalTokens).filter(value => /^place:/i.test(text(value))),
+      ensureArray(episode?.places)
+    );
+    const object = weightedJaccard(
+      ensureArray(signature?.canonicalTokens).filter(value => /^object:/i.test(text(value))),
+      ensureArray(episode?.objects)
+    );
+    const rawKey = normalizeKey(signature?.rawQuery || '');
+    const episodeKey = normalizeKey(episode?.searchText || '');
+    const exact = rawKey.length >= 6 && episodeKey.includes(rawKey) ? 1 : 0;
+    const broad = hierarchicalEpisodeBroadQuery(signature);
+    const level = Math.max(1, Number(episode?.level || 1));
+    const levelFactor = broad ? Math.min(1.12, 0.96 + (level - 1) * 0.045) : Math.max(0.58, 1 - (level - 1) * 0.16);
+    const oldEpisode = Number(episode?.turnEnd || 0) < Math.max(0, Number(store?.worldlineHeadOrdinal || store?.turn || 0) - 4);
+    const currentPenalty = signature?.presentStateQuery && oldEpisode && !isPastStateLookupQuery(signature?.rawQuery || '') ? 0.72 : 1;
+    const contextAuthority = signature?.contextFocus?.ambiguous === true ? 0.82 : 0.46;
+    const base = Math.max(
+      exact,
+      Number(word.coverage || 0) * 0.72,
+      Number(word.jaccard || 0) * 0.92,
+      Number(canonical.coverage || 0),
+      Number(entity.coverage || 0) * 0.92,
+      Number(place.coverage || 0) * 0.94,
+      Number(object.coverage || 0) * 0.90,
+      Number(context.coverage || 0) * contextAuthority
+    );
+    const support = clamp(
+      Number(canonical.jaccard || 0) * 0.18
+      + Number(entity.jaccard || 0) * 0.14
+      + Number(context.jaccard || 0) * 0.10
+      + Math.min(0.08, Number(episode?.importance || 0) * 0.08),
+      0, 0.34, 0
+    );
+    return {
+      score: clamp((base + support) * levelFactor * currentPenalty, 0, 1, 0),
+      exact,
+      word: Math.max(Number(word.coverage || 0), Number(word.jaccard || 0)),
+      context: Math.max(Number(context.coverage || 0), Number(context.jaccard || 0)),
+      canonical: Math.max(Number(canonical.coverage || 0), Number(canonical.jaccard || 0)),
+      entity: Math.max(Number(entity.coverage || 0), Number(entity.jaccard || 0)),
+      levelFactor,
+      currentPenalty,
+      broad
+    };
+  };
+  const hierarchicalEpisodeDescendLeaves = (episode = {}, index = {}, signature = {}, settings = Memory.settings || DEFAULT_SETTINGS, store = {}, depth = 0) => {
+    if (!episode || depth > HIERARCHICAL_EPISODE_TUNING.maxLevels) return [];
+    const children = ensureArray(episode.childEpisodeIds);
+    if (Number(episode.level || 1) <= 1 || !children.length) return [episode];
+    const byId = new Map(ensureArray(index.episodes).map(item => [item.id, item]));
+    const scored = children.map(id => byId.get(id)).filter(Boolean)
+      .map(child => ({ child, detail: hierarchicalEpisodeScore(child, signature, settings, store) }))
+      .sort((a, b) => Number(b.detail.score || 0) - Number(a.detail.score || 0)
+        || Number(b.child.turnEnd || 0) - Number(a.child.turnEnd || 0));
+    const positive = scored.filter(entry => Number(entry.detail.score || 0) >= Math.max(0.025, HIERARCHICAL_EPISODE_TUNING.routerMinScore * 0.45));
+    const selected = (positive.length ? positive : scored.slice(0, 1))
+      .slice(0, signature?.contextFocus?.ambiguous === true || hierarchicalEpisodeBroadQuery(signature) ? 2 : 1);
+    const leaves = selected.flatMap(entry => hierarchicalEpisodeDescendLeaves(entry.child, index, signature, settings, store, depth + 1));
+    const unique = [];
+    const seen = new Set();
+    for (const leaf of leaves) {
+      if (!leaf?.id || seen.has(leaf.id)) continue;
+      seen.add(leaf.id);
+      unique.push(leaf);
+      if (unique.length >= HIERARCHICAL_EPISODE_TUNING.maxDescendedLeavesPerHit) break;
+    }
+    return unique;
+  };
+  const applyHierarchicalEpisodeRouting = (rows = [], signature = {}, store = {}, settings = Memory.settings || DEFAULT_SETTINGS) => {
+    const input = ensureArray(rows);
+    const index = store?.memory?.episodeIndex;
+    const searchableEpisodes = ensureArray(index?.routingEpisodes).length ? ensureArray(index.routingEpisodes) : ensureArray(index?.episodes);
+    if (settings?.hierarchicalEpisodeMemoryEnabled === false || !index?.enabled || !searchableEpisodes.length || !input.length) {
+      Memory.lastEpisodeRouting = { version: HIERARCHICAL_EPISODE_MEMORY_VERSION, enabled: settings?.hierarchicalEpisodeMemoryEnabled !== false,
+        episodes: ensureArray(index?.episodes).length, selected: 0, routedRows: 0, reason: input.length ? 'episode_index_unavailable' : 'no_rows' };
+      return input;
+    }
+    const maxHits = Math.max(1, Math.min(8, Number(settings?.episodeRouterMaxHits || DEFAULT_SETTINGS.episodeRouterMaxHits)));
+    const scored = searchableEpisodes.map(episode => ({ episode, detail: hierarchicalEpisodeScore(episode, signature, settings, store) }))
+      .filter(entry => Number(entry.detail.score || 0) >= HIERARCHICAL_EPISODE_TUNING.routerMinScore)
+      .sort((a, b) => Number(b.detail.score || 0) - Number(a.detail.score || 0)
+        || Number(b.episode.level || 1) - Number(a.episode.level || 1)
+        || Number(b.episode.turnEnd || 0) - Number(a.episode.turnEnd || 0));
+    const selectedEpisodes = [];
+    const coveredLeafIds = new Set();
+    for (const entry of scored) {
+      const leaves = hierarchicalEpisodeDescendLeaves(entry.episode, index, signature, settings, store);
+      const leafIds = leaves.map(leaf => leaf.id).filter(Boolean);
+      const overlap = leafIds.filter(id => coveredLeafIds.has(id)).length / Math.max(1, leafIds.length);
+      if (overlap > 0.82 && selectedEpisodes.length > 0) continue;
+      selectedEpisodes.push({ ...entry, leaves });
+      leafIds.forEach(id => coveredLeafIds.add(id));
+      if (selectedEpisodes.length >= maxHits) break;
+    }
+    if (!selectedEpisodes.length) {
+      Memory.lastEpisodeRouting = { version: HIERARCHICAL_EPISODE_MEMORY_VERSION, enabled: true, episodes: ensureArray(index.episodes).length,
+        selected: 0, routedRows: 0, reason: 'no_episode_match' };
+      return input;
+    }
+    const rowByKey = new Map(input.map(row => [row?.unifiedMemoryKey || unifiedMemoryKeyFor(row), row]));
+    const signals = new Map();
+    const selectedDiagnostics = [];
+    selectedEpisodes.forEach(({ episode, detail, leaves }) => {
+      const leafKeys = uniq(leaves.flatMap(leaf => ensureArray(leaf.childMemoryKeys)), HIERARCHICAL_EPISODE_TUNING.maxMemoryKeysPerEpisode * HIERARCHICAL_EPISODE_TUNING.maxDescendedLeavesPerHit);
+      const candidates = leafKeys.map(key => rowByKey.get(key)).filter(Boolean).map(row => {
+        const b = row?.scoreBreakdown || {};
+        const direct = Math.max(Number(b.directSparseEvidence || 0), Number(b.sparseEvidence || 0), Number(b.identitySignal || 0), Number(b.canonicalExactSignal || 0), Number(b.charNgramSignal || 0) * 0.72);
+        const rowTokens = mergeValues([row?.retrieval?.tokens, row?.retrieval?.priorityTerms, row?.retrieval?.canonicalAnchors, tokenize(row?.publicText || '', 180)], 320);
+        const affinityStats = weightedJaccard(ensureArray(signature?.tokens), rowTokens);
+        const contextStats = weightedJaccard(mergeValues([signature?.contextFocus?.tokens, signature?.contextFocus?.canonicalTokens, signature?.contextFocus?.entityTokens], 200), rowTokens);
+        const affinity = Math.max(Number(affinityStats.coverage || 0), Number(affinityStats.jaccard || 0),
+          Number(contextStats.coverage || 0) * (signature?.contextFocus?.ambiguous === true ? 0.78 : 0.42), direct);
+        const protectedRow = hayakuMustCarryRow(row, store) || hierarchicalEpisodeRowPriority(row) >= 1.02;
+        const broadKeep = detail.broad && Number(row?.importance || 0) >= 0.66;
+        const signal = clamp(Number(detail.score || 0) * (0.30 + affinity * 0.70) + (protectedRow ? 0.025 : 0), 0, HIERARCHICAL_EPISODE_TUNING.routerMaxSignal, 0);
+        return { row, direct, affinity, signal, protectedRow, broadKeep };
+      }).filter(candidate => candidate.signal > 0 && (candidate.direct >= HIERARCHICAL_EPISODE_TUNING.routerDirectFloor || candidate.affinity >= 0.045 || candidate.protectedRow || candidate.broadKeep))
+        .sort((a, b) => b.signal - a.signal || hierarchicalEpisodeRowPriority(b.row) - hierarchicalEpisodeRowPriority(a.row))
+        .slice(0, HIERARCHICAL_EPISODE_TUNING.maxRouterRowsPerEpisode);
+      candidates.forEach(candidate => {
+        const key = candidate.row?.unifiedMemoryKey || unifiedMemoryKeyFor(candidate.row);
+        const previous = signals.get(key);
+        if (!previous || candidate.signal > previous.signal) signals.set(key, {
+          signal: candidate.signal, episodeId: episode.id, level: episode.level, turnStart: episode.turnStart, turnEnd: episode.turnEnd,
+          episodeScore: detail.score, affinity: candidate.affinity, direct: candidate.direct, leafEpisodeIds: leaves.map(leaf => leaf.id)
+        });
+      });
+      selectedDiagnostics.push({ id: episode.id, level: episode.level, turnStart: episode.turnStart, turnEnd: episode.turnEnd,
+        score: Number(detail.score.toFixed(4)), exact: detail.exact, word: Number(detail.word.toFixed(4)), context: Number(detail.context.toFixed(4)),
+        canonical: Number(detail.canonical.toFixed(4)), entity: Number(detail.entity.toFixed(4)), routedRows: candidates.length,
+        descendedLeaves: leaves.map(leaf => ({ id: leaf.id, turnStart: leaf.turnStart, turnEnd: leaf.turnEnd })) });
+    });
+    const output = input.map(row => {
+      const key = row?.unifiedMemoryKey || unifiedMemoryKeyFor(row);
+      const route = signals.get(key);
+      if (!route) return row;
+      const breakdown = row?.scoreBreakdown || {};
+      const directEvidence = Math.max(Number(breakdown.sparseEvidence || 0), Number(breakdown.directSparseEvidence || 0));
+      const episodeRouterSignal = Number(route.signal || 0);
+      const boostedEvidence = clamp(Math.max(directEvidence, episodeRouterSignal * 0.72, directEvidence + episodeRouterSignal * 0.18), 0, 1, directEvidence);
+      return { ...row, scoreBreakdown: { ...breakdown,
+        episodeRouterVersion: HIERARCHICAL_EPISODE_MEMORY_VERSION, episodeRouterSignal: Number(episodeRouterSignal.toFixed(4)),
+        episodeRouterEpisodeId: route.episodeId, episodeRouterLevel: route.level, episodeRouterTurnRange: [route.turnStart, route.turnEnd],
+        episodeRouterLeafIds: route.leafEpisodeIds, episodeRouterEpisodeScore: Number(Number(route.episodeScore || 0).toFixed(4)),
+        episodeRouterAffinity: Number(Number(route.affinity || 0).toFixed(4)), episodeRouterDirectEvidence: Number(Number(route.direct || 0).toFixed(4)),
+        directSparseEvidence: Number(directEvidence.toFixed(4)), sparseEvidence: Number(boostedEvidence.toFixed(4)),
+        unifiedMemoryEvidence: Number(Math.max(Number(breakdown.unifiedMemoryEvidence || 0), boostedEvidence).toFixed(4)) } };
+    });
+    Memory.lastEpisodeRouting = { version: HIERARCHICAL_EPISODE_MEMORY_VERSION, enabled: true, episodes: ensureArray(index.episodes).length,
+      searchableEpisodes: searchableEpisodes.length, selected: selectedDiagnostics.length, routedRows: signals.size,
+      broadQuery: hierarchicalEpisodeBroadQuery(signature), selectedEpisodes: selectedDiagnostics,
+      reason: signals.size ? 'episode_router_applied_recursive' : 'episode_match_without_child_evidence' };
+    return output;
+  };
+
   const unifiedMemoryTemporalTransition = (source = {}, target = {}, signature = {}) => {
     const sourceDistance = Number(source?.locator?.distanceFromLatest ?? source?.retrieval?.distanceFromLatest);
     const targetDistance = Number(target?.locator?.distanceFromLatest ?? target?.retrieval?.distanceFromLatest);
@@ -15868,12 +23186,12 @@ const MODE_PROFILES = Object.freeze({
       };
     });
   };
-  const applyUnifiedMemoryCandidateSignals = (rows = [], signature = {}, corpus = {}, store = {}) =>
-    applyLatentEpisodicReactivation(
-      applyUnifiedAssociationActivation(applyUnifiedContextualBm25f(rows, signature, corpus), signature, store),
-      signature,
-      store
-    );
+  const applyUnifiedMemoryCandidateSignals = (rows = [], signature = {}, corpus = {}, store = {}) => {
+    const episodeRouted = applyHierarchicalEpisodeRouting(rows, signature, store, signature?.settings || Memory.settings || DEFAULT_SETTINGS);
+    const contextualized = applyUnifiedContextualBm25f(episodeRouted, signature, corpus);
+    const associated = applyUnifiedAssociationActivation(contextualized, signature, store);
+    return applyLatentEpisodicReactivation(associated, signature, store);
+  };
   const sparseCandidateForceKeep = (row = {}, signature = {}) => {
     const category = text(row.category || '');
     const lifecycle = row?._memoryLifecycle || {};
@@ -15898,7 +23216,7 @@ const MODE_PROFILES = Object.freeze({
   };
   const rankSparseCandidates = (rows = [], signature = {}, mode = 'balanced') => {
     if (!rows.length) return rows;
-    const signals = ['bm25fSignal', 'identitySignal', 'canonicalExactSignal', 'associationSignal', 'episodicCueSignal', 'charNgramSignal', 'lexicalCoverageSignal', 'sparsePhraseSignal'];
+    const signals = ['bm25fSignal', 'identitySignal', 'canonicalExactSignal', 'episodeRouterSignal', 'associationSignal', 'episodicCueSignal', 'charNgramSignal', 'lexicalCoverageSignal', 'sparsePhraseSignal'];
     const ranks = {};
     signals.forEach(signal => {
       const sorted = [...rows]
@@ -17407,6 +24725,7 @@ const MODE_PROFILES = Object.freeze({
       Number(breakdown.bm25Signal || 0),
       Number(breakdown.phraseSignal || 0),
       Number(breakdown.exactSignal || 0),
+      Number(breakdown.episodeRouterSignal || 0) * 0.72,
       breakdown.queryEntityHit === true ? 0.24 : 0,
       breakdown.specificTokenHit === true ? 0.18 : 0
     );
@@ -17497,18 +24816,66 @@ const MODE_PROFILES = Object.freeze({
     let rows = gatedRows;
     let consistentRows = gatedRows;
     let selected = { entity: [], world: [], narrative: [], planner: [] };
+    let graphClosureResult = { rows: gatedRows, bundles: [], diagnostics: { enabled: false, admittedRows: 0, bundles: [] } };
     if (options.deferFinalization === true) {
       markSparseStage('deferredFinalization');
     } else {
-      const fusedRows = applyRrfFusion(gatedRows);
+      // The ordinary evidence gate remains authoritative for seeds. A bounded
+      // typed closure may then admit only strongly linked transition/context rows.
+      graphClosureResult = applyHayakuGraphClosure(packetScoredRows, gatedRows, query, settings, store);
+      markSparseStage('graphClosure');
+      const preferenceRows = applyHayakuRecallPreference(graphClosureResult.rows, query, settings, store);
+      markSparseStage('recallPreference');
+      const stableRows = applyHayakuRecallStability(preferenceRows, query, settings);
+      markSparseStage('recallStability');
+      const contextCoveredRows = applyHayakuContextTopicCoverage(stableRows, settings);
+      markSparseStage('contextCoverage');
+      const fusedRows = applyRrfFusion(contextCoveredRows);
       markSparseStage('rrfFusion');
       rows = applyPacketStructureCohesion(fusedRows)
         .sort((a, b) => b.score - a.score || b.importance - a.importance || b.updatedAt - a.updatedAt);
       markSparseStage('packetCohesion');
+      const transitionResult = applyHayakuTransitionBundleBoost(rows, query, settings, store);
+      rows = transitionResult.rows;
+      markSparseStage('transitionBundle');
       consistentRows = applyExplicitMultiTopicCoverage(collapseCurrentWorldConflicts(rows, query), query);
       markSparseStage('conflictCoverage');
       selected = selectRowsPerAxis(consistentRows, settings, profile, query, store);
+      selected = ensureHayakuGraphClosureCoverage(selected, consistentRows, graphClosureResult.bundles, settings, { query, store });
+      selected = ensureHayakuTransitionCoverage(selected, consistentRows, transitionResult.bundles, settings);
       markSparseStage('selection');
+      const stability = rememberHayakuRecallSelection(selected, query, settings);
+      Memory.lastRecallController = {
+        version: HAYAKU_RECALL_CONTROLLER_VERSION,
+        preference: preferenceRows.preferenceDiagnostics || hayakuRecallPreferenceWeights(query, settings, settings?.retrievalRecentContext),
+        recentContext: settings?.retrievalRecentContext ? {
+          active: settings.retrievalRecentContext.active === true,
+          configuredMessages: Number(settings.retrievalRecentContext.configuredMessages || 0),
+          requestedMessages: Number(settings.retrievalRecentContext.requestedMessages || 0),
+          messagesUsed: Number(settings.retrievalRecentContext.messagesUsed || 0),
+          reason: text(settings.retrievalRecentContext.reason || ''),
+          ambiguous: settings.retrievalRecentContext.ambiguous === true,
+          supportWeight: Number(settings.retrievalRecentContext.supportWeight || 0),
+          hash: text(settings.retrievalRecentContext.hash || ''),
+          queryTopics: ensureArray(settings.retrievalRecentContext.queryTopics),
+          contextTopics: ensureArray(settings.retrievalRecentContext.topics)
+        } : { active: false },
+        globalRoutingCatalog: clone(Memory.lastGlobalRoutingCatalog || null, null),
+        derivedIndexBuild: clone(Memory.lastDerivedIndexBuild || null, null),
+        typedMemoryGraph: clone(Memory.lastTypedMemoryGraph || null, null),
+        graphClosure: clone(graphClosureResult.diagnostics || null, null),
+        episodeIndex: clone(Memory.lastEpisodeIndex || null, null),
+        episodeRouting: clone(Memory.lastEpisodeRouting || null, null),
+        contradictionBundles: transitionResult.bundles.map(bundle => ({
+          id: bundle.id,
+          topic: bundle.topic,
+          axis: bundle.axis,
+          count: bundle.count,
+          earliestRef: text(bundle.earliest?.publicRef || bundle.earliest?.id || ''),
+          latestRef: text(bundle.latest?.publicRef || bundle.latest?.id || '')
+        })),
+        stability
+      };
     }
     const diagnostics = {
       engine: UNIFIED_MEMORY_ENGINE_VERSION,
@@ -17526,7 +24893,9 @@ const MODE_PROFILES = Object.freeze({
       totalMs: now() - sparseStartedAt
     };
     if (Memory.settings?.debug && options.recordDiagnostics !== false) Memory.lastSparseSearch = diagnostics;
-    return options.returnDetails === true ? { selected, rows: consistentRows, diagnostics } : selected;
+    return options.returnDetails === true
+      ? { selected, rows: consistentRows, closureCandidates: packetScoredRows, graphClosure: graphClosureResult, diagnostics }
+      : selected;
   };
   const searchIndexDeep = (store, query, settings = Memory.settings) => searchIndexSparseHybrid(store, query, settings, 'deep');
 
@@ -17580,9 +24949,562 @@ const MODE_PROFILES = Object.freeze({
     text(row?.locator?.field || ''),
     normalizeKey(row?.publicText || '').slice(0, 140)
   ].join('|');
+
+  const HAYAKU_RECALL_CONTROLLER_VERSION = 'hayaku_recall_controller_v1';
+  const hayakuRecallPreferenceWeights = (query = '', settings = Memory.settings || DEFAULT_SETTINGS, contextFocus = null) => {
+    let relatedness = clamp(Number(settings?.recallRelatednessWeight ?? DEFAULT_SETTINGS.recallRelatednessWeight), 0, 100, DEFAULT_SETTINGS.recallRelatednessWeight);
+    let recency = clamp(Number(settings?.recallRecencyWeight ?? DEFAULT_SETTINGS.recallRecencyWeight), 0, 100, DEFAULT_SETTINGS.recallRecencyWeight);
+    if (relatedness + recency <= 0) { relatedness = 70; recency = 30; }
+    let modifier = 'configured';
+    if (isExplicitStateHistoryComparisonQuery(query)) {
+      recency *= 0.52;
+      modifier = 'compare_history';
+    } else if (isPastStateLookupQuery(query)) {
+      recency *= 0.20;
+      modifier = 'past_or_timeline';
+    } else if (isCurrentStateQuery(query)) {
+      recency *= 1.45;
+      modifier = 'current_state';
+    } else if (contextFocus?.ambiguous === true || PREVIOUS_TURN_RECALL_BRIDGE_CONTINUATION_RE.test(text(query))) {
+      recency *= 1.25;
+      modifier = 'scene_continuation';
+    }
+    const total = Math.max(0.0001, relatedness + recency);
+    return {
+      version: HAYAKU_RECALL_CONTROLLER_VERSION,
+      configuredRelatedness: Number(settings?.recallRelatednessWeight ?? DEFAULT_SETTINGS.recallRelatednessWeight),
+      configuredRecency: Number(settings?.recallRecencyWeight ?? DEFAULT_SETTINGS.recallRecencyWeight),
+      relatedness: relatedness / total,
+      recency: recency / total,
+      modifier
+    };
+  };
+  const hayakuRecallRelatedness = (row = {}, contextFocus = null) => {
+    const b = row?.scoreBreakdown || {};
+    const direct = Math.max(
+      Number(b.sparsePrimaryScore || 0),
+      Number(b.strengthenedJaccard || 0),
+      Number(b.entitySignal || 0),
+      Number(b.canonicalSignal || 0),
+      Number(b.locatorSignal || 0),
+      Number(b.directSpecificity || 0),
+      Number(b.phraseSignal || 0),
+      Number(b.priorityBoost || 0),
+      Number(b.episodeRouterSignal || 0) * 0.76,
+      Number(b?.packetLedgerV2?.sameRefBoost || 0) * 4
+    );
+    const context = Number(b.contextFocusSignal || 0);
+    const contextAuthority = contextFocus?.ambiguous === true ? 0.72 : 0.34;
+    const combined = Math.max(direct, context * contextAuthority, Number(b.relevanceEvidence || 0) * 0.92);
+    return clamp(combined, 0, 1, 0);
+  };
+  const hayakuRecallRecency = (row = {}, store = {}) => {
+    const b = row?.scoreBreakdown || {};
+    const lifecycle = b.packetMemoryLifecycle || row?._memoryLifecycle || packetMemoryLifecycleFor(row, store);
+    const distance = Number(row?.locator?.distanceFromLatest ?? row?.retrieval?.distanceFromLatest);
+    const distanceSignal = Number.isFinite(distance) && distance >= 0 ? 1 / (1 + distance / 8) : 0;
+    const ageTurns = Math.max(0, Number(lifecycle?.ageTurns || 0) || 0);
+    const turnSignal = 1 / (1 + ageTurns / 6);
+    return clamp(Math.max(Number(b.recency || 0), Number(b.freshnessPrior || 0), distanceSignal, turnSignal), 0, 1, 0);
+  };
+  const hayakuMustCarryRow = (row = {}, store = {}) => {
+    const lifecycle = row?.scoreBreakdown?.packetMemoryLifecycle || row?._memoryLifecycle || packetMemoryLifecycleFor(row, store);
+    const category = text(row?.category || '').toLowerCase();
+    if (text(lifecycle?.mustCarryClass || '')) return true;
+    if (/^(?:continuity_lock|do_not_resolve_yet|speaker_boundary|knowledge_boundary|overpromotion_risk|consent_memory|pov_memory|secret)$/i.test(category)) return true;
+    if (/(?:prohibited_inference|false_inference|critical_dialogue)/i.test(category)) return true;
+    const b = row?.scoreBreakdown || {};
+    return Number(b.canonicalSignal || 0) >= 0.72 || Number(b.locatorSignal || 0) >= 0.72;
+  };
+  const TYPED_GRAPH_CAUSAL_QUERY_RE = /(?:왜|원인|이유|때문|어떻게\s*해서|무엇이\s*초래|why|cause|reason|because|led\s+to|result|なぜ|理由|原因|为什么|原因)/i;
+  const TYPED_GRAPH_PROMISE_QUERY_RE = /(?:약속|맹세|이행|지켰|어겼|성사|promise|vow|fulfilled|violated|約束|誓|履行|承诺)/i;
+  const TYPED_GRAPH_CONFLICT_QUERY_RE = /(?:갈등|싸움|다툼|화해|해결|충돌|모순|conflict|fight|argument|reconcile|resolve|contradict|葛藤|喧嘩|和解|矛盾)/i;
+  const typedGraphClosureRelationPriority = (type = '', query = '', source = {}, target = {}, store = {}) => {
+    const relation = text(type).toUpperCase();
+    if (!TYPED_MEMORY_GRAPH_EDGE_SET.has(relation)) return 0;
+    const past = isPastStateLookupQuery(query);
+    const compare = isExplicitStateHistoryComparisonQuery(query);
+    const current = isCurrentStateQuery(query) && !past;
+    let priority = 1;
+    if (TYPED_GRAPH_CAUSAL_QUERY_RE.test(text(query))) {
+      priority *= /^(?:CAUSES|CAUSED_BY|RESULT_OF|DEPENDS_ON|PREREQUISITE_OF)$/.test(relation) ? 1.35 : 0.84;
+    }
+    if (TYPED_GRAPH_PROMISE_QUERY_RE.test(text(query))) {
+      priority *= /^(?:FULFILLS|FULFILLED_BY|VIOLATES|VIOLATED_BY|RESOLVES|RESOLVED_BY|SUPERSEDES|SUPERSEDED_BY)$/.test(relation) ? 1.36 : 0.82;
+    }
+    if (TYPED_GRAPH_CONFLICT_QUERY_RE.test(text(query)) || PACKET_MEMORY_DISPUTE_QUERY_RE.test(text(query))) {
+      priority *= /^(?:CONTRADICTS|RESOLVES|RESOLVED_BY|SUPERSEDES|SUPERSEDED_BY)$/.test(relation) ? 1.34 : 0.86;
+    }
+    if (past || compare) {
+      priority *= /^(?:SUPERSEDES|SUPERSEDED_BY|CONTRADICTS|RESOLVES|RESOLVED_BY|FULFILLS|FULFILLED_BY|VIOLATES|VIOLATED_BY|CONTINUES)$/.test(relation) ? 1.18 : 1;
+    } else if (current) {
+      priority *= /^(?:SUPERSEDED_BY|RESOLVED_BY|FULFILLED_BY|VIOLATED_BY)$/.test(relation) ? 1.34
+        : (/^(?:SUPERSEDES|RESOLVES|FULFILLS|VIOLATES)$/.test(relation) ? 0.58 : 0.92);
+      const sourceOrder = typedGraphRowOrder(source, store);
+      const targetOrder = typedGraphRowOrder(target, store);
+      if (targetOrder > sourceOrder) priority *= 1.12;
+      else if (targetOrder < sourceOrder && !compare) priority *= 0.72;
+    }
+    if (PREVIOUS_TURN_RECALL_BRIDGE_CONTINUATION_RE.test(text(query)) && relation === 'CONTINUES') priority *= 1.28;
+    return clamp(priority, 0.35, 1.65, 1);
+  };
+  const typedGraphClosureEvidence = row => {
+    const b = row?.scoreBreakdown || {};
+    return clamp(Math.max(
+      Number(b.relevanceEvidence || 0),
+      Number(b.sparseEvidence || 0),
+      Number(b.directSparseEvidence || 0),
+      Number(b.directSpecificity || 0),
+      Number(b.episodeRouterSignal || 0) * 0.82,
+      Number(b.associationSignal || 0) * 0.74,
+      Number(row?.importance || 0) * 0.16
+    ), 0, 1, 0);
+  };
+  const typedGraphClosureRelationAllowed = (type = '', query = '', source = {}, target = {}, store = {}) => {
+    const relation = text(type || '').toUpperCase();
+    const history = isPastStateLookupQuery(query) || isExplicitStateHistoryComparisonQuery(query) || PACKET_MEMORY_DISPUTE_QUERY_RE.test(text(query));
+    if (history) return true;
+    if (!isCurrentStateQuery(query)) return true;
+    const sourceOrder = typedGraphRowOrder(source, store);
+    const targetOrder = typedGraphRowOrder(target, store);
+    if (targetOrder < sourceOrder && /^(?:SUPERSEDES|RESOLVES|FULFILLS|VIOLATES|CAUSES)$/.test(relation)) return false;
+    if (/^(?:SUPERSEDED_BY|RESOLVED_BY|FULFILLED_BY|VIOLATED_BY|CAUSED_BY|RESULT_OF)$/.test(relation) && targetOrder <= sourceOrder) return false;
+    return true;
+  };
+  const applyHayakuGraphClosure = (allRows = [], seedRows = [], query = '', settings = Memory.settings || DEFAULT_SETTINGS, store = {}) => {
+    const seeds = ensureArray(seedRows);
+    if (settings?.typedMemoryGraphEnabled === false || settings?.graphClosureRecallEnabled === false || !seeds.length) {
+      const disabled = {
+        version: TYPED_MEMORY_GRAPH_VERSION,
+        enabled: settings?.typedMemoryGraphEnabled !== false && settings?.graphClosureRecallEnabled !== false,
+        seeds: seeds.length,
+        admittedRows: 0,
+        bundles: [],
+        reason: seeds.length ? 'disabled' : 'no_seeds'
+      };
+      Memory.lastGraphClosure = disabled;
+      return { rows: seeds, bundles: [], diagnostics: disabled };
+    }
+    const candidateMap = new Map();
+    ensureArray(allRows).forEach(row => {
+      const key = row?.unifiedMemoryKey || unifiedMemoryKeyFor(row);
+      if (key) candidateMap.set(key, row);
+    });
+    seeds.forEach(row => {
+      const key = row?.unifiedMemoryKey || unifiedMemoryKeyFor(row);
+      if (key) candidateMap.set(key, row);
+    });
+    const seedKeys = new Set(seeds.map(row => row?.unifiedMemoryKey || unifiedMemoryKeyFor(row)).filter(Boolean));
+    const maxNodes = Math.max(2, Math.min(24, Number(settings?.graphClosureMaxNodes || DEFAULT_SETTINGS.graphClosureMaxNodes)));
+    const rankedSeeds = seeds.slice().sort((a, b) => typedGraphClosureEvidence(b) - typedGraphClosureEvidence(a)
+      || Number(b?.score || 0) - Number(a?.score || 0))
+      .slice(0, TYPED_MEMORY_GRAPH_TUNING.closureMaxSeeds);
+    const admitted = new Map();
+    const bundles = [];
+    for (const seed of rankedSeeds) {
+      if (admitted.size >= maxNodes) break;
+      const seedKey = seed?.unifiedMemoryKey || unifiedMemoryKeyFor(seed);
+      if (!seedKey) continue;
+      const seedStrength = Math.max(0.08, typedGraphClosureEvidence(seed), clamp(Number(seed?.score || 0) / 1.35, 0, 1, 0));
+      const frontier = [{ key: seedKey, signal: seedStrength, hop: 0, path: [] }];
+      const visited = new Map([[seedKey, seedStrength]]);
+      const members = [];
+      while (frontier.length && admitted.size < maxNodes) {
+        const state = frontier.shift();
+        if (!state || state.hop >= TYPED_MEMORY_GRAPH_TUNING.closureMaxHops) continue;
+        const source = candidateMap.get(state.key);
+        if (!source) continue;
+        const edges = ensureArray(source?.retrieval?.typedAssociations || source?.retrieval?.unifiedAssociations)
+          .filter(edge => edge?.typed === true || TYPED_MEMORY_GRAPH_EDGE_SET.has(text(edge?.type || '').toUpperCase()))
+          .sort((a, b) => Number(b.weight || 0) - Number(a.weight || 0));
+        for (const edge of edges) {
+          const type = text(edge?.type || '').toUpperCase();
+          if (!TYPED_MEMORY_GRAPH_EDGE_SET.has(type) || Number(edge?.weight || 0) < TYPED_MEMORY_GRAPH_TUNING.closureMinEdgeWeight) continue;
+          const targetKey = text(edge?.targetMemoryKey || '');
+          const target = candidateMap.get(targetKey);
+          if (!target || targetKey === state.key) continue;
+          if (!typedGraphClosureRelationAllowed(type, query, source, target, store)) continue;
+          const relationPriority = typedGraphClosureRelationPriority(type, query, source, target, store);
+          const targetEvidence = typedGraphClosureEvidence(target);
+          const temporal = unifiedMemoryTemporalTransition(source, target, { rawQuery: query, presentStateQuery: isCurrentStateQuery(query) });
+          const signal = clamp(
+            Number(state.signal || 0)
+              * Number(edge.weight || 0)
+              * relationPriority
+              * (state.hop === 0 ? 0.92 : TYPED_MEMORY_GRAPH_TUNING.hopDecay)
+              * temporal,
+            0,
+            TYPED_MEMORY_GRAPH_TUNING.maxAssociationSignal,
+            0
+          );
+          const previousVisited = Number(visited.get(targetKey) || 0);
+          if (signal <= previousVisited || signal < TYPED_MEMORY_GRAPH_TUNING.closureMinSignal) continue;
+          const strongTypedEdge = Number(edge.weight || 0) >= 0.40 && /^(?:SUPERSEDES|SUPERSEDED_BY|CONTRADICTS|RESOLVES|RESOLVED_BY|FULFILLS|FULFILLED_BY|VIOLATES|VIOLATED_BY)$/.test(type);
+          if (targetEvidence < TYPED_MEMORY_GRAPH_TUNING.closureMinTargetEvidence && !hayakuMustCarryRow(target, store) && !strongTypedEdge) continue;
+          visited.set(targetKey, signal);
+          const path = [...ensureArray(state.path), {
+            from: state.key,
+            to: targetKey,
+            type,
+            weight: Number(edge.weight || 0),
+            signal: Number(signal.toFixed(4))
+          }].slice(-TYPED_MEMORY_GRAPH_TUNING.closureMaxHops);
+          const alreadySeed = seedKeys.has(targetKey);
+          if (!alreadySeed) {
+            const prior = admitted.get(targetKey);
+            if (!prior || signal > prior.signal) admitted.set(targetKey, {
+              row: target,
+              signal,
+              seedKey,
+              seedRef: text(seed?.publicRef || seed?.id || ''),
+              type,
+              hop: state.hop + 1,
+              path,
+              targetEvidence
+            });
+          }
+          members.push({
+            key: targetKey,
+            ref: text(target?.publicRef || target?.id || ''),
+            axis: text(target?.axis || ''),
+            category: text(target?.category || ''),
+            type,
+            hop: state.hop + 1,
+            signal: Number(signal.toFixed(4)),
+            alreadySeed
+          });
+          frontier.push({ key: targetKey, signal, hop: state.hop + 1, path });
+          if (admitted.size >= maxNodes) break;
+        }
+      }
+      const uniqueMembers = [];
+      const seen = new Set();
+      members.sort((a, b) => b.signal - a.signal || a.hop - b.hop).forEach(member => {
+        const key = `${member.key}|${member.type}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        uniqueMembers.push(member);
+      });
+      if (uniqueMembers.length) bundles.push({
+        id: stableHash64(`${seedKey}|${query}|${uniqueMembers.map(member => `${member.key}:${member.type}`).join('|')}`),
+        seedKey,
+        seedRef: text(seed?.publicRef || seed?.id || ''),
+        seedAxis: text(seed?.axis || ''),
+        seedCategory: text(seed?.category || ''),
+        members: uniqueMembers.slice(0, TYPED_MEMORY_GRAPH_TUNING.closureMaxMembersPerBundle),
+        relationTypes: uniq(uniqueMembers.map(member => member.type), 12),
+        maxSignal: Number(Math.max(...uniqueMembers.map(member => member.signal)).toFixed(4))
+      });
+      if (bundles.length >= TYPED_MEMORY_GRAPH_TUNING.closureMaxBundles) break;
+    }
+    const outputMap = new Map();
+    seeds.forEach(row => {
+      const key = row?.unifiedMemoryKey || unifiedMemoryKeyFor(row);
+      if (key) outputMap.set(key, row);
+    });
+    admitted.forEach((entry, key) => {
+      const row = entry.row;
+      const baseScore = Number(row?.score || 0) || 0;
+      const boost = clamp(entry.signal * 0.22, 0.008, 0.07, 0.008);
+      outputMap.set(key, {
+        ...row,
+        score: clamp(baseScore + boost, 0, 1.35, baseScore),
+        graphClosureBundles: uniq([
+          ...ensureArray(row?.graphClosureBundles),
+          stableHash64(`${entry.seedKey}|${entry.type}|${key}`)
+        ], 8),
+        scoreBreakdown: {
+          ...(row?.scoreBreakdown || {}),
+          graphClosure: {
+            version: TYPED_MEMORY_GRAPH_VERSION,
+            admitted: true,
+            seedKey: entry.seedKey,
+            seedRef: entry.seedRef,
+            type: entry.type,
+            hop: entry.hop,
+            signal: Number(entry.signal.toFixed(4)),
+            targetEvidence: Number(entry.targetEvidence.toFixed(4)),
+            boost: Number(boost.toFixed(4)),
+            path: entry.path,
+            scoreBeforeClosure: Number(baseScore.toFixed(4))
+          }
+        }
+      });
+    });
+    const diagnostics = {
+      version: TYPED_MEMORY_GRAPH_VERSION,
+      enabled: true,
+      seeds: rankedSeeds.length,
+      admittedRows: admitted.size,
+      maxNodes,
+      bundles: bundles.map(bundle => ({
+        id: bundle.id,
+        seedRef: bundle.seedRef,
+        relationTypes: bundle.relationTypes,
+        members: bundle.members,
+        maxSignal: bundle.maxSignal
+      })),
+      reason: admitted.size ? 'typed_closure_applied' : 'no_typed_neighbor_admitted'
+    };
+    Memory.lastGraphClosure = diagnostics;
+    return { rows: [...outputMap.values()], bundles, diagnostics };
+  };
+  const ensureHayakuGraphClosureCoverage = (selected = {}, allRows = [], bundles = [], settings = Memory.settings || DEFAULT_SETTINGS, options = {}) => {
+    if (!ensureArray(bundles).length) return selected;
+    const out = Object.fromEntries(Object.entries(selected || {}).map(([axis, rows]) => [axis, ensureArray(rows).slice()]));
+    const rowMap = new Map(ensureArray(allRows).map(row => [row?.unifiedMemoryKey || unifiedMemoryKeyFor(row), row]));
+    const baseLimit = Math.max(1, Math.min(12, Number(settings?.maxItemsPerAxis || DEFAULT_SETTINGS.maxItemsPerAxis)));
+    for (const bundle of ensureArray(bundles).slice(0, 3)) {
+      const requiredKeys = [bundle.seedKey, ...ensureArray(bundle.members).filter(member => member.alreadySeed !== true).slice(0, 2).map(member => member.key)].filter(Boolean);
+      for (const key of requiredKeys) {
+        const row = rowMap.get(key);
+        if (!row) continue;
+        const axis = row.axis in out ? row.axis : 'narrative';
+        const existing = new Set(ensureArray(out[axis]).map(item => item?.unifiedMemoryKey || unifiedMemoryKeyFor(item)));
+        if (!existing.has(key)) out[axis].push(row);
+        out[axis] = out[axis]
+          .sort((a, b) => Number(b?.score || 0) - Number(a?.score || 0))
+          .filter((item, index, list) => list.findIndex(other => (other?.unifiedMemoryKey || unifiedMemoryKeyFor(other)) === (item?.unifiedMemoryKey || unifiedMemoryKeyFor(item))) === index)
+          .slice(0, baseLimit + 2);
+      }
+    }
+    return out;
+  };
+
+  const applyHayakuRecallPreference = (rows = [], query = '', settings = Memory.settings || DEFAULT_SETTINGS, store = {}) => {
+    const contextFocus = settings?.retrievalRecentContext || null;
+    const weights = hayakuRecallPreferenceWeights(query, settings, contextFocus);
+    const output = ensureArray(rows).map(row => {
+      const relatedness = hayakuRecallRelatedness(row, contextFocus);
+      const recency = hayakuRecallRecency(row, store);
+      const preference = clamp(relatedness * weights.relatedness + recency * weights.recency, 0, 1, 0);
+      const baseScore = Number(row?.score || 0) || 0;
+      const baseNormalized = clamp(baseScore / 1.35, 0, 1, 0);
+      const mustCarry = hayakuMustCarryRow(row, store);
+      let delta = (preference - baseNormalized) * 0.20 * 1.35;
+      delta = clamp(delta, -0.085, 0.105, 0);
+      if (mustCarry) delta = Math.max(0, delta);
+      const score = clamp(baseScore + delta, 0, 1.35, baseScore);
+      return {
+        ...row,
+        score,
+        scoreBreakdown: {
+          ...(row?.scoreBreakdown || {}),
+          recallPreference: {
+            version: weights.version,
+            configuredRelatedness: weights.configuredRelatedness,
+            configuredRecency: weights.configuredRecency,
+            relatednessWeight: Number(weights.relatedness.toFixed(4)),
+            recencyWeight: Number(weights.recency.toFixed(4)),
+            modifier: weights.modifier,
+            relatedness: Number(relatedness.toFixed(4)),
+            recency: Number(recency.toFixed(4)),
+            preference: Number(preference.toFixed(4)),
+            delta: Number(delta.toFixed(4)),
+            mustCarry,
+            scoreBeforePreference: Number(baseScore.toFixed(4))
+          }
+        }
+      };
+    });
+    try { Object.defineProperty(output, 'preferenceDiagnostics', { value: weights, enumerable: false, configurable: true }); } catch (_) {}
+    return output;
+  };
+  const hayakuRecallStabilityEligible = (query = '', contextFocus = null, previous = null) => {
+    if (!previous || now() - Number(previous.at || 0) > 10 * 60 * 1000) return false;
+    if (contextFocus?.hash && contextFocus.hash === previous.contextHash) return true;
+    return HAYAKU_CONTEXT_REFERENTIAL_RE.test(text(query)) || PREVIOUS_TURN_RECALL_BRIDGE_CONTINUATION_RE.test(text(query));
+  };
+  const applyHayakuRecallStability = (rows = [], query = '', settings = Memory.settings || DEFAULT_SETTINGS) => {
+    if (settings?.recallStabilityEnabled === false) return ensureArray(rows);
+    const contextFocus = settings?.retrievalRecentContext || null;
+    const previous = Memory.lastRecallSelection;
+    if (!hayakuRecallStabilityEligible(query, contextFocus, previous)) return ensureArray(rows);
+    const previousKeys = new Set(ensureArray(previous?.rowKeys));
+    const maxBoost = clamp(Number(settings?.recallStabilityBoost ?? DEFAULT_SETTINGS.recallStabilityBoost), 0, 0.08, DEFAULT_SETTINGS.recallStabilityBoost);
+    return ensureArray(rows).map(row => {
+      const key = compositeRecallRowKey(row);
+      if (!key || !previousKeys.has(key)) return row;
+      const relevance = hayakuRecallRelatedness(row, contextFocus);
+      if (relevance < 0.03) return row;
+      const boost = clamp(maxBoost * (0.35 + relevance * 0.65), 0, maxBoost, 0);
+      const baseScore = Number(row?.score || 0) || 0;
+      return {
+        ...row,
+        score: clamp(baseScore + boost, 0, 1.35, baseScore),
+        scoreBreakdown: {
+          ...(row?.scoreBreakdown || {}),
+          recallStability: {
+            version: HAYAKU_RECALL_CONTROLLER_VERSION,
+            boost: Number(boost.toFixed(4)),
+            previousContextHash: text(previous?.contextHash || ''),
+            scoreBeforeStability: Number(baseScore.toFixed(4))
+          }
+        }
+      };
+    });
+  };
+  const applyHayakuContextTopicCoverage = (rows = [], settings = Memory.settings || DEFAULT_SETTINGS) => {
+    const focus = settings?.retrievalRecentContext;
+    if (settings?.multiQueryRecall === false || !focus?.active || focus.ambiguous !== true) return ensureArray(rows);
+    const bonuses = new Map();
+    for (const topic of ensureArray(focus.topics).slice(-4)) {
+      const topicTokens = tokenize(topic, 96);
+      if (!topicTokens.length) continue;
+      let best = null;
+      let bestSignal = 0;
+      for (const row of ensureArray(rows)) {
+        const rowTokens = mergeValues([row?.retrieval?.tokens, row?.retrieval?.priorityTerms, tokenize(row?.publicText || '', 160)], 260);
+        const stats = weightedJaccard(topicTokens, rowTokens);
+        const signal = Math.max(Number(stats.jaccard || 0), Number(stats.coverage || 0));
+        if (signal > bestSignal) { bestSignal = signal; best = row; }
+      }
+      if (best && bestSignal >= 0.10) bonuses.set(best, Math.max(Number(bonuses.get(best) || 0), Math.min(0.032, 0.012 + bestSignal * 0.025)));
+    }
+    return ensureArray(rows).map(row => {
+      const boost = Number(bonuses.get(row) || 0);
+      if (!boost) return row;
+      const baseScore = Number(row?.score || 0) || 0;
+      return {
+        ...row,
+        score: clamp(baseScore + boost, 0, 1.35, baseScore),
+        scoreBreakdown: {
+          ...(row?.scoreBreakdown || {}),
+          contextTopicCoverage: {
+            version: HAYAKU_RECALL_CONTROLLER_VERSION,
+            boost: Number(boost.toFixed(4)),
+            contextHash: text(focus.hash || ''),
+            scoreBeforeCoverage: Number(baseScore.toFixed(4))
+          }
+        }
+      };
+    });
+  };
+  const hayakuTransitionIntent = query => isExplicitStateHistoryComparisonQuery(query)
+    || (isPastStateLookupQuery(query) && /(?:변화|변천|이력|순서|처음|이후|timeline|history|change|before|after|経緯|変化|最初)/i.test(text(query)))
+    || PACKET_MEMORY_DISPUTE_QUERY_RE.test(text(query));
+  const hayakuRowObservationOrder = (row = {}, store = {}) => {
+    const currentTurn = Math.max(0, Number(store?.worldlineHeadOrdinal || store?.turn || 0) || 0);
+    const turn = packetMemoryTurnOf(row, currentTurn);
+    const distance = Number(row?.locator?.distanceFromLatest ?? row?.retrieval?.distanceFromLatest);
+    const timestamp = Number(row?.updatedAt || row?.createdAt || 0) || 0;
+    return turn * 1000000000000 + (Number.isFinite(distance) ? Math.max(0, 1000000 - distance) : 0) * 1000000 + Math.min(999999, timestamp % 1000000);
+  };
+  const hayakuTransitionBundles = (rows = [], query = '', settings = Memory.settings || DEFAULT_SETTINGS, store = {}) => {
+    if (settings?.contradictionBundleEnabled === false || !hayakuTransitionIntent(query)) return [];
+    const groups = new Map();
+    for (const row of ensureArray(rows)) {
+      const stateLike = row?.axis === 'world' && /^(?:current_state|active_event|historical_event)$/i.test(text(row?.category || ''));
+      const relationLike = row?.axis === 'entity' && /^(?:relation|character|current_state)$/i.test(text(row?.category || ''));
+      if (!stateLike && !relationLike) continue;
+      const topic = stateLike
+        ? currentWorldTopicKey(row, query)
+        : normalizeKey([row?.retrieval?.subject, row?.retrieval?.relationEndpoints, row?.publicRef].flatMap(ensureArray).join('|'));
+      if (!topic) continue;
+      if (!groups.has(topic)) groups.set(topic, []);
+      groups.get(topic).push(row);
+    }
+    const bundles = [];
+    for (const [topic, group] of groups) {
+      const ordered = group.slice().sort((a, b) => hayakuRowObservationOrder(a, store) - hayakuRowObservationOrder(b, store));
+      if (ordered.length < 2) continue;
+      const earliest = ordered[0];
+      const latest = ordered[ordered.length - 1];
+      if (compositeRecallRowKey(earliest) === compositeRecallRowKey(latest)) continue;
+      bundles.push({
+        id: stableHash64(`${topic}|${compositeRecallRowKey(earliest)}|${compositeRecallRowKey(latest)}`),
+        topic,
+        axis: latest?.axis || earliest?.axis || 'world',
+        earliest,
+        latest,
+        count: ordered.length
+      });
+      if (bundles.length >= 4) break;
+    }
+    return bundles;
+  };
+  const applyHayakuTransitionBundleBoost = (rows = [], query = '', settings = Memory.settings || DEFAULT_SETTINGS, store = {}) => {
+    const bundles = hayakuTransitionBundles(rows, query, settings, store);
+    if (!bundles.length) return { rows: ensureArray(rows), bundles: [] };
+    const byKey = new Map();
+    for (const bundle of bundles) {
+      for (const [role, row] of [['earliest', bundle.earliest], ['latest', bundle.latest]]) {
+        const key = compositeRecallRowKey(row);
+        if (!key) continue;
+        const list = byKey.get(key) || [];
+        list.push({ id: bundle.id, topic: bundle.topic, role, count: bundle.count });
+        byKey.set(key, list);
+      }
+    }
+    const output = ensureArray(rows).map(row => {
+      const bundleRows = byKey.get(compositeRecallRowKey(row));
+      if (!bundleRows?.length) return row;
+      const boost = bundleRows.some(item => item.role === 'latest') ? 0.035 : 0.025;
+      const baseScore = Number(row?.score || 0) || 0;
+      return {
+        ...row,
+        contradictionBundles: bundleRows,
+        score: clamp(baseScore + boost, 0, 1.35, baseScore),
+        scoreBreakdown: {
+          ...(row?.scoreBreakdown || {}),
+          contradictionBundle: {
+            version: HAYAKU_RECALL_CONTROLLER_VERSION,
+            boost,
+            bundles: bundleRows,
+            scoreBeforeBundle: Number(baseScore.toFixed(4))
+          }
+        }
+      };
+    });
+    return { rows: output, bundles };
+  };
+  const ensureHayakuTransitionCoverage = (selected = {}, allRows = [], bundles = [], settings = Memory.settings || DEFAULT_SETTINGS) => {
+    if (!bundles.length) return selected;
+    const out = Object.fromEntries(Object.entries(selected || {}).map(([axis, rows]) => [axis, ensureArray(rows).slice()]));
+    const limitFor = axis => Math.max(1, Math.min(12, Number(settings?.maxItemsPerAxis || DEFAULT_SETTINGS.maxItemsPerAxis) + (axis === 'planner' ? 2 : 0)));
+    const rowMap = new Map(ensureArray(allRows).map(row => [compositeRecallRowKey(row), row]));
+    for (const bundle of bundles.slice(0, 2)) {
+      const axis = bundle.axis in out ? bundle.axis : 'world';
+      const requiredKeys = [compositeRecallRowKey(bundle.earliest), compositeRecallRowKey(bundle.latest)].filter(Boolean);
+      const existingKeys = new Set(ensureArray(out[axis]).map(compositeRecallRowKey));
+      for (const key of requiredKeys) {
+        if (existingKeys.has(key)) continue;
+        const row = rowMap.get(key);
+        if (!row) continue;
+        out[axis].push(row);
+        existingKeys.add(key);
+      }
+      const required = new Set(requiredKeys);
+      out[axis] = out[axis]
+        .sort((a, b) => Number(b?.score || 0) - Number(a?.score || 0))
+        .filter((row, index, list) => list.findIndex(other => compositeRecallRowKey(other) === compositeRecallRowKey(row)) === index);
+      const requiredRows = out[axis].filter(row => required.has(compositeRecallRowKey(row)));
+      const ordinary = out[axis].filter(row => !required.has(compositeRecallRowKey(row)));
+      out[axis] = [...requiredRows, ...ordinary].slice(0, Math.max(limitFor(axis), requiredRows.length));
+    }
+    return out;
+  };
+  const rememberHayakuRecallSelection = (selected = {}, query = '', settings = Memory.settings || DEFAULT_SETTINGS) => {
+    const rows = Object.values(selected || {}).flatMap(ensureArray);
+    Memory.lastRecallSelection = {
+      version: HAYAKU_RECALL_CONTROLLER_VERSION,
+      at: now(),
+      contextHash: text(settings?.retrievalRecentContext?.hash || ''),
+      queryHash: stableHash64(text(query || '')),
+      rowKeys: uniq(rows.map(compositeRecallRowKey).filter(Boolean), 48)
+    };
+    return Memory.lastRecallSelection;
+  };
   const mergeCompositeRecallLanes = (laneResults = [], query = '', settings = Memory.settings, store = {}) => {
     const grouped = new Map();
+    const closureCandidateMap = new Map();
     for (const laneResult of ensureArray(laneResults)) {
+      ensureArray(laneResult?.closureCandidates).forEach(row => {
+        const key = row?.unifiedMemoryKey || unifiedMemoryKeyFor(row);
+        if (!key) return;
+        const previous = closureCandidateMap.get(key);
+        if (!previous || Number(row?.score || 0) > Number(previous?.score || 0)) closureCandidateMap.set(key, row);
+      });
       const lane = text(laneResult?.lane || 'medium');
       const deferredRows = ensureArray(laneResult?.rows);
       const ranked = (deferredRows.length
@@ -17641,10 +25563,51 @@ const MODE_PROFILES = Object.freeze({
       });
     }
     const profile = modeProfile(effectivePerformanceModeOf(settings));
-    const mergedRows = applyPacketStructureCohesion(applyRrfFusion([...grouped.values()]))
+    const seedRows = [...grouped.values()];
+    const graphClosureResult = applyHayakuGraphClosure([...closureCandidateMap.values()], seedRows, query, settings, store);
+    const preferenceRows = applyHayakuRecallPreference(graphClosureResult.rows, query, settings, store);
+    const stableRows = applyHayakuRecallStability(preferenceRows, query, settings);
+    const contextCoveredRows = applyHayakuContextTopicCoverage(stableRows, settings);
+    const fusedRows = applyPacketStructureCohesion(applyRrfFusion(contextCoveredRows))
       .sort((a, b) => Number(b.score || 0) - Number(a.score || 0) || Number(b.importance || 0) - Number(a.importance || 0));
-    const consistentRows = applyExplicitMultiTopicCoverage(collapseCurrentWorldConflicts(mergedRows, query), query);
-    return selectRowsPerAxis(consistentRows, settings, profile, query, store);
+    const transitionResult = applyHayakuTransitionBundleBoost(fusedRows, query, settings, store);
+    const consistentRows = applyExplicitMultiTopicCoverage(collapseCurrentWorldConflicts(transitionResult.rows, query), query);
+    let selected = selectRowsPerAxis(consistentRows, settings, profile, query, store);
+    selected = ensureHayakuGraphClosureCoverage(selected, consistentRows, graphClosureResult.bundles, settings, { query, store });
+    selected = ensureHayakuTransitionCoverage(selected, consistentRows, transitionResult.bundles, settings);
+    const stability = rememberHayakuRecallSelection(selected, query, settings);
+    Memory.lastRecallController = {
+      version: HAYAKU_RECALL_CONTROLLER_VERSION,
+      preference: preferenceRows.preferenceDiagnostics || hayakuRecallPreferenceWeights(query, settings, settings?.retrievalRecentContext),
+      recentContext: settings?.retrievalRecentContext ? {
+        active: settings.retrievalRecentContext.active === true,
+        configuredMessages: Number(settings.retrievalRecentContext.configuredMessages || 0),
+        requestedMessages: Number(settings.retrievalRecentContext.requestedMessages || 0),
+        messagesUsed: Number(settings.retrievalRecentContext.messagesUsed || 0),
+        reason: text(settings.retrievalRecentContext.reason || ''),
+        ambiguous: settings.retrievalRecentContext.ambiguous === true,
+        supportWeight: Number(settings.retrievalRecentContext.supportWeight || 0),
+        hash: text(settings.retrievalRecentContext.hash || ''),
+        queryTopics: ensureArray(settings.retrievalRecentContext.queryTopics),
+        contextTopics: ensureArray(settings.retrievalRecentContext.topics)
+      } : { active: false },
+      globalRoutingCatalog: clone(Memory.lastGlobalRoutingCatalog || null, null),
+      derivedIndexBuild: clone(Memory.lastDerivedIndexBuild || null, null),
+      typedMemoryGraph: clone(Memory.lastTypedMemoryGraph || null, null),
+      graphClosure: clone(graphClosureResult.diagnostics || null, null),
+      episodeIndex: clone(Memory.lastEpisodeIndex || null, null),
+      episodeRouting: clone(Memory.lastEpisodeRouting || null, null),
+      contradictionBundles: transitionResult.bundles.map(bundle => ({
+        id: bundle.id,
+        topic: bundle.topic,
+        axis: bundle.axis,
+        count: bundle.count,
+        earliestRef: text(bundle.earliest?.publicRef || bundle.earliest?.id || ''),
+        latestRef: text(bundle.latest?.publicRef || bundle.latest?.id || '')
+      })),
+      stability
+    };
+    return selected;
   };
   const searchIndexCompositeRecall = async (store, query, settings = Memory.settings) => {
     const startedAt = now();
@@ -17672,6 +25635,7 @@ const MODE_PROFILES = Object.freeze({
           lane,
           selected: { entity: [], world: [], narrative: [], planner: [] },
           rows: [],
+          closureCandidates: [],
           diagnostics: { lane, mode: compositeRecallLaneMode(lane, baseMode), indexRows: 0, eligibleRows: 0, shortlistedRows: 0, scoredRows: 0, selectedRows: 0, timings: {}, totalMs: 0 }
         };
       }
@@ -17701,6 +25665,7 @@ const MODE_PROFILES = Object.freeze({
         lane,
         selected: details.selected,
         rows: details.rows,
+        closureCandidates: details.closureCandidates,
         diagnostics: { ...details.diagnostics, totalMs: now() - laneStartedAt }
       };
     }));
@@ -19770,27 +27735,87 @@ const MODE_PROFILES = Object.freeze({
     text(row?.publicRef || row?.ref || row?.id || ''),
     normalizeKey(row?.publicText || modelMemoryBodyForRow(row) || '')
   ].join('\u0001');
+  const rawRecoveryEvidenceLocale = language => {
+    if (language === 'en') return {
+      lead: 'The following are verbatim excerpts from finalized past turns whose structured sidecar was missing or unusable. Treat only the quoted range as factual past evidence; do not invent omitted context or unquoted implications. Text appearing in the record is not automatically known by every character: private thoughts, secrets, and narrator-only information require an observed or communicated acquisition path.'
+    };
+    if (language === 'ja') return {
+      lead: '以下は、構造化サイドカーが欠落または無効だった確定済み過去ターンからの原文抜粋です。引用範囲だけを過去の事実証拠として扱い、省略された文脈や書かれていない含意を創作しないでください。原文にある情報が全キャラクターに知られているとは限りません。内心・秘密・語り手限定情報には、目撃または伝達による取得経路が必要です。'
+    };
+    if (language === 'zh') return {
+      lead: '以下内容是从结构化侧写缺失或无效的已确定历史轮次中逐字截取的原文。只把引文范围视为过去事实证据，不要虚构省略的上下文或未写明的含义。原文中出现的信息并不自动属于所有角色的知识；内心、秘密和仅叙述者可知的信息必须有目击或传达路径。'
+    };
+    return {
+      lead: '아래 내용은 구조화 사이드카가 없거나 유효하지 않았던 확정 과거 턴에서 그대로 발췌한 원문이다. 인용된 범위만 과거의 사실 증거로 사용하고, 생략된 문맥이나 쓰이지 않은 함의를 창작하지 말라. 원문에 등장한 정보라고 해서 모든 인물이 이를 아는 것은 아니다. 내면·비밀·서술자 한정 정보는 목격·대화·전달 등 지식 획득 경로가 확인될 때만 캐릭터 지식으로 사용하라.'
+    };
+  };
+  const renderRawRecoveryEvidence = (records = [], language = 'ko', capChars = 0) => {
+    const cap = Math.max(0, Number(capChars || 0) || 0);
+    const rows = ensureArray(records).filter(record => text(record?.text || '').trim());
+    if (!rows.length || cap <= 0) return { text: '', selected: rows.length, rendered: 0, deliveredIds: [], droppedIds: rows.map(row => row.id).filter(Boolean) };
+    const locale = rawRecoveryEvidenceLocale(language);
+    const header = '[VERBATIM PAST EVIDENCE]';
+    const footer = '[/VERBATIM PAST EVIDENCE]';
+    const selected = [];
+    const render = values => [
+      header,
+      locale.lead,
+      ...values.flatMap(record => [
+        '',
+        `[${record.historyScope === 'predecessor_session' ? 'PREDECESSOR ' : ''}T${Math.max(1, Number(record.pairIndex || 1) || 1)} · ${text(record.role || 'assistant').toUpperCase()}${record.epistemicCaution === true ? ' · EPISTEMIC CAUTION' : ''}]`,
+        ...(record.epistemicCaution === true ? [`[Knowledge boundary: ${text(record.epistemicStatus || 'private_or_narrator_only_possible')}]`] : []),
+        text(record.text).trim()
+      ]),
+      footer
+    ].join('\n').trim();
+    for (const row of rows) {
+      const candidate = render([...selected, row]);
+      if (candidate.length <= cap) selected.push(row);
+    }
+    const deliveredIds = selected.map(row => row.id).filter(Boolean);
+    const delivered = new Set(deliveredIds);
+    return {
+      text: selected.length ? render(selected) : '',
+      selected: rows.length,
+      rendered: selected.length,
+      deliveredIds,
+      droppedIds: rows.map(row => row.id).filter(id => id && !delivered.has(id))
+    };
+  };
   const buildPacketCoreMemoryContextDetailed = (selected = {}, query = '', settings = Memory.settings || DEFAULT_SETTINGS) => {
     const entries = packetCoreRecallEntries(selected, query);
-    if (!entries.length) {
+    const rawRows = ensureArray(selected?.rawRecoveryEvidence);
+    if (!entries.length && !rawRows.length) {
       return {
         text: '',
         selectedEntries: 0,
         renderedEntries: 0,
         selectedRowKeys: [],
         deliveredRowKeys: [],
-        droppedRowKeys: []
+        droppedRowKeys: [],
+        rawSelectedEntries: 0,
+        rawRenderedEntries: 0,
+        rawDeliveredIds: [],
+        rawDroppedIds: []
       };
     }
     const configured = normalizeMemoryLanguage(settings?.memoryLanguage || DEFAULT_SETTINGS.memoryLanguage);
     const language = configured === 'source'
-      ? (entries[0]?.language || 'en')
+      ? (entries[0]?.language || inferMemoryNoteLanguage(rawRows[0]?.text || '') || 'en')
       : configured;
     const locale = MODEL_MEMORY_VIEW_LOCALES[language] || MODEL_MEMORY_VIEW_LOCALES.ko;
     const explicitRecallBudget = Number(settings?.recallDataBudgetChars);
     const cap = Number.isFinite(explicitRecallBudget) && explicitRecallBudget >= 0
       ? Math.max(0, Math.floor(explicitRecallBudget))
       : Math.max(0, Math.min(9000, Math.floor(injectionCapForSettings(settings) * 0.72)));
+    const rawConfiguredCap = Math.max(0, Math.min(Number(settings?.rawRecallMaxChars || DEFAULT_SETTINGS.rawRecallMaxChars), cap));
+    // Structured continuity remains the primary model-facing memory. Verbatim
+    // fallback can use the full budget only when no structured packet evidence
+    // exists; otherwise it receives a bounded minority share.
+    const rawCap = entries.length ? Math.min(rawConfiguredCap, 1600, Math.floor(cap * 0.30)) : rawConfiguredCap;
+    const rawResult = renderRawRecoveryEvidence(rawRows, language, rawCap);
+    const separatorCost = rawResult.text && entries.length ? 2 : 0;
+    const structuredCap = Math.max(0, cap - rawResult.text.length - separatorCost);
     const renderEntries = values => {
       const grouped = new Map(CONTINUITY_EVIDENCE_LANE_ORDER.map(lane => [lane, []]));
       ensureArray(values).forEach(entry => {
@@ -19804,9 +27829,9 @@ const MODE_PROFILES = Object.freeze({
       }
       return lines.join('\n').trim();
     };
-    const source = renderEntries(entries);
+    const source = entries.length ? renderEntries(entries) : '';
     let keptEntries = entries;
-    if (source.length > cap) {
+    if (source.length > structuredCap) {
       keptEntries = [];
       const laneEntries = lane => entries.filter(entry => entry?.continuityLane === lane);
       const latestEntries = laneEntries(CONTINUITY_EVIDENCE_LANES.latestState);
@@ -19830,14 +27855,11 @@ const MODE_PROFILES = Object.freeze({
       for (const entry of packingOrder) {
         if (!entry?.memory) continue;
         const candidate = renderEntries([...keptEntries, entry]);
-        if (candidate.length <= cap) keptEntries.push(entry);
+        if (candidate.length <= structuredCap) keptEntries.push(entry);
       }
       const selectedLatestState = entries.some(entry => entry?.continuityLane === CONTINUITY_EVIDENCE_LANES.latestState);
       const deliveredLatestState = keptEntries.some(entry => entry?.continuityLane === CONTINUITY_EVIDENCE_LANES.latestState);
       if (selectedLatestState && !deliveredLatestState) {
-        // A transition chain without its terminal current projection can regress
-        // the scene. Preserve safety constraints/knowledge guards, but fail closed
-        // on historical event delivery when the latest state cannot fit atomically.
         keptEntries = keptEntries.filter(entry => entry?.continuityLane !== CONTINUITY_EVIDENCE_LANES.confirmedChanges);
       }
     }
@@ -19848,13 +27870,18 @@ const MODE_PROFILES = Object.freeze({
       .map(sourceRow => packetCoreRecallDeliveryRowKey(sourceRow?.axis, sourceRow?.row))
       .filter(Boolean)), 128);
     const delivered = new Set(deliveredRowKeys);
+    const structuredText = source.length <= structuredCap ? source : (keptEntries.length ? renderEntries(keptEntries) : '');
     return {
-      text: source.length <= cap ? source : (keptEntries.length ? renderEntries(keptEntries) : ''),
+      text: [structuredText, rawResult.text].filter(Boolean).join('\n\n'),
       selectedEntries: entries.length,
       renderedEntries: keptEntries.length,
       selectedRowKeys,
       deliveredRowKeys,
-      droppedRowKeys: selectedRowKeys.filter(key => !delivered.has(key))
+      droppedRowKeys: selectedRowKeys.filter(key => !delivered.has(key)),
+      rawSelectedEntries: rawResult.selected,
+      rawRenderedEntries: rawResult.rendered,
+      rawDeliveredIds: rawResult.deliveredIds,
+      rawDroppedIds: rawResult.droppedIds
     };
   };
   const buildPacketCoreMemoryContext = (selected = {}, query = '', settings = Memory.settings || DEFAULT_SETTINGS) =>
@@ -20182,7 +28209,11 @@ const MODE_PROFILES = Object.freeze({
     renderedEntries: 0,
     selectedRowKeys: ensureArray(selectedRowKeys),
     deliveredRowKeys: [],
-    droppedRowKeys: ensureArray(selectedRowKeys)
+    droppedRowKeys: ensureArray(selectedRowKeys),
+    rawSelectedEntries: 0,
+    rawRenderedEntries: 0,
+    rawDeliveredIds: [],
+    rawDroppedIds: []
   });
   const recallBudgetSelectedRowCatalog = selected => {
     const out = new Map();
@@ -20945,6 +28976,13 @@ const MODE_PROFILES = Object.freeze({
       initialPacketScanScope = syncPacketScanCacheScope(requestScope);
       let store = emptyStore();
       const query = stage('latestUserText', () => latestUserText(messages));
+      const recentContextFocus = stage('recentContextFocus', () => buildRecentContextFocus(
+        authoritativeChatAvailable ? authoritativeChatMessages : messages,
+        query,
+        settings
+      ));
+      settings.retrievalRecentContext = recentContextFocus;
+      Memory.lastRecentContextFocus = clone(recentContextFocus, null);
       const outputContract = stage('outputContract', () => detectOutputContract(messages));
       const performanceMode = stage('resolvePerformanceMode', () => resolvePerformanceMode(settings, messages, query, { scope: requestScope }));
       settings.effectiveMode = performanceMode.mode;
@@ -21166,6 +29204,20 @@ const MODE_PROFILES = Object.freeze({
           requestFallback: true
         };
       }
+      const recoveryDebtLifecycle = authoritativeChatAvailable
+        ? await stageAsync('recoveryDebtWorldline', () => reconcileRecoveryVaultWorldlineLifecycleDirect(
+            chatScope,
+            authoritativeSnapshot,
+            authoritativeLedger.worldline,
+            { reason: 'before_request_worldline_reconcile' }
+          ))
+        : null;
+      if (recoveryDebtLifecycle?.leasedPairIndices?.length) {
+        bridgeRecoverySuppressedPairIndices = uniq([
+          ...bridgeRecoverySuppressedPairIndices,
+          ...recoveryDebtLifecycle.leasedPairIndices
+        ].map(Number).filter(Boolean), 4096);
+      }
       const packetRecovery = stage('packetRecovery', () => {
         if (authoritativeChatAvailable) {
           const detected = detectPacketRecovery(authoritativeChatMessages, livePackets, settings, {
@@ -21203,6 +29255,9 @@ const MODE_PROFILES = Object.freeze({
         };
         return recovery;
       });
+      if (packetRecovery?.active === true && authoritativeChatAvailable) {
+        reserveInBandRecoveryDebt(packetRecovery, authoritativeSnapshot);
+      }
       const previousTurnRecallBridge = stage('previousTurnRecallBridge', () => buildPreviousTurnRecallBridge(messages, livePackets, query, settings));
       // The previous packet is delivered separately as a deterministic scene
       // baton. Keep semantic recall anchored to the user's actual words so a
@@ -21265,6 +29320,9 @@ const MODE_PROFILES = Object.freeze({
         store = projectionCacheHit.store;
         packetResults = projectionCacheHit.packetResults;
         ingested = projectionCacheHit.ingested;
+        if (projectionCacheHit.derivedIndexBuild) {
+          Memory.lastDerivedIndexBuild = { ...projectionCacheHit.derivedIndexBuild, cacheHit: true };
+        }
       }
       const ingestBudgetMs = settings.effectiveMode === 'deep'
         ? Math.max(1000, Math.floor(requestBudgetMs * DEEP_INGEST_BUDGET_RATIO))
@@ -21403,14 +29461,22 @@ const MODE_PROFILES = Object.freeze({
         }
       });
       stage('rebuildIndex', () => {
-        if (!projectionCacheHit) rebuildIndex(store);
+        if (!projectionCacheHit) rebuildIndex(store, { settings, deadlineAt: startedAt + requestBudgetMs, mode: settings.effectiveMode });
       });
-      if (projectionCachePlan && !projectionCacheHit && failed === 0 && !budgetExceeded) {
+      const derivedBuildPolicy = Memory.lastDerivedIndexBuild?.policy || null;
+      const derivedBuildMatchesRequested = !derivedBuildPolicy
+        || ((settings.typedMemoryGraphEnabled === false || derivedBuildPolicy.typedGraphEnabled === true)
+          && (settings.hierarchicalEpisodeMemoryEnabled === false || derivedBuildPolicy.episodeEnabled === true)
+          && derivedBuildPolicy.reason !== 'prebuild_budget_guard');
+      if (projectionCachePlan && !projectionCacheHit && failed === 0 && !budgetExceeded && derivedBuildMatchesRequested) {
         stage('projectionCacheStore', () => setProjectionCacheEntry(projectionCachePlan, {
           store,
           packetResults,
-          ingested
+          ingested,
+          derivedIndexBuild: Memory.lastDerivedIndexBuild
         }));
+      } else if (projectionCachePlan && !projectionCacheHit && !derivedBuildMatchesRequested) {
+        Memory.projectionCacheStats.degradedSkips = Math.max(0, Number(Memory.projectionCacheStats.degradedSkips || 0)) + 1;
       }
       settings.requestRetrievalCache = createRequestRetrievalCache(store, settings);
       // HAYAKU v1.5.8 — request-local live overlay built from the latest user
@@ -21432,7 +29498,7 @@ const MODE_PROFILES = Object.freeze({
       const searchIndexPressure = settings.effectiveMode === 'deep' && ensureArray(store.index).length > DEEP_SEARCH_SAFE_MAX_ROWS;
       const searchBudgetGuard = shouldUseSearchBudgetGuard(settings, ensureArray(store.index).length, searchElapsedMs, requestBudgetMs);
       if (searchElapsedPressure) budgetExceeded = true;
-      const [searched, packetHealth] = await stageAsync('parallelRecallProcessing', () => Promise.all([
+      const [searched, packetHealth, rawRecoveryRecall] = await stageAsync('parallelRecallProcessing', () => Promise.all([
         stageAsync('search', () => searchIndexCompositeRecall(
           store,
           retrievalQuery,
@@ -21440,11 +29506,22 @@ const MODE_PROFILES = Object.freeze({
             ? { ...settings, effectiveMode: 'fast', retrievalSceneBaton: sceneBaton }
             : { ...settings, retrievalSceneBaton: sceneBaton }
         )),
-        stageAsync('packetHealth', async () => computePacketHealth(packetResults, store))
+        stageAsync('packetHealth', async () => computePacketHealth(packetResults, store)),
+        stageAsync('rawRecoveryRecall', () => searchRecoveryVaultRawPassages(
+          chatScope,
+          retrievalQuery,
+          authoritativeChatAvailable ? authoritativeChatMessages : messages,
+          settings,
+          authoritativeSnapshot,
+          authoritativeLedger.worldline
+        ))
       ]));
       const packetCoverageFallbackRecall = stage('packetCoverageFallbackRecall', () => selectPacketCoverageFallbackRows(store, searched, query, settings));
       const selected = stage('currentSceneCohort', () => contextualizeSelectedCurrentness(packetCoverageFallbackRecall.selected, query));
       const selectedWithLiveOverlay = stage('liveOverlaySuppression', () => applyLiveOverlayToSelected(selected, liveOverlay, query));
+      const rawAnchorIntegration = stage('rawAnchorIntegration', () => integrateRawRecoveryAnchors(
+        ensureArray(rawRecoveryRecall?.records), selectedWithLiveOverlay, query
+      ));
       const selectedForModel = selectedWithLiveOverlay;
       const promptMode = normalizedInjectionMode(settings.promptMode || DEFAULT_SETTINGS.promptMode);
       const temporalOrder = stage('temporalOrder', () => {
@@ -21454,7 +29531,11 @@ const MODE_PROFILES = Object.freeze({
         const packetOrder = temporalOrderRowsFromPackets(livePackets, 4);
         return packetOrder.length >= 2 ? packetOrder : selectTemporalOrderRows(store, selectedForModel, 4);
       });
-      const selectedForContext = { ...selectedForModel, temporalOrder };
+      const selectedForContext = {
+        ...selectedForModel,
+        temporalOrder,
+        rawRecoveryEvidence: ensureArray(rawAnchorIntegration?.records)
+      };
       // Budget against the payload that will actually reach the model. Hidden
       // HAYAKU packet comments are stripped during injection; counting them here
       // starves recall on long chats even though those bytes are never sent.
@@ -21610,7 +29691,7 @@ const MODE_PROFILES = Object.freeze({
         pushOperationLog('packet_write:budget_invariant_failed', detail, 'error');
       }
       const recallDataBudget = packetBudgetPlan.recallDataBudget || recallBudgetPolicy;
-      const captureOrigin = packetWriteActive && requestLineage && chatScope?.confident
+      const captureOrigin = (packetWriteActive || settings.recoveryVaultEnabled !== false) && requestLineage && chatScope?.confident
         ? stage('registerCaptureOrigin', () => registerPendingCapture(
           chatScope,
           requestLineage,
@@ -21618,7 +29699,9 @@ const MODE_PROFILES = Object.freeze({
           authoritativeSnapshot,
           {
             recoveryRequired: packetRecovery?.active === true,
-            recoveryRequest: packetRecovery
+            recoveryRequest: packetRecovery,
+            packetWriteExpected: packetWriteActive,
+            recoveryVaultOnly: !packetWriteActive
           }
         ))
         : null;
@@ -21761,7 +29844,13 @@ const MODE_PROFILES = Object.freeze({
         sourceTime: Number(row?.sourceTime || row?.locator?.turnIndex || 0) || 0,
         timeScope: compact(effectivePublicTimeScope(row), 80),
         episodicCueSignal: Number(Number(row?.scoreBreakdown?.episodicCueSignal || 0).toFixed(4)),
-        episodicCueActivated: row?.scoreBreakdown?.episodicCueActivated === true
+        episodicCueActivated: row?.scoreBreakdown?.episodicCueActivated === true,
+        episodeRouterSignal: Number(Number(row?.scoreBreakdown?.episodeRouterSignal || 0).toFixed(4)),
+        episodeRouterEpisodeId: text(row?.scoreBreakdown?.episodeRouterEpisodeId || ''),
+        graphClosureType: text(row?.scoreBreakdown?.graphClosure?.type || ''),
+        graphClosureHop: Number(row?.scoreBreakdown?.graphClosure?.hop || 0),
+        graphClosureSignal: Number(Number(row?.scoreBreakdown?.graphClosure?.signal || 0).toFixed(4)),
+        typedAssociationCount: ensureArray(row?.retrieval?.typedAssociations).length
       }));
       Memory.lastViewerRecall = {
         at: now(),
@@ -21776,6 +29865,12 @@ const MODE_PROFILES = Object.freeze({
         recallDataChars: memoryBlock.length,
         recallBudgetReasons: ensureArray(recallDataBudget.reasons),
         latentEpisodicInjectedRefs: uniq(deliveredLatentRefs, 4),
+        globalRoutingCatalog: clone(Memory.lastGlobalRoutingCatalog || null, null),
+        derivedIndexBuild: clone(Memory.lastDerivedIndexBuild || null, null),
+        typedMemoryGraph: clone(Memory.lastTypedMemoryGraph || null, null),
+        graphClosure: clone(Memory.lastGraphClosure || null, null),
+        episodeIndex: clone(Memory.lastEpisodeIndex || null, null),
+        episodeRouting: clone(Memory.lastEpisodeRouting || null, null),
         rows: viewerRecallRows
       };
       pushOperationLog('recall:completed', {
@@ -21790,6 +29885,21 @@ const MODE_PROFILES = Object.freeze({
         packetAuthoringChars: Number(packetBudgetPlan.packetAuthoringChars || 0),
         latentEpisodicInjected: deliveredLatentRefs.length,
         latentEpisodicRefs: uniq(deliveredLatentRefs, 4),
+        recallContextMessages: Number(recentContextFocus?.messagesUsed || 0),
+        recallContextReason: text(recentContextFocus?.reason || ''),
+        recallRelatednessWeight: Number(Memory.lastRecallController?.preference?.relatedness || 0),
+        recallRecencyWeight: Number(Memory.lastRecallController?.preference?.recency || 0),
+        contradictionBundles: ensureArray(Memory.lastRecallController?.contradictionBundles).length,
+        typedGraphEdges: Number(Memory.lastTypedMemoryGraph?.typedEdges || 0),
+        graphClosureAdmitted: Number(Memory.lastGraphClosure?.admittedRows || 0),
+        graphClosureBundles: ensureArray(Memory.lastGraphClosure?.bundles).length,
+        episodeLeaves: Number(Memory.lastEpisodeIndex?.leaves || 0),
+        episodeRouterHits: Number(Memory.lastEpisodeRouting?.selected || 0),
+        episodeRoutedRows: Number(Memory.lastEpisodeRouting?.routedRows || 0),
+        rawRecoveryVaultRecords: Number(rawRecoveryRecall?.vaultRecords || 0),
+        rawRecoveryPassages: Number(rawRecoveryRecall?.passages || 0),
+        rawRecoveryInjected: Number(packetBudgetPlan?.memoryContextResult?.rawRenderedEntries || 0),
+        rawRecoveryChars: ensureArray(rawRecoveryRecall?.records).reduce((sum, record) => sum + text(record?.text || '').length, 0),
         droppedRows: Math.max(0, viewerRecallRows.length - injectedPacketCoreRows)
       }, recallDelivery.failure ? 'warn' : 'success');
       Memory.store = store;
@@ -21817,6 +29927,8 @@ const MODE_PROFILES = Object.freeze({
         elapsedMs: now() - startedAt,
         stages,
         viewerRecall: clone(Memory.lastViewerRecall, null),
+        rawRecoveryRecall: clone(Memory.lastRawRecoveryRecall, null),
+        recoveryVault: clone(Memory.lastRecoveryVault, null),
         ...(settings.debug ? { sparseSearch: clone(Memory.lastSparseSearch || null, null) } : {}),
         chars: totalInjectedChars,
         totalChars: totalInjectedChars,
@@ -21944,6 +30056,21 @@ const MODE_PROFILES = Object.freeze({
         historyMutation: clone(historyMutation || null, null),
         historyMutationSync: clone(historyMutationSync, {}),
         previousTurnRecallBridge: clone(previousTurnRecallBridge || null, null),
+        recallController: clone(Memory.lastRecallController || null, null),
+        recentContextFocus: clone({
+          version: recentContextFocus?.version || '',
+          active: recentContextFocus?.active === true,
+          configuredMessages: Number(recentContextFocus?.configuredMessages || 0),
+          requestedMessages: Number(recentContextFocus?.requestedMessages || 0),
+          messagesUsed: Number(recentContextFocus?.messagesUsed || 0),
+          reason: text(recentContextFocus?.reason || ''),
+          ambiguous: recentContextFocus?.ambiguous === true,
+          supportWeight: Number(recentContextFocus?.supportWeight || 0),
+          hash: text(recentContextFocus?.hash || ''),
+          queryTopics: ensureArray(recentContextFocus?.queryTopics),
+          contextTopics: ensureArray(recentContextFocus?.topics),
+          rows: ensureArray(recentContextFocus?.rows)
+        }, {}),
         requestRetrievalCache: requestRetrievalCacheSnapshot(settings.requestRetrievalCache),
         packetCoverageAudit: {
           audits: ensureArray(store.context?.packetCoverageAudits).map(audit => ({
@@ -22067,6 +30194,13 @@ const MODE_PROFILES = Object.freeze({
         packetRecovery: packetRecovery?.active === true ? packetRecovery.reason : '',
         requestLineageMode: text(requestLineage?.mode || ''),
         previousTurnRecallBridge: previousTurnRecallBridge?.active === true ? previousTurnRecallBridge.reason : '',
+        recentContext: recentContextFocus?.active === true ? `${recentContextFocus.messagesUsed}/${recentContextFocus.configuredMessages}:${recentContextFocus.reason}` : 'inactive',
+        recallPreference: Memory.lastRecallController?.preference || null,
+        contradictionBundles: ensureArray(Memory.lastRecallController?.contradictionBundles).length,
+        typedGraphEdges: Number(Memory.lastTypedMemoryGraph?.typedEdges || 0),
+        graphClosureAdmitted: Number(Memory.lastGraphClosure?.admittedRows || 0),
+        episodeRouterHits: Number(Memory.lastEpisodeRouting?.selected || 0),
+        episodeRoutedRows: Number(Memory.lastEpisodeRouting?.routedRows || 0),
         terminalTailIndex: Number(injectionResult.diagnostics?.terminalTailIndex ?? -1),
         terminalTailRole: text(injectionResult.diagnostics?.terminalTailRole || ''),
         selected: Object.fromEntries(Object.entries(selectedForModel).map(([axis, rows]) => [axis, rows.length]))
@@ -22785,6 +30919,9 @@ const MODE_PROFILES = Object.freeze({
       incrementalRecoveryRunId: compact(record.incrementalRecoveryRunId || '', 128),
       recoveryTurnStart: finiteNonNegativeInteger(record.recoveryTurnStart, 0),
       recoveryTurnEnd: finiteNonNegativeInteger(record.recoveryTurnEnd, 0),
+      recoveryDebtId: compact(record.recoveryDebtId || '', 196),
+      recoveryTargetVariantId: compact(record.recoveryTargetVariantId || '', 96),
+      recoveryTargetEvidenceHash: compact(record.recoveryTargetEvidenceHash || '', 96),
       auditRetained: record.auditRetained === true,
       divergenceReason: compact(record.divergenceReason || '', 96),
       supersededByHash: compact(record.supersededByHash || '', 96),
@@ -23924,6 +32061,14 @@ const MODE_PROFILES = Object.freeze({
       error.code = 'SOURCE_MUTATION_DETECTED';
       throw error;
     }
+    const recoveryVaultHandoff = await inheritRecoveryVaultForBridgeSession(
+      sourceScopeKey, scope.key, scope?.bridgeHandoffTransferId || ''
+    );
+    if (recoveryVaultHandoff.ok !== true) {
+      const error = new Error(recoveryVaultHandoff.reason || 'recovery_vault_handoff_failed');
+      error.code = 'RECOVERY_VAULT_HANDOFF_FAILED';
+      throw error;
+    }
     return {
       ledger: {
         ...emptyStorageLedger(scope),
@@ -23936,6 +32081,7 @@ const MODE_PROFILES = Object.freeze({
           sourceFingerprintBefore: sourceIntegrityBefore.fingerprint,
           sourceFingerprintAfter: sourceIntegrityAfter.fingerprint,
           sourcePreserved: true,
+          recoveryVaultHandoff,
           verified: false,
           adoptedAt: 0
         },
@@ -24246,10 +32392,44 @@ const MODE_PROFILES = Object.freeze({
           sourceHash
         };
       }
-      const owner = worldlineNodes.find(node => (
-        node?.status === 'active'
-        && Number(node?.pairIndex || 0) === targetPairIndex
-      )) || null;
+      const repairTarget = objectish(entry?.repairTarget)
+        ? entry.repairTarget
+        : (objectish(packet?.meta?.repair_target) ? packet.meta.repair_target : null);
+      const targetNodeMatches = node => (
+        Number(node?.pairIndex || 0) === targetPairIndex
+        && (!repairTarget?.ownerTurnNodeId || node.turnNodeId === repairTarget.ownerTurnNodeId)
+        && (!repairTarget?.logicalTurnId || node.logicalTurnId === repairTarget.logicalTurnId)
+        && (!repairTarget?.variantId || node.variantId === repairTarget.variantId)
+        && (!repairTarget?.parentTurnNodeId || node.parentTurnNodeId === repairTarget.parentTurnNodeId)
+        && (!repairTarget?.userHash || node.userHash === repairTarget.userHash)
+        && (!repairTarget?.assistantVisibleHash || node.assistantVisibleHash === repairTarget.assistantVisibleHash)
+        && (!repairTarget?.assistantMessageIdHash || node.assistantMessageIdHash === repairTarget.assistantMessageIdHash)
+      );
+      const exactTargetNode = repairTarget
+        ? worldlineNodes.find(targetNodeMatches) || null
+        : null;
+      const owner = repairTarget
+        ? (exactTargetNode?.status === 'active' ? exactTargetNode : null)
+        : worldlineNodes.find(node => (
+            node?.status === 'active'
+            && Number(node?.pairIndex || 0) === targetPairIndex
+          )) || null;
+      if (repairTarget && !owner) {
+        const targetWorldlineStatus = compact(exactTargetNode?.status || 'absent', 32);
+        const retryable = targetWorldlineStatus === 'quarantined';
+        return {
+          ledger,
+          changed: false,
+          reason: retryable ? 'recovery_target_worldline_unstable' : 'stale_recovery_target_not_active',
+          retryable,
+          targetWorldlineStatus,
+          invalidOrdinal: index + 1,
+          records: 0,
+          recoveryId,
+          sourceHash,
+          staleRepairTarget: clone(repairTarget, {})
+        };
+      }
       const ordinal = Math.max(1, Number(entry?.ordinal || index + 1) || index + 1);
       const incrementalRecoveryId = stableHash64([
         scope.key,
@@ -24282,7 +32462,10 @@ const MODE_PROFILES = Object.freeze({
         incrementalRecoverySourceHash: sourceHash,
         incrementalRecoveryRunId: recoveryId,
         recoveryTurnStart: rawTurnStart,
-        recoveryTurnEnd: rawTurnEnd
+        recoveryTurnEnd: rawTurnEnd,
+        recoveryDebtId: compact(repairTarget?.debtId || '', 196),
+        recoveryTargetVariantId: compact(repairTarget?.variantId || '', 96),
+        recoveryTargetEvidenceHash: compact(repairTarget?.sourceEvidenceHash || '', 96)
       });
       if (!normalizedRecord) {
         return {
@@ -24500,8 +32683,20 @@ const MODE_PROFILES = Object.freeze({
       return ensureArray(ledger?.tombstones).map(normalizeStorageTombstone).filter(Boolean)
         .some(tombstone => tombstone.active === true && tombstone.slotId === storageRecordSlotId(record));
     });
+    const repairTargets = ensureArray(capsule?.packets).map(entry => objectish(entry?.repairTarget) ? entry.repairTarget : null).filter(Boolean);
+    const repairTargetsMatch = repairTargets.every(target => candidateRecords.some(record => (
+      record.recordState === 'active'
+      && Number(record.targetPairIndex || 0) === Number(target.pairIndex || 0)
+      && (!target.debtId || record.recoveryDebtId === target.debtId)
+      && (!target.variantId || record.recoveryTargetVariantId === target.variantId)
+      && (!target.sourceEvidenceHash || record.recoveryTargetEvidenceHash === target.sourceEvidenceHash)
+      && (!target.ownerTurnNodeId || record.ownerTurnNodeId === target.ownerTurnNodeId)
+      && (!target.userHash || record.userHash === target.userHash)
+      && (!target.assistantVisibleHash || record.assistantVisibleHash === target.assistantVisibleHash)
+      && (!target.assistantMessageIdHash || record.assistantMessageIdHash === target.assistantMessageIdHash)
+    )));
     return {
-      verified: metadataMatches && packetsMatch && replacementsMatch && activeCoverageMatches,
+      verified: metadataMatches && packetsMatch && replacementsMatch && activeCoverageMatches && repairTargetsMatch,
       records: candidateRecords.length,
       activeRecords: activeRecords.length,
       expectedRecords: packetBodies.length,
@@ -24512,6 +32707,7 @@ const MODE_PROFILES = Object.freeze({
         packetsMatch,
         replacementsMatch,
         activeCoverageMatches,
+        repairTargetsMatch,
         expectedTurnRangesValid,
         activeTurnRangesValid,
         activeTurns: [...activeTurns].sort((a, b) => a - b),
@@ -24519,7 +32715,7 @@ const MODE_PROFILES = Object.freeze({
       },
       recoveryId,
       sourceHash,
-      reason: metadataMatches && packetsMatch && replacementsMatch && activeCoverageMatches
+      reason: metadataMatches && packetsMatch && replacementsMatch && activeCoverageMatches && repairTargetsMatch
         ? 'incremental_recovery_adoption_verified'
         : 'incremental_recovery_adoption_not_verified'
     };
@@ -24952,6 +33148,8 @@ const MODE_PROFILES = Object.freeze({
       existing.createdAt = now();
       existing.requestType = compact(requestType || existing.requestType || 'model', 32).toLowerCase();
       existing.recoveryRequired = options?.recoveryRequired === true;
+      existing.packetWriteExpected = options?.packetWriteExpected !== false;
+      existing.recoveryVaultOnly = options?.recoveryVaultOnly === true;
       existing.recoveryTarget = existing.recoveryRequired
         ? clone(options?.recoveryTarget || recoveryTargetForCapture(snapshot, options?.recoveryRequest), null)
         : null;
@@ -24987,6 +33185,8 @@ const MODE_PROFILES = Object.freeze({
       baselineAssistantMessageIdHash: compact(baselinePair?.assistantMessageIdHash || '', 96),
       baselinePacketHashes: uniq(ensureArray(baselinePair?.packetHashes), 8),
       recoveryRequired: options?.recoveryRequired === true,
+      packetWriteExpected: options?.packetWriteExpected !== false,
+      recoveryVaultOnly: options?.recoveryVaultOnly === true,
       recoveryTarget: options?.recoveryRequired === true
         ? clone(options?.recoveryTarget || recoveryTargetForCapture(snapshot, options?.recoveryRequest), null)
         : null,
@@ -25001,6 +33201,7 @@ const MODE_PROFILES = Object.freeze({
   const removePendingCapture = pending => {
     const sequence = Number(pending?.requestSequence || 0) || 0;
     if (!sequence) return false;
+    if (pending?.recoveryTarget) releaseInBandRecoveryReservation(pending.recoveryTarget);
     const before = Memory.pendingCaptures.length;
     Memory.pendingCaptures = ensureArray(Memory.pendingCaptures)
       .filter(entry => Number(entry?.requestSequence || 0) !== sequence);
@@ -25549,6 +33750,7 @@ const MODE_PROFILES = Object.freeze({
       sourceMutationAllowed: false,
       sourceCompactionAllowed: false,
       physicalCopies: 0,
+      recoveryVaultCopies: 0,
       sourcePreserved: false
     };
     if (!scope?.confident || !scope?.key) return { ...base, ok: false, adopted: false, verified: false, durable: false, reason: scope?.reason || 'scope_unavailable', records: 0 };
@@ -25575,14 +33777,47 @@ const MODE_PROFILES = Object.freeze({
     if (expected === 0) {
       const sourceAfter = sourceScopeKey ? await hayakuSourceLedgerStorageFingerprint(sourceScopeKey) : sourceBefore;
       const sourcePreserved = !sourceScopeKey || (!!sourceBefore.fingerprint && sourceBefore.fingerprint === sourceAfter.fingerprint);
+      const recoveryVaultVerification = await verifyInheritedRecoveryVaultHandoff(ledger?.sessionHandoff?.recoveryVaultHandoff, scope.key);
+      const verifiedEmpty = sourcePreserved && recoveryVaultVerification.ok === true;
+      const recoveryVaultReceipt = objectish(ledger?.sessionHandoff?.recoveryVaultHandoff)
+        ? {
+            ...ledger.sessionHandoff.recoveryVaultHandoff,
+            verified: recoveryVaultVerification.ok === true,
+            verifiedAt: now(),
+            adoptedRecords: Math.max(0, Number(recoveryVaultVerification.records || 0) || 0),
+            targetDigest: recoveryVaultVerification.targetDigest || ledger.sessionHandoff.recoveryVaultHandoff.targetDigest || ''
+          }
+        : null;
+      let proofDurable = verifiedEmpty;
+      if (verifiedEmpty && objectish(ledger?.sessionHandoff)) {
+        const proofLedger = {
+          ...ledger,
+          sessionHandoff: {
+            ...ledger.sessionHandoff,
+            sourcePreserved: true,
+            recoveryVaultHandoff: recoveryVaultReceipt,
+            verified: true,
+            adoptedAt: ledger.sessionHandoff?.adoptedAt || now()
+          }
+        };
+        const proofCommit = await writeStorageLedgerDirect(scope, proofLedger, 'bridge_session_raw_handoff_proof');
+        proofDurable = proofCommit.durable === true;
+      }
+      const finalVerified = verifiedEmpty && proofDurable;
       return {
         ...base,
-        ok: sourcePreserved,
-        adopted: false,
-        verified: sourcePreserved,
-        durable: sourcePreserved,
+        ok: finalVerified,
+        adopted: finalVerified && recoveryVaultVerification.records > 0,
+        verified: finalVerified,
+        durable: finalVerified,
         sourcePreserved,
-        reason: sourcePreserved ? 'session_handoff_empty' : 'SOURCE_MUTATION_DETECTED',
+        recoveryVaultHandoff: recoveryVaultReceipt || recoveryVaultVerification,
+        recoveryVaultCopies: recoveryVaultVerification.records || 0,
+        reason: finalVerified
+          ? (recoveryVaultVerification.records > 0 ? 'session_handoff_raw_history_only' : 'session_handoff_empty')
+          : (!sourcePreserved
+            ? 'SOURCE_MUTATION_DETECTED'
+            : (verifiedEmpty ? 'session_handoff_raw_proof_not_durable' : 'recovery_vault_handoff_verification_failed')),
         records: 0,
         expectedRecords: 0,
         scopeKey: scope.key,
@@ -25604,6 +33839,16 @@ const MODE_PROFILES = Object.freeze({
     const durableRef = normalizeHayakuArchiveRef(durableLocal.archiveRef);
     const archive = await readHayakuSharedArchiveSummary(durableRef);
     const sourceAfter = await hayakuSourceLedgerStorageFingerprint(sourceScopeKey);
+    const recoveryVaultVerification = await verifyInheritedRecoveryVaultHandoff(ledger?.sessionHandoff?.recoveryVaultHandoff, scope.key);
+    const recoveryVaultReceipt = objectish(ledger?.sessionHandoff?.recoveryVaultHandoff)
+      ? {
+          ...ledger.sessionHandoff.recoveryVaultHandoff,
+          verified: recoveryVaultVerification.ok === true,
+          verifiedAt: now(),
+          adoptedRecords: Math.max(0, Number(recoveryVaultVerification.records || 0) || 0),
+          targetDigest: recoveryVaultVerification.targetDigest || ledger.sessionHandoff.recoveryVaultHandoff.targetDigest || ''
+        }
+      : null;
     const sourcePreserved = !!proofBefore && proofBefore === sourceAfter.fingerprint
       && (!ledger.bridgeSourceFingerprintAfter || ledger.bridgeSourceFingerprintAfter === proofBefore);
     let durableProof = durableLocal;
@@ -25617,6 +33862,7 @@ const MODE_PROFILES = Object.freeze({
           sourceFingerprintBefore: proofBefore,
           sourceFingerprintAfter: sourceAfter.fingerprint,
           sourcePreserved: true,
+          recoveryVaultHandoff: recoveryVaultReceipt,
           verified: true,
           adoptedAt: durableLocal.sessionHandoff?.adoptedAt || now()
         }
@@ -25626,7 +33872,7 @@ const MODE_PROFILES = Object.freeze({
         return { ...base, ok: false, adopted: false, verified: false, durable: false, sourcePreserved: true, reason: 'session_handoff_proof_not_durable', records: archive.records, expectedRecords: expected, scopeKey: scope.key, sourceScopeKey, targetChatId: scope.chatId, transferId: scope.bridgeHandoffTransferId, sourceFingerprintBefore: proofBefore, sourceFingerprintAfter: sourceAfter.fingerprint };
       }
     }
-    const verified = commit.durable === true && archive.verified === true && archive.records === expected && sourcePreserved;
+    const verified = commit.durable === true && archive.verified === true && archive.records === expected && sourcePreserved && recoveryVaultVerification.ok === true;
     return {
       ...base,
       ok: verified,
@@ -25648,7 +33894,9 @@ const MODE_PROFILES = Object.freeze({
       archiveDigest: durableRef?.digest || '',
       archiveRecordCount: durableRef?.recordCount || 0,
       sourceFingerprintBefore: proofBefore,
-      sourceFingerprintAfter: sourceAfter.fingerprint || ''
+      sourceFingerprintAfter: sourceAfter.fingerprint || '',
+      recoveryVaultHandoff: recoveryVaultReceipt || recoveryVaultVerification,
+      recoveryVaultCopies: recoveryVaultVerification.records || 0
     };
   });
 
@@ -25917,6 +34165,26 @@ const MODE_PROFILES = Object.freeze({
       sourceHash: compact(imported.sourceHash || commit.ledger?.coldStart?.sourceHash || '', 96)
     };
   });
+  const dischargeVerifiedRecoveryCapsuleTargetsDirect = async (scopeKey, capsule, reason = 'verified_retrace_auto_repair') => {
+    let removed = 0;
+    const results = [];
+    for (const entry of ensureArray(capsule?.packets)) {
+      const target = objectish(entry?.repairTarget) ? entry.repairTarget : null;
+      if (!target) continue;
+      const result = await dischargeRecoveryVaultEvidenceDirect(scopeKey, {
+        debtId: target.debtId,
+        pairIndex: target.pairIndex,
+        ownerTurnNodeId: target.ownerTurnNodeId,
+        variantId: target.variantId,
+        userHash: target.userHash,
+        assistantVisibleHash: target.assistantVisibleHash,
+        assistantMessageIdHash: target.assistantMessageIdHash
+      }, reason);
+      removed += Math.max(0, Number(result?.removed || 0) || 0);
+      results.push(result);
+    }
+    return { removed, results };
+  };
   const adoptBridgeIncrementalRecoveryCapsule = async capsuleInput => enqueueStorageOperation(async () => {
     const scope = await RisuCompat.currentChatScope();
     if (!scope?.confident || !scope?.key) {
@@ -25967,7 +34235,10 @@ const MODE_PROFILES = Object.freeze({
         scopeKey: scope.key,
         recoveryId: compact(imported.recoveryId || '', 128),
         sourceHash: compact(imported.sourceHash || '', 96),
-        recoveredTurns: ensureArray(imported.recoveredTurns)
+        recoveredTurns: ensureArray(imported.recoveredTurns),
+        retryable: imported.retryable === true,
+        targetWorldlineStatus: compact(imported.targetWorldlineStatus || '', 32),
+        staleRepairTarget: imported.staleRepairTarget ? clone(imported.staleRepairTarget, {}) : null
       };
     }
     let candidateLedger = imported.ledger;
@@ -25996,6 +34267,9 @@ const MODE_PROFILES = Object.freeze({
       const verification = alreadyImported
         ? verifyBridgeIncrementalRecoveryLedgerAdoption(candidateLedger, scope, capsule)
         : { verified: false, reason: imported.reason, records: 0, expectedRecords: 0 };
+      if (verification.verified === true) {
+        await dischargeVerifiedRecoveryCapsuleTargetsDirect(scope.key, capsule);
+      }
       return {
         ok: verification.verified === true,
         adopted: false,
@@ -26016,7 +34290,10 @@ const MODE_PROFILES = Object.freeze({
     const commit = await writeStorageLedgerDirect(scope, candidateLedger, 'bridge_incremental_recovery_api');
     const verification = verifyBridgeIncrementalRecoveryLedgerAdoption(commit.ledger, scope, capsule);
     const verified = commit.durable === true && verification.verified === true;
-    if (verified) invalidateExternalLedgerCaches(scope.key);
+    if (verified) {
+      invalidateExternalLedgerCaches(scope.key);
+      await dischargeVerifiedRecoveryCapsuleTargetsDirect(scope.key, capsule);
+    }
     return {
       ok: verified,
       adopted: verified && (imported.changed === true || reconciliationChanged),
@@ -26131,6 +34408,12 @@ const MODE_PROFILES = Object.freeze({
                 mutationOwner: HAYAKU_PLUGIN_ID,
                 archiveHandoffV1: true,
                 summaryInspect: true,
+                recoveryDebtWorldlineV1: true,
+                inspectRecoveryDebts: true,
+                acquireRecoveryDebtLease: true,
+                releaseRecoveryDebtLease: true,
+                repairTargetAdoptionV1: true,
+                recoveryDebtEventChannel: MEMORY_SESSION_BRIDGE_HAYAKU_EVENT_CHANNEL,
                 physicalRecordCopyOnHandoff: false,
                 sourcePreservingHandoff: true,
                 handoffContract: HAYAKU_SESSION_HANDOFF_CONTRACT,
@@ -26138,7 +34421,11 @@ const MODE_PROFILES = Object.freeze({
                 retraceCompatibility: hayakuRetraceCompatibility()
               },
               ownerPluginId: HAYAKU_PLUGIN_ID,
-              authorizedRequester: sender
+              authorizedRequester: sender,
+              memorySuiteStorage: {
+                mode: await MemorySuiteStorageBridge.getMode().catch(() => 'plugin_only'),
+                status: MemorySuiteStorageBridge.status()
+              }
             };
           } else if (action === 'adopt_cold_start') {
             const adoption = await adoptBridgeColdStartCapsule(request.payload?.capsule || null);
@@ -26163,6 +34450,54 @@ const MODE_PROFILES = Object.freeze({
               mutation: 'sync_analysis_capsules',
               ownerPluginId: HAYAKU_PLUGIN_ID,
               authorizedRequester: sender
+            };
+          } else if (action === 'inspect_recovery_debts') {
+            result = {
+              ...(await inspectRecoveryDebtsForRetrace(request.payload || {})),
+              ownerPluginId: HAYAKU_PLUGIN_ID,
+              authorizedRequester: sender
+            };
+          } else if (action === 'acquire_recovery_debt_lease') {
+            result = {
+              ...(await acquireRecoveryDebtLeaseForRetrace(request.payload || {})),
+              mutation: 'acquire_recovery_debt_lease',
+              ownerPluginId: HAYAKU_PLUGIN_ID,
+              authorizedRequester: sender
+            };
+          } else if (action === 'release_recovery_debt_lease') {
+            result = {
+              ...(await releaseRecoveryDebtLeaseForRetrace(request.payload || {})),
+              mutation: 'release_recovery_debt_lease',
+              ownerPluginId: HAYAKU_PLUGIN_ID,
+              authorizedRequester: sender
+            };
+          } else if (action === 'memory_suite_storage_status') {
+            result = {
+              mode: await MemorySuiteStorageBridge.getMode().catch(() => 'plugin_only'),
+              status: MemorySuiteStorageBridge.status(),
+              ownerPluginId: HAYAKU_PLUGIN_ID,
+              authorizedRequester: sender
+            };
+          } else if (action === 'memory_suite_set_mode') {
+            const targetMode = text(request.payload?.mode || '').trim();
+            const currentMode = await MemorySuiteStorageBridge.getMode();
+            if (currentMode === 'mirror' && targetMode === 'plugin_only') {
+              await MemorySuiteStorageBridge.synchronizeNow();
+            }
+            const transition = await MemorySuiteStorageBridge.setMode(targetMode);
+            result = {
+              transition,
+              mode: await MemorySuiteStorageBridge.getMode(),
+              status: MemorySuiteStorageBridge.status(),
+              ownerPluginId: HAYAKU_PLUGIN_ID,
+              authorizedRequester: sender
+            };
+          } else if (action === 'memory_suite_prepare_server_scope_delete') {
+            result = {
+              ...(await MemorySuiteStorageBridge.prepareServerScopeDeletion(request.payload || {})),
+              ownerPluginId: HAYAKU_PLUGIN_ID,
+              authorizedRequester: sender,
+              mutation: 'memory_suite_prepare_server_scope_delete'
             };
           } else if (action === 'adopt_session_handoff') {
             // This is an owner-ledger mutation. Require the authenticated API v3
@@ -26192,12 +34527,15 @@ const MODE_PROFILES = Object.freeze({
               || (handoffOptions.expectedRecords > 0 && !handoffOptions.sourceScopeKey)) {
               throw new Error('hayaku_session_handoff_identity_incomplete');
             }
+            const memorySuiteBefore = await MemorySuiteStorageBridge.ensureHandoffReady({ phase: 'hayaku_before_adopt' });
             const adoption = await adoptBridgeSessionHandoff(handoffOptions);
+            const memorySuiteAfter = await MemorySuiteStorageBridge.ensureHandoffReady({ phase: 'hayaku_after_adopt' });
             result = {
               ...adoption,
               mutation: 'adopt_session_handoff',
               ownerPluginId: HAYAKU_PLUGIN_ID,
-              authorizedRequester: sender
+              authorizedRequester: sender,
+              memorySuiteStorage: { before: memorySuiteBefore, after: memorySuiteAfter }
             };
           } else if (action === 'forget') {
             // Mutations are stricter than read-only inspection: API v3 supplies
@@ -26271,12 +34609,20 @@ const MODE_PROFILES = Object.freeze({
                   mutationOwner: HAYAKU_PLUGIN_ID,
                   archiveHandoffV1: true,
                   summaryInspect: true,
+                  recoveryDebtWorldlineV1: true,
+                  inspectRecoveryDebts: true,
+                  acquireRecoveryDebtLease: true,
+                  releaseRecoveryDebtLease: true,
+                  repairTargetAdoptionV1: true,
+                  recoveryDebtEventChannel: MEMORY_SESSION_BRIDGE_HAYAKU_EVENT_CHANNEL,
                   physicalRecordCopyOnHandoff: false,
                   sourcePreservingHandoff: true,
                   handoffContract: HAYAKU_SESSION_HANDOFF_CONTRACT,
                   sourceCompactionOnHandoff: false,
                   retraceCompatibility: hayakuRetraceCompatibility()
                 },
+                recoveryDebtContract: RECOVERY_DEBT_WORLDLINE_VERSION,
+                recoveryDebtEventChannel: MEMORY_SESSION_BRIDGE_HAYAKU_EVENT_CHANNEL,
                 bridgeSync
               };
             }
@@ -26953,6 +35299,11 @@ const MODE_PROFILES = Object.freeze({
       reason: 'capture_outcome_unavailable'
     };
     if (!pending || result.durable !== true) return content;
+    scheduleRecoveryVaultDischarge(pending.scope?.key || '', {
+      pairIndex: pending.lineage?.targetPairIndex,
+      userHash: pending.lineage?.userHash,
+      assistantHash: capturedVisible ? stableHash64(capturedVisible) : ''
+    }, 'verified_hook_packet');
     const returnedContent = content;
     Memory.lastStorageCapture = {
       ...Memory.lastStorageCapture,
@@ -27117,6 +35468,7 @@ const MODE_PROFILES = Object.freeze({
     }
     return {
       pair,
+      liveScope,
       packets: [...packetsByHash.values()],
       normalizedFallbackPackets,
       markerStartCount,
@@ -27208,6 +35560,10 @@ const MODE_PROFILES = Object.freeze({
                 const packetMarkersPresent = Number(candidate.markerStartCount || 0) > 0
                   || Number(candidate.markerEndCount || 0) > 0
                   || Number(candidate.completePacketCandidates || 0) > 0;
+                const packetWriteExpected = pending.packetWriteExpected !== false;
+                const missingReason = !packetWriteExpected
+                  ? 'finalized_packet_not_requested_recovery_vault'
+                  : (packetMarkersPresent ? 'finalized_packet_invalid_or_unrepairable' : 'finalized_packet_missing');
                 Memory.lastStorageCapture = {
                   at: now(),
                   source: 'finalized_live_chat',
@@ -27222,14 +35578,25 @@ const MODE_PROFILES = Object.freeze({
                   captureDiagnostics: ensureArray(candidate.captureDiagnostics).slice(-8),
                   durable: false,
                   saved: false,
-                  reason: packetMarkersPresent
-                    ? 'finalized_packet_invalid_or_unrepairable'
-                    : 'finalized_packet_missing'
+                  packetWriteExpected,
+                  recoveryVaultOnly: pending.recoveryVaultOnly === true,
+                  reason: missingReason
                 };
+                const vaultResult = await upsertRecoveryVaultEvidence(pending, candidate, missingReason);
+                Memory.lastStorageCapture.recoveryEvidenceDurable = vaultResult.durable === true;
+                Memory.lastStorageCapture.recoveryEvidenceSaved = vaultResult.saved === true;
+                Memory.lastStorageCapture.recoveryVaultReason = vaultResult.reason || '';
+                Memory.lastStorageCapture.recoveryVaultRecordId = vaultResult.recordId || '';
+                const recoveryDebtHandled = Memory.settings?.recoveryVaultEnabled === false || vaultResult.durable === true;
+                state.incompleteReported = recoveryDebtHandled;
+                if (!recoveryDebtHandled) {
+                  state.attempts += 1;
+                  state.stableSince = now();
+                }
                 pushOperationLog(
-                  packetMarkersPresent ? 'capture:packet_invalid' : 'capture:packet_missing',
+                  !packetWriteExpected ? 'capture:recovery_only_saved' : (packetMarkersPresent ? 'capture:packet_invalid' : 'capture:packet_missing'),
                   Memory.lastStorageCapture,
-                  'warn'
+                  !packetWriteExpected || vaultResult.durable === true ? 'info' : 'warn'
                 );
               }
             } else if (!Memory.finalizedCaptureInFlight.has(key)) {
@@ -27258,6 +35625,12 @@ const MODE_PROFILES = Object.freeze({
                   result.durable === true ? 'success' : 'warn'
                 );
                 if (result.durable === true) {
+                  await dischargeRecoveryVaultEvidence(pending.scope.key, {
+                    pairIndex: candidate.pair?.pairIndex,
+                    userHash: candidate.pair?.userHash,
+                    assistantHash: candidate.pair?.assistantVisibleHash,
+                    assistantMessageIdHash: candidate.pair?.assistantMessageIdHash
+                  }, 'verified_finalized_packet');
                   stopFinalizedCaptureMonitor(key);
                   removePendingCapture(pending);
                   return;
@@ -29274,6 +37647,10 @@ const MODE_PROFILES = Object.freeze({
         worldline
       }, observerCommitReason);
       if (commit.durable === true) {
+        await reconcileRecoveryVaultWorldlineLifecycleDirect(scope, snapshot, worldline, {
+          force: true,
+          reason: 'ui_topology_worldline_reconcile'
+        });
         // A UI-side reroll/unreroll/rollback changes the authoritative branch
         // without entering beforeRequest. Invalidate request RAM so the next
         // request rebuilds recall from this newly committed active worldline.
@@ -29684,7 +38061,7 @@ const MODE_PROFILES = Object.freeze({
       outcome: entry?.outcome || null
     }));
   };
-  const composeHayakuOperationDebugExport = (scope, ledger) => {
+  const composeHayakuOperationDebugExport = (scope, ledger, memorySuite = MemorySuiteStorageBridge.getCachedDiagnostics()) => {
     const runtimeEnvironment = (() => {
       let timezone = '';
       try { timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (_) {}
@@ -29706,6 +38083,7 @@ const MODE_PROFILES = Object.freeze({
         currentInputRecallAndPacketMemory: 'included_for_debugging'
       },
       environment: runtimeEnvironment,
+      memorySuite,
       runtime: hayakuRuntimeSnapshot(),
       settings: Memory.settings,
       scope: debugScopeForExport(scope),
@@ -29812,7 +38190,8 @@ const MODE_PROFILES = Object.freeze({
       try { ledger = await loadStorageLedger(scope); }
       catch (error) { ledger = { enabled: false, reason: compact(error?.message || error, 180), records: [] }; }
     }
-    return composeHayakuOperationDebugExport(scope, ledger);
+    const memorySuite = await MemorySuiteStorageBridge.getDiagnostics({ force: true, limit: 500 }).catch(() => MemorySuiteStorageBridge.getCachedDiagnostics());
+    return composeHayakuOperationDebugExport(scope, ledger, memorySuite);
   };
   const buildHayakuOperationDebugExportCached = () => {
     const scope = Memory.ledgerViewer.scope;
@@ -30125,10 +38504,21 @@ const MODE_PROFILES = Object.freeze({
       </article>`;
     }).join('');
   };
+  const viewerMountServerConnection = () => {
+    const host = Memory.ledgerViewer.root?.querySelector?.('#hayakuMemorySuiteServerConnectionPanel');
+    if (!host) return false;
+    void MemorySuiteStorageBridge.mountConnectionPanel(host, {
+      title: 'HAYAKU · 서버 연결',
+      description: 'HAYAKU 원장 데이터의 저장 방식과 Memory Suite 서버 연결을 관리합니다.'
+    }).catch(error => {
+      Memory.lastWarnings = [...ensureArray(Memory.lastWarnings), `server_connection_panel:${compact(error?.message || error, 180)}`].slice(-20);
+    });
+    return true;
+  };
   const viewerSetTab = tab => {
     const root = Memory.ledgerViewer.root;
     if (!root) return;
-    const active = tab === 'logs' ? 'logs' : 'packets';
+    const active = ['logs', 'server'].includes(tab) ? tab : 'packets';
     Memory.ledgerViewer.activeTab = active;
     root.querySelectorAll?.('[data-hayaku-viewer-tab]')?.forEach(node => {
       node.classList.toggle('active', node.getAttribute('data-hayaku-viewer-tab') === active);
@@ -30139,6 +38529,8 @@ const MODE_PROFILES = Object.freeze({
     if (active === 'logs') {
       viewerRenderOperationLog();
       viewerRenderDebugExportText();
+    } else if (active === 'server') {
+      viewerMountServerConnection();
     } else {
       viewerRenderRecall();
       viewerRenderRecords();
@@ -30625,6 +39017,7 @@ const MODE_PROFILES = Object.freeze({
       <div class="hv-workspace">
         <aside class="hv-sidebar">
           <button class="hv-nav active" data-hayaku-viewer-tab="packets" type="button"><span>速</span><span>패킷 뷰어</span></button>
+          <button class="hv-nav" data-hayaku-viewer-tab="server" type="button"><span>⇄</span><span>서버 연결</span></button>
           <button class="hv-nav" data-hayaku-viewer-tab="logs" type="button"><span>☷</span><span>작동 로그</span><em id="hayakuViewerLogCountNav" class="hv-nav-count">0</em></button>
         </aside>
         <div class="hv-content">
@@ -30658,6 +39051,7 @@ const MODE_PROFILES = Object.freeze({
               <details><summary>최근 캡처 상태 JSON</summary><pre id="hayakuViewerCapture">{}</pre></details>
             </div>
           </main>
+          <main class="hv-panel" data-hayaku-viewer-panel="server"><div id="hayakuMemorySuiteServerConnectionPanel"></div></main>
           <main class="hv-panel" data-hayaku-viewer-panel="logs">
             <div class="hv-heading"><div><small class="hv-eyebrow">현재 플러그인 실행에서 발생한 요청·회상·캡처·결속 작업입니다.</small><h1>작동 로그</h1><p>최근 작동 로그와 요청·회상·패킷·캡처·결속 상태를 한 번에 JSON으로 내보냅니다. 인증 값은 자동으로 제거됩니다.</p></div><div class="hv-actions"><button id="copyHayakuDebug" class="hv-btn">디버그 JSON 복사</button><button id="exportHayakuDebug" class="hv-btn">디버그 JSON 파일로 저장</button><button id="showHayakuDebug" class="hv-btn">디버그 JSON 표시</button><button id="refreshHayakuLog" class="hv-btn primary">새로고침</button></div></div>
             <div class="hv-log-summary">현재 실행 로그 <strong id="hayakuViewerLogCount">0</strong>개</div>
@@ -31151,6 +39545,16 @@ const MODE_PROFILES = Object.freeze({
             tombstones: includeRecords ? ensureArray(ledger.tombstones) : [],
             packetAuthoring: buildHayakuPacketAuthoringProfile(Memory.settings),
             storageLimits: storageLimitsSnapshot(),
+            recoveryVault: (() => {
+              const cached = Memory.recoveryVaultCache.get(scope.key)?.vault;
+              return cached ? {
+                schema: cached.schema,
+                version: cached.version,
+                records: ensureArray(cached.records).length,
+                chars: ensureArray(cached.records).reduce((sum, record) => sum + recoveryVaultRecordTextChars(record), 0),
+                updatedAt: cached.updatedAt
+              } : { schema: RECOVERY_VAULT_SCHEMA, version: RECOVERY_VAULT_VERSION, records: 0, chars: 0, updatedAt: 0 };
+            })(),
             bridgeSync
           }, {});
         },
@@ -31207,6 +39611,32 @@ const MODE_PROFILES = Object.freeze({
         lastBeforeRequest: Memory.lastBeforeRequest,
         lastViewerRecall: clone(Memory.lastViewerRecall, null),
         lastLatentEpisodicRecall: clone(Memory.lastLatentEpisodicRecall, null),
+        lastRecentContextFocus: clone(Memory.lastRecentContextFocus, null),
+        lastRecallController: clone(Memory.lastRecallController, null),
+        lastGlobalRoutingCatalog: clone(Memory.lastGlobalRoutingCatalog, null),
+        lastDerivedIndexBuild: clone(Memory.lastDerivedIndexBuild, null),
+        lastRecoveryVaultHandoff: clone(Memory.lastRecoveryVaultHandoff, null),
+        lastRecoveryVault: clone(Memory.lastRecoveryVault, null),
+        lastRawRecoveryRecall: clone(Memory.lastRawRecoveryRecall, null),
+        lastRawAnchorIntegration: clone(Memory.lastRawAnchorIntegration, null),
+        lastTypedMemoryGraph: clone(Memory.lastTypedMemoryGraph, null),
+        lastGraphClosure: clone(Memory.lastGraphClosure, null),
+        lastEpisodeIndex: clone(Memory.lastEpisodeIndex, null),
+        lastEpisodeRouting: clone(Memory.lastEpisodeRouting, null),
+        recoveryVault: {
+          cacheEntries: Memory.recoveryVaultCache.size,
+          schema: RECOVERY_VAULT_SCHEMA,
+          keyPrefix: RECOVERY_VAULT_KEY_PREFIX,
+          maxRecords: RECOVERY_VAULT_MAX_RECORDS,
+          maxTotalChars: RECOVERY_VAULT_MAX_TOTAL_CHARS,
+          stats: clone(Memory.recoveryVaultStats, {})
+        },
+        lastRecallSelection: clone(Memory.lastRecallSelection, null),
+        globalRoutingCatalog: {
+          version: GLOBAL_PACKET_ROUTING_VERSION,
+          entries: Memory.globalRoutingCatalogCache?.size || 0,
+          stats: clone(Memory.globalRoutingCatalogStats, {})
+        },
         projectionCache: {
           scopeKey: Memory.projectionCacheScopeKey || '',
           entries: Memory.projectionCache?.size || 0,
@@ -31238,6 +39668,36 @@ const MODE_PROFILES = Object.freeze({
         reconcileTurnWorldline,
         normalizeTurnWorldline,
         authoritativeChatSnapshot,
+        recoveryVisibleMessageText,
+        recoveryEvidenceForAuthoritativePair,
+        emptyRecoveryVault,
+        normalizeRecoveryVaultRecord,
+        normalizeRecoveryVault,
+        loadRecoveryVault,
+        writeRecoveryVaultDirect,
+        recoveryVaultStorageFingerprint,
+        recoveryDebtRepairTarget,
+        reconcileRecoveryVaultWorldlineLifecycleDirect,
+        inspectRecoveryDebtsForRetrace,
+        reserveInBandRecoveryDebt,
+        releaseInBandRecoveryReservation,
+        acquireRecoveryDebtLeaseForRetrace,
+        releaseRecoveryDebtLeaseForRetrace,
+        inheritRecoveryVaultForBridgeSession,
+        verifyInheritedRecoveryVaultHandoff,
+        upsertRecoveryVaultEvidence,
+        dischargeRecoveryVaultEvidence,
+        dischargeRecoveryVaultEvidenceDirect,
+        activeRecoveryVaultRecords,
+        rawRecoverySentenceUnits,
+        rawRecoveryPassagesForRole,
+        rawRecoveryQueryPhrases,
+        rawRecoveryScorePassage,
+        rawRecoveryEpistemicProfile,
+        buildRawRecoveryAnchorStub,
+        integrateRawRecoveryAnchors,
+        searchRecoveryVaultRawPassages,
+        renderRawRecoveryEvidence,
         authoritativePacketsFromSnapshot,
         authoritativeLedgerFromSnapshot,
         normalizeStorageRecord,
@@ -31256,6 +39716,10 @@ const MODE_PROFILES = Object.freeze({
         logicalHayakuRecordCount,
         projectionCachePlanFor,
         getProjectionCacheEntry,
+        derivedIndexBuildPolicy,
+        buildGlobalPacketRoutingCatalog,
+        routeGlobalPacketCatalog,
+        globalPacketRoutingIdentity,
         setProjectionCacheEntry,
         copiedChatSourceId: RisuCompat.copiedChatSourceId,
         memorySessionBridgeMarker: RisuCompat.memorySessionBridgeMarker,
@@ -31413,10 +39877,32 @@ const MODE_PROFILES = Object.freeze({
         ingestEmergencyRecallPacket,
         emergencyRecallPacketForBudget,
         selectPacketsForIngest,
+        buildRecentContextFocus,
+        adaptiveRecentContextCount,
+        decomposeHayakuRecallTopics,
+        packetContextRelevanceScore,
         rebuildIndex,
         buildKnowledgeContext,
         isKnowledgeUnavailableForQuery,
         buildRetrievalQuerySignature,
+        requestContextFocusSignalForRow,
+        hayakuRecallPreferenceWeights,
+        applyHayakuRecallPreference,
+        applyHayakuRecallStability,
+        applyHayakuContextTopicCoverage,
+        typedGraphRefValues,
+        typedGraphAtomicTopicKeys,
+        typedGraphClosureRelationPriority,
+        typedGraphClosureRelationAllowed,
+        applyHayakuGraphClosure,
+        ensureHayakuGraphClosureCoverage,
+        buildHierarchicalEpisodeIndex,
+        hierarchicalEpisodeDescendLeaves,
+        hierarchicalEpisodeScore,
+        applyHierarchicalEpisodeRouting,
+        hayakuTransitionBundles,
+        applyHayakuTransitionBundleBoost,
+        ensureHayakuTransitionCoverage,
         crossLingualTokensForText,
         multilingualRecallAliasesForValue,
         buildRetrievalCorpus,
@@ -31644,6 +40130,7 @@ const MODE_PROFILES = Object.freeze({
         Memory.generationOutputObservations.clear();
         Memory.packetScanCache.clear();
         Memory.projectionCache.clear();
+        Memory.recoveryVaultCache.clear();
         Memory.copiedChatSourceCache.clear();
         HayakuArchiveBodyCache.clear();
         HayakuHydratedArchiveCache.clear();
