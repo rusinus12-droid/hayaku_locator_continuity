@@ -1,8 +1,9 @@
 //@name hayaku_locator_continuity
-//@display-name HAYAKU · Locator Continuity v2.4.28
+//@display-name HAYAKU · Locator Continuity v2.4.32
 //@author rusinus12@gmail.com
 //@api 3.0
-//@version 2.4.28
+//@version 2.4.32
+/* v2.4.32 makes RE:TRACE summary inspection read-only and manifest-local, skips ledger hydration when no bridge capsule exists, avoids repeated current-chat resolution for explicit ledger/archive keys, and keeps startup repair on the non-hydrating ledger path. */
 /* v2.4.28 binds Recovery Vault debt and RE:TRACE repair packets to exact active worldline variants, mirrors reroll/rollback lifecycle into debt and packet state, adds branch-safe repair leases plus authenticated debt IPC/events, suspends candidates during first-observation rollback quarantine, reactivates the exact branch without another LLM call, and rejects superseded/orphaned repairs before canonical adoption. */
 /* v2.4.27 reinforces the v2.4.24-v2.4.26 memory stack as one integrated pipeline: a global packet routing catalog now runs before bounded full/light ingest; hierarchical parents route recursively through child episodes instead of flattened truncated L1 keys; hierarchy capacity is reserved across levels; current-state conflict collapse cannot be undone by closure coverage; derived-index cache keys include graph/episode compiler profiles; packet-debt raw evidence carries epistemic caution and is copied source-immutably during RE:TRACE handoff; and pre-build budget guards can fail soft before expensive graph/episode construction. */
 /* v2.4.26 adds a deterministic Typed Memory Graph, query-directed Graph Closure Evidence Bundles, and a router-only Hierarchical Episode Memory index. Explicit and conservative inferred SUPERSEDES/CONTRADICTS/RESOLVES/FULFILLS/VIOLATES/CAUSES/DEPENDS_ON/CONTINUES edges enrich the existing associative graph; closure can preserve the relevant change chain after the evidence gate; scene/turn clusters and recursively grouped parent episodes route broad or old-memory queries back down to exact L1 packet rows without adding an LLM, embedding provider, durable memory schema, or new handoff authority. */
@@ -190,7 +191,7 @@
   };
 
   const PLUGIN_NAME = 'HAYAKU';
-  const PLUGIN_VERSION = '2.4.28';
+const PLUGIN_VERSION = '2.4.32';
   const REQUEST_LINEAGE_IDENTITY_VERSION = 2;
   const REQUEST_LINEAGE_SCHEMA_V2 = 'hayaku_request_lineage_v2';
   const HAYAKU_PACKET_AUTHORING_PROFILE_SCHEMA = 'hayaku-packet-authoring-profile-v1';
@@ -2208,8 +2209,8 @@ const MODE_PROFILES = Object.freeze({
     const numeric = Math.floor(Number(value));
     return Number.isSafeInteger(numeric) && numeric > 0 ? numeric : fallback;
   };
-/* MEMORY SUITE STORAGE SDK v1.8.1
- * Scope-routed durable storage client shared by Flashback, HAYAKU, LIBRA, GRADIA, LIA and RE:TRACE.
+/* MEMORY SUITE STORAGE SDK v1.8.5
+ * Scope-routed durable storage client shared by Flashback, HAYAKU, LIBRA, LIA and RE:TRACE.
  * The server stores opaque values. Each plugin keeps ownership of its own data schema.
  */
 const createMemorySuiteStorageBridge = (rawOptions = {}) => {
@@ -2235,8 +2236,25 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
   const displayName = String(options.displayName || pluginId || namespace || 'Plugin').trim();
   const managementButtonEnabled = options.managementButton !== false;
   const requestTimeoutMs = Math.max(5000, Math.min(120000, Number(options.requestTimeoutMs || 30000) || 30000));
+  // Bootstrap is only a reachability/contract probe.  Keeping its deadline
+  // separate prevents an offline loopback endpoint (or an HTML error page from
+  // a browser interceptor) from blocking each plugin's local pluginStorage
+  // startup for the full data-request timeout.
+  const bootstrapRequestTimeoutMs = Math.max(750, Math.min(5000, Number(options.bootstrapRequestTimeoutMs || 1800) || 1800));
+  const bootstrapFailureCacheMs = Math.max(1000, Math.min(60000, Number(options.bootstrapFailureCacheMs || 10000) || 10000));
   const configCacheMs = 30000;
   const bootstrapCacheMs = 30000;
+  const sharedBootstrapFailures = (() => {
+    const existing = createMemorySuiteStorageBridge.__memorySuiteBootstrapFailures;
+    if (existing instanceof Map) return existing;
+    const created = new Map();
+    try {
+      Object.defineProperty(createMemorySuiteStorageBridge, '__memorySuiteBootstrapFailures', {
+        value: created, configurable: false, enumerable: false, writable: false
+      });
+    } catch (_) {}
+    return created;
+  })();
   const proxyCache = new WeakMap();
   const localProxyCache = new WeakMap();
   const migrationStateByLegacy = new WeakMap();
@@ -2247,6 +2265,9 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
   const migrationRetryMs = Math.max(5000, Math.min(10 * 60 * 1000, Number(options.migrationRetryMs || 30000) || 30000));
   const currentScopeProvider = typeof options.currentScopeProvider === 'function' ? options.currentScopeProvider : null;
   const resolveKeyScopeProvider = typeof options.resolveKeyScope === 'function' ? options.resolveKeyScope : null;
+  // Opt-in only: the plugin's resolver must be able to classify global/shared
+  // keys and explicit scope-key records correctly when currentScope is null.
+  const preResolveKeyScope = options.preResolveKeyScope === true;
   const scopeRoutingEnabled = options.scopeRouting !== false;
   const scopeCacheMs = Math.max(0, Math.min(10000, Number(options.scopeCacheMs || 0) || 0));
   const sharedRouteModeRaw = String(options.sharedRouteMode || MODE_MIRROR);
@@ -2450,6 +2471,33 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
       || /fetch|network|timeout|timed out|econn|connection|server_unavailable|bootstrap|http_50[0234]|503|socket|temporar/.test(message);
   };
 
+  const normalizeServerAvailabilityError = error => {
+    const rawMessage = compact(error?.message || error || 'memory_suite_server_unavailable', 700);
+    const rawCode = String(error?.code || '').toUpperCase();
+    const nativeJsonEnvelopeFailure = /expected double-quoted property name in json|unexpected token.*json|json(?:\.parse)?[^\n]*position\s+\d+/i.test(rawMessage);
+    const unavailable = nativeJsonEnvelopeFailure || retryableSyncError(error)
+      || ['MEMORY_SUITE_TIMEOUT', 'MEMORY_SUITE_SERVER_UNAVAILABLE'].includes(rawCode);
+    if (!unavailable) return error instanceof Error ? error : new Error(rawMessage);
+    const normalized = new Error('memory_suite_server_unavailable');
+    normalized.code = 'MEMORY_SUITE_SERVER_UNAVAILABLE';
+    normalized.retryable = true;
+    return normalized;
+  };
+
+  const cachedBootstrapFailure = url => {
+    const cached = sharedBootstrapFailures.get(String(url || ''));
+    if (!cached) return null;
+    if (Date.now() - Number(cached.at || 0) >= bootstrapFailureCacheMs) {
+      sharedBootstrapFailures.delete(String(url || ''));
+      return null;
+    }
+    const error = new Error(cached.message || 'memory_suite_server_unavailable');
+    error.code = cached.code || 'MEMORY_SUITE_SERVER_UNAVAILABLE';
+    error.retryable = true;
+    error.cached = true;
+    return error;
+  };
+
   const apiCandidates = () => {
     const out = [];
     const add = value => {
@@ -2609,17 +2657,18 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
     throw new Error('memory_suite_server_fetch_unavailable');
   };
 
-  const withTimeout = async (promise, label) => {
+  const withTimeout = async (promise, label, timeoutMs = requestTimeoutMs) => {
+    const effectiveTimeoutMs = Math.max(250, Number(timeoutMs || requestTimeoutMs) || requestTimeoutMs);
     let timer = null;
     try {
       return await Promise.race([
         Promise.resolve(promise),
         new Promise((_, reject) => {
           timer = setTimeout(() => {
-            const error = new Error(`${label || 'Memory Suite request'} timed out after ${requestTimeoutMs}ms`);
+            const error = new Error(`${label || 'Memory Suite request'} timed out after ${effectiveTimeoutMs}ms`);
             error.code = 'MEMORY_SUITE_TIMEOUT';
             reject(error);
-          }, requestTimeoutMs);
+          }, effectiveTimeoutMs);
         })
       ]);
     } finally {
@@ -2627,9 +2676,9 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
     }
   };
 
-  const responseText = async (response, label) => {
-    if (typeof response?.text === 'function') return await withTimeout(response.text(), `${label} response`);
-    if (typeof response?.json === 'function') return JSON.stringify(await withTimeout(response.json(), `${label} response`));
+  const responseText = async (response, label, timeoutMs = requestTimeoutMs) => {
+    if (typeof response?.text === 'function') return await withTimeout(response.text(), `${label} response`, timeoutMs);
+    if (typeof response?.json === 'function') return JSON.stringify(await withTimeout(response.json(), `${label} response`, timeoutMs));
     if (typeof response === 'string') return response;
     if (response && typeof response === 'object' && Object.prototype.hasOwnProperty.call(response, 'data')) {
       return typeof response.data === 'string' ? response.data : JSON.stringify(response.data);
@@ -2637,9 +2686,9 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
     return JSON.stringify(response || {});
   };
 
-  const fetchJson = async (url, init = {}, label = 'Memory Suite request') => {
-    const response = await withTimeout(fetchApi(url, init), label);
-    const raw = await responseText(response, label);
+  const fetchJson = async (url, init = {}, label = 'Memory Suite request', timeoutMs = requestTimeoutMs) => {
+    const response = await withTimeout(fetchApi(url, init), label, timeoutMs);
+    const raw = await responseText(response, label, timeoutMs);
     let payload = null;
     try { payload = raw ? JSON.parse(raw) : {}; }
     catch (_) { throw new Error('memory_suite_server_invalid_json'); }
@@ -2684,7 +2733,7 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
         'X-Memory-Suite-Plugin': pluginId,
         'X-Memory-Suite-Plugin-Version': pluginVersion
       }
-    }, 'Memory Suite connection test');
+    }, 'Memory Suite connection test', bootstrapRequestTimeoutMs);
     return validateBootstrapPayload(payload, url);
   };
 
@@ -2724,7 +2773,8 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
       }
       return result;
     } catch (error) {
-      const result = { ok: false, url, error: compact(error?.message || error, 700), durationMs: Date.now() - startedAt };
+      const normalized = normalizeServerAvailabilityError(error);
+      const result = { ok: false, url, error: compact(normalized?.message || normalized, 700), durationMs: Date.now() - startedAt };
       if (url === config.url) setStatus('unavailable', result.error, { url });
       return result;
     }
@@ -2736,6 +2786,10 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
     const cached = state.bootstrap;
     if (!force && cached.value && cached.baseUrl === config.url && Date.now() - Number(cached.at || 0) < bootstrapCacheMs) return cached.value;
     if (!force && cached.pending && cached.baseUrl === config.url) return await cached.pending;
+    if (!force) {
+      const offline = cachedBootstrapFailure(config.url);
+      if (offline) throw offline;
+    }
     const pending = (async () => {
       const payload = await fetchJson(`${config.url}/bootstrap`, {
         method: 'GET',
@@ -2743,8 +2797,9 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
           'X-Memory-Suite-Plugin': pluginId,
           'X-Memory-Suite-Plugin-Version': pluginVersion
         }
-      }, 'Memory Suite bootstrap');
+      }, 'Memory Suite bootstrap', bootstrapRequestTimeoutMs);
       const value = validateBootstrapPayload(payload, config.url);
+      sharedBootstrapFailures.delete(config.url);
       state.bootstrap = { at: Date.now(), baseUrl: config.url, value, pending: null };
       setStatus('connected', '', { serverVersion: value.version, url: value.url });
       return value;
@@ -2753,10 +2808,19 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
     try {
       return await pending;
     } catch (error) {
+      const normalized = normalizeServerAvailabilityError(error);
       state.bootstrap = { at: 0, baseUrl: config.url, value: null, pending: null };
-      setStatus('unavailable', error?.message || error, { url: config.url });
-      warnOnce(`server_unavailable_${compact(error?.message || error, 120)}`, error);
-      throw error;
+      if (normalized?.code === 'MEMORY_SUITE_SERVER_UNAVAILABLE') {
+        sharedBootstrapFailures.set(config.url, { at: Date.now(), message: normalized.message, code: normalized.code });
+      }
+      setStatus('unavailable', normalized?.message || normalized, { url: config.url });
+      // Offline is an expected state: pluginStorage remains authoritative and
+      // the status object exposes the condition without noisy console warnings.
+      // Contract/configuration failures still surface once for diagnosis.
+      if (normalized?.code !== 'MEMORY_SUITE_SERVER_UNAVAILABLE') {
+        warnOnce('server_bootstrap_failed', normalized);
+      }
+      throw normalized;
     }
   };
 
@@ -3999,6 +4063,10 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
     if (config.mode === MODE_PLUGIN_ONLY) return typeof legacyGet === 'function' ? await legacyGet() : null;
     if (config.mode === MODE_MIRROR) {
       const localValue = typeof legacyGet === 'function' ? await legacyGet() : null;
+      if (cachedBootstrapFailure(config.url)) {
+        setStatus('server_unavailable_local_only', 'memory_suite_server_unavailable', { mode: MODE_MIRROR, key: compact(key, 160), space });
+        return localValue;
+      }
       if (!isNullishStorageValue(localValue)) {
         try {
           const remote = await remoteGet(space, key);
@@ -4203,7 +4271,7 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
           #${instanceId} .mscx-state{display:inline-flex;align-items:center;gap:7px;padding:6px 9px;border:1px solid var(--mscx-line);border-radius:999px;background:var(--mscx-soft);white-space:nowrap;font-size:11px;font-weight:800;color:var(--mscx-muted)} #${instanceId} .mscx-dot{width:8px;height:8px;border-radius:50%;background:var(--mscx-muted)} #${instanceId} .mscx-state.good .mscx-dot{background:var(--mscx-good);box-shadow:0 0 0 4px rgba(86,212,155,.12)} #${instanceId} .mscx-state.warn .mscx-dot{background:var(--mscx-warn)} #${instanceId} .mscx-state.error .mscx-dot{background:var(--mscx-danger)}
           #${instanceId} .mscx-card{padding:14px;border:1px solid var(--mscx-line);border-radius:15px;background:var(--mscx-card);min-width:0} #${instanceId} .mscx-card-title{display:block;margin-bottom:9px;font-size:12px;font-weight:850;color:var(--mscx-text)}
           #${instanceId} .mscx-modes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px} #${instanceId} .mscx-mode{position:relative;display:grid;gap:4px;padding:12px;border:1px solid var(--mscx-line);border-radius:12px;background:var(--mscx-soft);cursor:pointer;min-width:0} #${instanceId} .mscx-mode.selected,#${instanceId} .mscx-mode:has(input:checked){border-color:var(--mscx-accent);box-shadow:0 0 0 1px var(--mscx-accent) inset;background:rgba(81,116,200,.13)} #${instanceId} .mscx-mode input{position:absolute;right:10px;top:10px;accent-color:var(--mscx-accent)} #${instanceId} .mscx-mode strong{padding-right:22px;font-size:12px;color:var(--mscx-text)} #${instanceId} .mscx-mode small{color:var(--mscx-muted);font-size:10px;line-height:1.45}
-          #${instanceId} .mscx-url-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px} #${instanceId} input[type="url"]{width:100%;min-width:0;padding:10px 11px;border:1px solid var(--mscx-line);border-radius:10px;background:var(--mscx-soft);color:var(--mscx-text);font:500 12px ui-monospace,SFMono-Regular,Consolas,monospace;outline:none} #${instanceId} input[type="url"]:focus{border-color:var(--mscx-accent);box-shadow:0 0 0 3px rgba(122,162,255,.12)}
+          #${instanceId} .mscx-url-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px} #${instanceId} input[type="url"],#${instanceId} input[type="password"]{width:100%;min-width:0;padding:10px 11px;border:1px solid var(--mscx-line);border-radius:10px;background:var(--mscx-soft);color:var(--mscx-text);font:500 12px ui-monospace,SFMono-Regular,Consolas,monospace;outline:none} #${instanceId} input[type="url"]:focus,#${instanceId} input[type="password"]:focus{border-color:var(--mscx-accent);box-shadow:0 0 0 3px rgba(122,162,255,.12)}
           #${instanceId} .mscx-actions{display:flex;flex-wrap:wrap;gap:8px} #${instanceId} button{min-height:38px;padding:8px 12px;border:1px solid var(--mscx-line);border-radius:10px;background:var(--mscx-soft);color:var(--mscx-text);font:750 11px system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;cursor:pointer} #${instanceId} button:hover{border-color:rgba(122,162,255,.65);background:rgba(70,94,150,.22)} #${instanceId} button.primary{background:rgba(55,97,181,.72);border-color:rgba(122,162,255,.75)} #${instanceId} button.danger{color:#ffe4e8;background:rgba(126,34,52,.55);border-color:rgba(251,113,133,.55)} #${instanceId} button:disabled{opacity:.45;cursor:not-allowed}
           #${instanceId} .mscx-info{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px} #${instanceId} .mscx-info div{padding:9px 10px;border:1px solid var(--mscx-line);border-radius:10px;background:var(--mscx-soft);min-width:0} #${instanceId} .mscx-info span{display:block;color:var(--mscx-muted);font-size:9px;font-weight:800} #${instanceId} .mscx-info strong{display:block;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;color:var(--mscx-text)}
           #${instanceId} .mscx-job{display:grid;gap:10px;border-color:rgba(122,162,255,.34);background:linear-gradient(180deg,rgba(35,55,97,.45),rgba(15,23,42,.58))} #${instanceId} .mscx-job[hidden]{display:none} #${instanceId} .mscx-job-head{display:flex;justify-content:space-between;gap:10px;align-items:center} #${instanceId} .mscx-job-head strong{font-size:13px} #${instanceId} .mscx-job-badge{font-size:10px;font-weight:850;color:var(--mscx-muted)}
@@ -4219,7 +4287,7 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
             <label class="mscx-mode"><input type="radio" name="${instanceId}-mode" value="mirror"><strong>플러그인 + 서버 병존</strong><small>pluginStorage와 DATA 서버를 계속 동기화합니다.</small></label>
             <label class="mscx-mode"><input type="radio" name="${instanceId}-mode" value="server_only"><strong>서버 단독</strong><small>Memory Suite DATA를 영구 정본으로 사용합니다.</small></label>
           </div></div>
-          <div class="mscx-card"><span class="mscx-card-title">서버 주소</span><div class="mscx-url-row"><input data-mscx-url type="url" spellcheck="false" value="${htmlEscape(config.url || defaultUrl)}"><button data-mscx-test type="button">연결 테스트</button></div><div class="mscx-note" style="margin-top:8px">보안을 위해 localhost·127.0.0.1·::1의 HTTP 주소만 허용합니다. 기본 주소는 http://127.0.0.1:47630 입니다.</div></div>
+          <div class="mscx-card"><span class="mscx-card-title">서버 주소</span><div class="mscx-url-row"><input data-mscx-url type="url" spellcheck="false" value="${htmlEscape(config.url || defaultUrl)}"><button data-mscx-test type="button">연결 테스트</button></div><div class="mscx-note" style="margin-top:8px">별도 key 입력 없이 localhost·127.0.0.1·::1의 로컬 서버에 연결합니다. 기본 주소는 http://127.0.0.1:47630 입니다.</div></div>
           <div class="mscx-info"><div><span>현재 모드</span><strong data-mscx-mode-label>${htmlEscape(modeLabel(config.mode || MODE_PLUGIN_ONLY))}</strong></div><div><span>서버 버전</span><strong data-mscx-version>-</strong></div><div><span>프로토콜</span><strong data-mscx-protocol>-</strong></div><div><span>서버 데이터</span><strong data-mscx-records>-</strong></div><div><span>namespace</span><strong>${htmlEscape(namespace)}</strong></div></div>
           <div class="mscx-actions"><button data-mscx-apply class="primary" type="button">설정 적용</button><button data-mscx-sync type="button">지금 동기화</button><button data-mscx-restore type="button">서버 → pluginStorage 복구</button><button data-mscx-delete class="danger" type="button">플러그인 스토리지 삭제</button></div>
           <div class="mscx-card mscx-job" data-mscx-job hidden><div class="mscx-job-head"><strong data-mscx-job-title>초기 서버 동기화</strong><span class="mscx-job-badge" data-mscx-job-badge>작업 중</span></div><div class="mscx-progress" data-mscx-progress><i></i></div><div><div class="mscx-job-phase" data-mscx-job-phase>작업 준비</div><div class="mscx-job-message" data-mscx-job-message></div></div><div class="mscx-job-stats"><div class="mscx-job-stat"><span>진행</span><b data-mscx-job-items>-</b></div><div class="mscx-job-stat"><span>처리 용량</span><b data-mscx-job-bytes>-</b></div><div class="mscx-job-stat"><span>전송·복구</span><b data-mscx-job-transfer>-</b></div><div class="mscx-job-stat"><span>경과 시간</span><b data-mscx-job-elapsed>-</b></div><div class="mscx-job-stat"><span>마지막 활동</span><b data-mscx-job-activity>-</b></div><div class="mscx-job-stat"><span>재시도 / 실패</span><b data-mscx-job-retry>-</b></div></div><div class="mscx-job-current" data-mscx-job-current>현재 작업을 준비하고 있습니다.</div><div class="mscx-note">이 화면을 닫아도 작업은 계속됩니다. 새로고침 후에는 저장된 작업 영수증을 읽고 이미 서버에 일치하는 항목을 다시 전송하지 않고 이어서 확인합니다.</div></div>
@@ -4654,9 +4722,13 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
     try { value = currentScopeProvider ? await currentScopeProvider({ namespace, pluginId, pluginVersion, force }) : await defaultCurrentScope(); }
     catch (error) { setStatus('scope_unavailable', error?.message || error); }
     const scope = normalizeScopeDescriptor(value);
+    const previousScopeId = String(state.scopeRouting.current?.scopeId || '');
     state.scopeRouting.current = scope;
     state.scopeRouting.currentAt = Date.now();
-    state.scopeRouting.routeCache.clear();
+    // Re-reading the same active chat must not throw away every resolved key
+    // route. The old unconditional clear multiplied host-context work across a
+    // ledger/archive scan even though the scope had not changed.
+    if (previousScopeId !== String(scope.scopeId || '')) state.scopeRouting.routeCache.clear();
     return scope;
   };
 
@@ -4756,14 +4828,42 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
     const normalizedKey = String(key || '');
     if (!matchesRoute(space, normalizedKey)) return { routed: false, kind: 'global', space, key: normalizedKey, logicalKey: normalizedKey, remoteKey: normalizedKey, scopeId: '', mode: MODE_PLUGIN_ONLY };
     if (!scopeRoutingEnabled) return { routed: true, kind: 'global', space, key: normalizedKey, logicalKey: normalizedKey, remoteKey: normalizedKey, scopeId: '', mode: MODE_PLUGIN_ONLY };
+
+    // Many durable keys already contain their immutable scope id, while shared
+    // archive/control keys never need a chat scope. Let explicitly opted-in
+    // resolvers classify those keys before touching the RisuAI character/chat
+    // APIs. This keeps archive traversal proportional to storage layers instead
+    // of layers multiplied by repeated current-chat discovery.
+    let registry = null;
+    let preResolved = null;
+    if (preResolveKeyScope && resolveKeyScopeProvider) {
+      try {
+        registry = await loadScopeRegistry(false, false);
+        preResolved = await resolveKeyScopeProvider({ namespace, pluginId, pluginVersion, space, key: normalizedKey, currentScope: null, registry });
+      } catch (_) { preResolved = null; }
+    }
+    const preKind = String(preResolved?.kind || preResolved?.type || '').trim().toLowerCase();
+    const preScope = preKind === 'scope' ? normalizeScopeDescriptor(preResolved?.scope || preResolved, '') : null;
+    const preResolvedWithoutCurrent = preKind === 'shared'
+      || preKind === 'global'
+      || (preKind === 'scope' && Boolean(preScope?.scopeId) && !preResolved?.scopeAlias);
+    if (preResolvedWithoutCurrent) {
+      const routeScopeId = preKind === 'scope' ? preScope.scopeId : `__${preKind}__`;
+      const preCacheKey = `${space}\n${normalizedKey}\n${routeScopeId}`;
+      if (!routeOptions.noCache && state.scopeRouting.routeCache.has(preCacheKey)) return state.scopeRouting.routeCache.get(preCacheKey);
+      const route = await normalizeRouteDescriptor(preResolved, space, normalizedKey, null);
+      state.scopeRouting.routeCache.set(preCacheKey, route);
+      return route;
+    }
+
     const currentScope = normalizeScopeDescriptor(routeOptions.scope || await resolveCurrentScope(routeOptions.forceScope === true));
     const cacheKey = `${space}\n${normalizedKey}\n${currentScope.scopeId}`;
     if (!routeOptions.noCache && state.scopeRouting.routeCache.has(cacheKey)) return state.scopeRouting.routeCache.get(cacheKey);
-    let raw = null;
+    let raw = preResolved;
     try {
-      raw = resolveKeyScopeProvider
-        ? await resolveKeyScopeProvider({ namespace, pluginId, pluginVersion, space, key: normalizedKey, currentScope, registry: await loadScopeRegistry(false, false) })
-        : { kind: 'scope', ...currentScope };
+      raw = raw || (resolveKeyScopeProvider
+        ? await resolveKeyScopeProvider({ namespace, pluginId, pluginVersion, space, key: normalizedKey, currentScope, registry: registry || await loadScopeRegistry(false, false) })
+        : { kind: 'scope', ...currentScope });
     } catch (error) {
       setStatus('scope_route_failed', error?.message || error, { key: compact(normalizedKey, 180), space });
       raw = { kind: 'scope', ...currentScope };
@@ -4813,6 +4913,11 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
     if (!route.routed || route.mode === MODE_PLUGIN_ONLY) return typeof legacyGet === 'function' ? await legacyGet() : null;
     if (route.mode === MODE_MIRROR) {
       const localValue = typeof legacyGet === 'function' ? await legacyGet() : null;
+      const config = await readConfig();
+      if (cachedBootstrapFailure(config.url)) {
+        setStatus('server_unavailable_local_only', 'memory_suite_server_unavailable', { scopeId: route.scopeId, mode: route.mode, key: compact(key, 160), space });
+        return localValue;
+      }
       const projected = isNullishStorageValue(localValue) ? null : await routeProjectValue(route, localValue);
       if (!isNullishStorageValue(projected)) {
         try {
@@ -4915,6 +5020,7 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
       if (route.mode !== MODE_SERVER_ONLY) visible.push(key);
       if (route.mode !== MODE_PLUGIN_ONLY) requiresServer = true;
     }
+    if (!requiresServer) return [...new Set(visible)];
     let remote = { keys: [], tombstones: [] };
     try { remote = await remoteKeys(space, prefix, { allowPluginOnly: true }); }
     catch (error) {
@@ -4922,7 +5028,11 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
       return [...new Set(visible)];
     }
     const tombstones = new Set();
-    for (const raw of Array.isArray(remote.tombstones) ? remote.tombstones : []) tombstones.add(scopedRemoteKeyInfo(raw).logicalKey);
+    for (const raw of Array.isArray(remote.tombstones) ? remote.tombstones : []) {
+      const decoded = scopedRemoteKeyInfo(raw);
+      if (decoded.scopeId && decoded.scopeId !== currentScope.scopeId) continue;
+      tombstones.add(decoded.logicalKey);
+    }
     for (const remoteKey of Array.isArray(remote.keys) ? remote.keys : []) {
       const decoded = scopedRemoteKeyInfo(remoteKey);
       if (decoded.scopeId && decoded.scopeId !== currentScope.scopeId) continue;
@@ -5007,7 +5117,13 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
     cache.set(legacy, proxy);
     scheduleScopedAutomaticMigration(legacy, space);
     if (space === 'plugin') setTimeout(() => {
-      void hydrateScopeRegistryFromServer().then(() => scopedResumePendingSyncJob()).catch(() => {});
+      void (async () => {
+        const scope = await resolveCurrentScope(false);
+        const modeState = await readScopeMode(scope, false);
+        if (modeState.mode === MODE_PLUGIN_ONLY) return;
+        await hydrateScopeRegistryFromServer();
+        await scopedResumePendingSyncJob();
+      })().catch(() => {});
     }, 0);
     return proxy;
   };
@@ -5570,7 +5686,7 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
       #${rootId} h3{margin:0;font-size:18px} #${rootId} .muted{color:#9eacc3;font-size:12px;line-height:1.5}
       #${rootId} .scope{padding:11px 12px;background:#172236;border:1px solid #3b4d6b;border-radius:10px} #${rootId} .scope b{display:block;margin-bottom:4px}
       #${rootId} .modes{display:grid;gap:8px} #${rootId} label.mode{display:flex;gap:9px;align-items:flex-start;border:1px solid #34425b;border-radius:10px;padding:10px;cursor:pointer}
-      #${rootId} input[type=text]{width:100%;padding:10px 11px;border-radius:9px;border:1px solid #465a79;background:#0b1321;color:#fff}
+      #${rootId} input[type=text],#${rootId} input[type=password]{width:100%;padding:10px 11px;border-radius:9px;border:1px solid #465a79;background:#0b1321;color:#fff}
       #${rootId} .actions{display:flex;flex-wrap:wrap;gap:8px} #${rootId} button{border:1px solid #50658a;background:#1d2a42;color:#fff;border-radius:9px;padding:9px 12px;font-weight:700;cursor:pointer} #${rootId} button.primary{background:#2d5bd1;border-color:#4c79e4} #${rootId} button.danger{background:#51212a;border-color:#8e4350}
       #${rootId} button:disabled{opacity:.45;cursor:not-allowed} #${rootId} .status{white-space:pre-wrap;border:1px solid #34425b;background:#0c1422;border-radius:10px;padding:11px;min-height:46px;font-size:12px;line-height:1.55}
       #${rootId} .job{display:none;border:1px solid #365275;background:#101d31;border-radius:12px;padding:12px;gap:9px} #${rootId} .job.show{display:grid}
@@ -5606,7 +5722,7 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
       q('[data-job-retry]').textContent=`재시도 ${Number(job.retryCount||0)} · 실패 ${Number(job.failures||0)}`; q('[data-job-key]').textContent=`현재: ${job.currentKey || job.currentAction || '-'}`;
     };
     q('[data-test]').onclick = async()=>{ setMessage('서버 연결을 확인하고 있습니다…'); const result=await testConnection(q('[data-url]').value); setMessage(result.ok?`연결됨\nMemory Suite ${result.serverVersion}\nProtocol ${result.protocol?.major}.${result.protocol?.minor}\nnamespace ${namespace} · 항목 ${result.liveRecords}`:`연결 실패\n${result.error}`,result.ok?'good':'error'); };
-    q('[data-apply]').onclick = async()=>{ const mode=root.querySelector(`input[name="${rootId}-mode"]:checked`)?.value||MODE_PLUGIN_ONLY; try{ const job=await scopedStartConnectionConfigurationJob({mode,url:q('[data-url]').value,scope:initial.scope}); setMessage('설정 적용과 현재 스코프 초기 동기화를 시작했습니다.'); renderJob(job);}catch(error){setMessage(`설정 적용 시작 실패\n${error?.message||error}`,'error');} };
+    q('[data-apply]').onclick = async()=>{ const mode=root.querySelector(`input[name="${rootId}-mode"]:checked`)?.value||MODE_PLUGIN_ONLY; try{const job=await scopedStartConnectionConfigurationJob({mode,url:q('[data-url]').value,scope:initial.scope}); setMessage('설정 적용과 현재 스코프 초기 동기화를 시작했습니다.'); renderJob(job);}catch(error){setMessage(`설정 적용 시작 실패\n${error?.message||error}`,'error');} };
     q('[data-sync]').onclick = async()=>{ try{const job=await scopedStartSynchronizationJob();setMessage('현재 스코프 동기화를 시작했습니다.');renderJob(job);}catch(error){setMessage(`동기화 시작 실패\n${error?.message||error}`,'error');} };
     q('[data-restore]').onclick = async()=>{ try{const job=await scopedStartRestoreJob();setMessage('현재 스코프 복구를 시작했습니다.');renderJob(job);}catch(error){setMessage(`복구 시작 실패\n${error?.message||error}`,'error');} };
     let armedUntil=0;
@@ -5733,6 +5849,17 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
       try {
         scope = normalizeScopeDescriptor(options.scope || await resolveCurrentScope(false));
         mode = (await readScopeMode(scope, false)).mode;
+        if (mode === MODE_PLUGIN_ONLY && options.probeServer !== true) {
+          const result = {
+            schema: 'memory-suite.plugin-server-diagnostics.v1', generatedAt: Date.now(), reachable: null,
+            reason: 'plugin_only_no_server_probe', namespace, pluginId, pluginVersion, storageMode: mode,
+            scope: scope ? { label: String(scope.label || ''), available: scope.available !== false } : null,
+            clientStatus: { ...state.status }
+          };
+          state.diagnostics.value = result;
+          state.diagnostics.at = Date.now();
+          return cloneDiagnosticValue(result);
+        }
         const connection = await bootstrap(force, true);
         if (connection?.capabilities?.['server-diagnostics.v1'] !== true) {
           const result = {
@@ -5795,7 +5922,16 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
     if (state.diagnostics.timer) clearTimeout(state.diagnostics.timer);
     state.diagnostics.timer = setTimeout(() => {
       state.diagnostics.timer = null;
-      refreshDiagnostics(options).catch(() => {});
+      void (async () => {
+        const registry = await loadScopeRegistry(false, false);
+        const hasServerScope = Object.values(registry?.entries || {}).some(row => normalizeMode(row?.mode) !== MODE_PLUGIN_ONLY);
+        // Once legacy mode migration is complete, a fully plugin-only registry
+        // needs no startup chat lookup and no diagnostics request.
+        if (registry?.legacyGlobalModeImported === true && !hasServerScope) return;
+        const scope = await resolveCurrentScope(false);
+        if ((await readScopeMode(scope, false)).mode === MODE_PLUGIN_ONLY) return;
+        await refreshDiagnostics(options);
+      })().catch(() => {});
     }, Math.max(0, Number(delayMs || 0) || 0));
     return true;
   };
@@ -6010,7 +6146,8 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
     })
   });
   scheduleManagementRegistration();
-  scheduleDiagnosticsRefresh(1200, { limit: 250 });
+  const startupDiagnosticsDelayMs = Math.max(1200, Math.min(15000, Number(options.startupDiagnosticsDelayMs || (3500 + (namespaceDelaySeed % 7) * 350)) || 3500));
+  scheduleDiagnosticsRefresh(startupDiagnosticsDelayMs, { limit: 250 });
   return bridge;
 
 };
@@ -6037,7 +6174,8 @@ const memorySuiteHayakuResolveKeyScope = async ({ key, currentScope }) => {
 const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
   namespace:'hayaku', displayName:'HAYAKU', pluginId:HAYAKU_PLUGIN_ID, pluginVersion:PLUGIN_VERSION, managementButton:false,
   pluginPrefixes:[STORAGE_LEDGER_KEY_PREFIX,RECOVERY_VAULT_KEY_PREFIX,HAYAKU_ARCHIVE_KEY_PREFIX,HAYAKU_ARCHIVE_META_KEY_PREFIX],
-  currentScopeProvider:memorySuiteHayakuCurrentScope, resolveKeyScope:memorySuiteHayakuResolveKeyScope
+  currentScopeProvider:memorySuiteHayakuCurrentScope, resolveKeyScope:memorySuiteHayakuResolveKeyScope,
+  preResolveKeyScope:true
 });
 
 
@@ -6509,15 +6647,36 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
       const fastObserver = options?.observerFast === true;
       try {
         const required = ['getCurrentCharacterIndex', 'getCurrentChatIndex', 'getCharacterFromIndex', 'getChatFromIndex'];
-        if (required.some(name => typeof current?.[name] !== 'function')) {
+        const indexedApi = candidates().find(candidate => required.every(name => typeof candidate?.[name] === 'function')) || current;
+        const directApi = candidates().find(candidate => (
+          typeof candidate?.getCharacter === 'function' || typeof candidate?.getChar === 'function'
+        )) || null;
+        const indexedApiAvailable = required.every(name => typeof indexedApi?.[name] === 'function');
+        if (!indexedApiAvailable && !directApi) {
           return { key: '', confident: false, reason: 'current_chat_scope_api_unavailable' };
         }
+        const readDirectSelection = async label => {
+          if (!directApi) return null;
+          const getter = typeof directApi.getCharacter === 'function'
+            ? () => directApi.getCharacter()
+            : () => directApi.getChar();
+          const character = await boundedHostCall(`${label || ''}getDirectCharacter`, getter, null);
+          const chats = Array.isArray(character?.chats) ? character.chats : [];
+          const pageRaw = Number(character?.chatPage);
+          const chatIndex = Number.isInteger(pageRaw) && pageRaw >= 0 ? pageRaw : 0;
+          const chat = chats[chatIndex] || chats[0] || (objectish(character?.chat) ? character.chat : null);
+          const characterId = text(character?.chaId || '').trim();
+          const chatId = text(chat?.id || '').trim();
+          if (!characterId || !chatId) return null;
+          return { character, chat, characterId, chatId, chatIndex };
+        };
         const readCurrentIndexes = async label => {
+          if (!indexedApiAvailable) return { characterIndex: -1, chatIndex: -1, selectionTransition: false };
           const operationPrefix = label ? `${label}Get` : 'get';
           const softMissesBefore = Math.max(0, Number(Memory.compatCallStats.softMisses || 0) || 0);
           const [characterIndexRaw, chatIndexRaw] = await Promise.all([
-            boundedHostCall(`${operationPrefix}CurrentCharacterIndex`, () => current.getCurrentCharacterIndex(), -1),
-            boundedHostCall(`${operationPrefix}CurrentChatIndex`, () => current.getCurrentChatIndex(), -1)
+            boundedHostCall(`${operationPrefix}CurrentCharacterIndex`, () => indexedApi.getCurrentCharacterIndex(), -1),
+            boundedHostCall(`${operationPrefix}CurrentChatIndex`, () => indexedApi.getCurrentChatIndex(), -1)
           ]);
           return {
             characterIndex: Number(characterIndexRaw),
@@ -6543,17 +6702,22 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
           await waitMs(45);
           indexes = await readCurrentIndexes('retry');
         }
-        const characterIndex = indexes.characterIndex;
-        const chatIndex = indexes.chatIndex;
-        if (!Number.isInteger(characterIndex) || characterIndex < 0 || !Number.isInteger(chatIndex) || chatIndex < 0) {
-          return { key: '', confident: false, reason: 'current_chat_indexes_invalid' };
+        let directSelection = null;
+        if (!Number.isInteger(indexes.characterIndex) || indexes.characterIndex < 0
+          || !Number.isInteger(indexes.chatIndex) || indexes.chatIndex < 0) {
+          directSelection = await readDirectSelection('fallback');
+          if (!directSelection) {
+            return { key: '', confident: false, reason: 'current_chat_indexes_invalid' };
+          }
         }
+        const characterIndex = directSelection ? -1 : indexes.characterIndex;
+        const chatIndex = directSelection ? directSelection.chatIndex : indexes.chatIndex;
 
         // v2.4.4 steady-state observer fast path. Once a full, verified scope has
         // established the exact character/chat identity, repeated topology polls
         // only need the current indexes plus the current chat body. A chat switch
         // or identity drift falls through to the original full verification path.
-        if (fastObserver) {
+        if (fastObserver && !directSelection) {
           const cached = objectish(Memory.worldlineObserver.scopeCache) ? Memory.worldlineObserver.scopeCache : null;
           if (cached
             && Number(cached.characterIndex) === characterIndex
@@ -6561,7 +6725,7 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
             && now() - Math.max(0, Number(cached.updatedAt || 0) || 0) <= WORLDLINE_OBSERVER_SCOPE_REVERIFY_MS
             && objectish(cached.scope)
             && cached.scope?.confident === true) {
-            const chat = await boundedHostCall('observerGetChatFromIndex', () => current.getChatFromIndex(characterIndex, chatIndex), null);
+            const chat = await boundedHostCall('observerGetChatFromIndex', () => indexedApi.getChatFromIndex(characterIndex, chatIndex), null);
             const chatId = text(chat?.id || '').trim();
             if (chatId && chatId === text(cached.chatId || '').trim()) {
               const scope = {
@@ -6581,10 +6745,12 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
           }
         }
 
-        const [character, chat] = await Promise.all([
-          boundedHostCall('getCharacterFromIndex', () => current.getCharacterFromIndex(characterIndex), null),
-          boundedHostCall('getChatFromIndex', () => current.getChatFromIndex(characterIndex, chatIndex), null)
-        ]);
+        const [character, chat] = directSelection
+          ? [directSelection.character, directSelection.chat]
+          : await Promise.all([
+            boundedHostCall('getCharacterFromIndex', () => indexedApi.getCharacterFromIndex(characterIndex), null),
+            boundedHostCall('getChatFromIndex', () => indexedApi.getChatFromIndex(characterIndex, chatIndex), null)
+          ]);
         const characterId = text(character?.chaId || '').trim();
         const chatId = text(chat?.id || '').trim();
         if (!characterId || !chatId) return { key: '', confident: false, reason: 'current_chat_ids_missing' };
@@ -6605,11 +6771,20 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
         });
         const copiedFromChatId = inferredCopySource.sourceChatId;
         const verifyScope = async label => {
+          if (directSelection) {
+            const directVerified = await readDirectSelection(`${label || ''}verify`);
+            return {
+              verifiedCharacterIndex: -1,
+              verifiedChatIndex: directVerified?.chatIndex ?? -1,
+              verifiedCharacterId: text(directVerified?.characterId || '').trim(),
+              verifiedChatId: text(directVerified?.chatId || '').trim()
+            };
+          }
           const [verifiedCharacterIndexRaw, verifiedChatIndexRaw, verifiedCharacter, verifiedChat] = await Promise.all([
-            boundedHostCall(`${label}verifyCurrentCharacterIndex`, () => current.getCurrentCharacterIndex(), -1),
-            boundedHostCall(`${label}verifyCurrentChatIndex`, () => current.getCurrentChatIndex(), -1),
-            boundedHostCall(`${label}verifyCharacterFromIndex`, () => current.getCharacterFromIndex(characterIndex), null),
-            boundedHostCall(`${label}verifyChatFromIndex`, () => current.getChatFromIndex(characterIndex, chatIndex), null)
+            boundedHostCall(`${label}verifyCurrentCharacterIndex`, () => indexedApi.getCurrentCharacterIndex(), -1),
+            boundedHostCall(`${label}verifyCurrentChatIndex`, () => indexedApi.getCurrentChatIndex(), -1),
+            boundedHostCall(`${label}verifyCharacterFromIndex`, () => indexedApi.getCharacterFromIndex(characterIndex), null),
+            boundedHostCall(`${label}verifyChatFromIndex`, () => indexedApi.getChatFromIndex(characterIndex, chatIndex), null)
           ]);
           return {
             verifiedCharacterIndex: Number(verifiedCharacterIndexRaw),
@@ -6673,7 +6848,7 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
           chatMessagesAvailable: Array.isArray(chat?.message),
           chatMessageCount: Array.isArray(chat?.message) ? chat.message.length : 0,
           requestType: 'model',
-          scopeReadMode: 'full_verified'
+          scopeReadMode: directSelection ? 'direct_character_verified' : 'full_verified'
         };
         Memory.worldlineObserver.scopeCache = {
           characterIndex,
@@ -6684,7 +6859,7 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
           updatedAt: now()
         };
         Memory.worldlineObserver.fullScopeRefreshes += 1;
-        Memory.worldlineObserver.lastScopeMode = 'full_verified';
+        Memory.worldlineObserver.lastScopeMode = directSelection ? 'direct_character_verified' : 'full_verified';
         Memory.worldlineObserver.lastScopeAt = now();
         return scope;
       } catch (error) {
@@ -32805,6 +32980,32 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
     };
   };
 
+  // Pure, non-mutating summary path for owner discovery and compatibility UI.
+  // Full loadStorageLedger() intentionally performs copy/adoption maintenance;
+  // doing that for includeRecords:false made a simple status check traverse the
+  // archive and sometimes rewrite the ledger before the GUI could render.
+  const loadStorageLedgerSummary = async scope => {
+    const key = storageLedgerStorageKey(scope);
+    if (!key) return { ...emptyStorageLedger(scope), enabled: false, reason: 'scope_unavailable', recordsIncluded: false, logicalRecordCount: 0 };
+    if (!RisuCompat.hasPluginStorage()) return { ...emptyStorageLedger(scope), enabled: false, reason: 'plugin_storage_unavailable', recordsIncluded: false, logicalRecordCount: 0 };
+    const stored = await RisuCompat.getStorageItem(key, null);
+    const ledger = normalizeStorageLedger(stored, scope);
+    const archiveRef = normalizeHayakuArchiveRef(ledger.archiveRef);
+    return {
+      ...ledger,
+      enabled: true,
+      reason: ledger.records.length || archiveRef ? 'loaded_summary' : 'empty',
+      storageKey: key,
+      archiveRef,
+      archiveRecords: Math.max(0, Number(archiveRef?.recordCount || 0) || 0),
+      archiveVerified: archiveRef ? null : true,
+      archiveVerificationDeferred: Boolean(archiveRef),
+      archiveReason: archiveRef ? 'archive_verification_deferred' : 'archive_ref_absent',
+      logicalRecordCount: logicalHayakuRecordCount(ledger),
+      recordsIncluded: false
+    };
+  };
+
   const packetCaptureInspectionFromText = value => {
     const source = text(value);
     const packets = [];
@@ -33917,7 +34118,7 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
   const tombstoneStorageSlot = async target => enqueueStorageOperation(async () => {
     const scope = await RisuCompat.currentChatScope();
     if (!scope?.confident || !scope?.key) return { ok: false, forgotten: false, reason: scope?.reason || 'scope_unavailable' };
-    const ledger = await loadStorageLedger(scope);
+    const ledger = await loadStorageLedger(scope, { hydrateArchive: false });
     if (ledger.enabled !== true) return { ok: false, forgotten: false, reason: ledger.reason || 'storage_unavailable' };
     const slotId = resolveStorageSlotId(ledger, target);
     if (!slotId) return { ok: false, forgotten: false, reason: 'slot_not_found' };
@@ -34122,6 +34323,11 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
       null
     );
     const capsule = typeof stored === 'string' ? safeJsonParse(stored, null) : stored;
+    // A status read must not hydrate the complete ledger merely to learn that
+    // no RE:TRACE cold-start capsule exists.
+    if (!objectish(capsule)) {
+      return { ok: false, adopted: false, reason: 'capsule_absent', records: 0, scopeKey: scope.key };
+    }
     const ledger = await loadStorageLedger(scope);
     if (ledger.enabled !== true) {
       return { ok: false, adopted: false, reason: ledger.reason || 'storage_unavailable', records: 0, scopeKey: scope.key };
@@ -34326,7 +34532,35 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
   let memoryBridgeIpcApi = null;
   let memoryBridgeIpcHandler = null;
   let memoryBridgeIpcRegistration = null;
+  let memoryBridgeIpcRetryTimer = null;
+  let memoryBridgeIpcRetryAttempt = 0;
+  const stopMemoryBridgeIpcRetry = () => {
+    if (memoryBridgeIpcRetryTimer) clearTimeout(memoryBridgeIpcRetryTimer);
+    memoryBridgeIpcRetryTimer = null;
+    memoryBridgeIpcRetryAttempt = 0;
+  };
+  const scheduleMemoryBridgeIpcRetry = (attempt = memoryBridgeIpcRetryAttempt) => {
+    if (Memory.unloaded || !ownsRuntime() || memoryBridgeIpcRegistered || memoryBridgeIpcRetryTimer || attempt >= 60) return false;
+    memoryBridgeIpcRetryAttempt = attempt;
+    memoryBridgeIpcRetryTimer = setTimeout(async () => {
+      memoryBridgeIpcRetryTimer = null;
+      if (Memory.unloaded || !ownsRuntime() || memoryBridgeIpcRegistered) return;
+      try { await RisuCompat.refreshInfo(); } catch (_) {}
+      let ready = false;
+      try { ready = await registerMemoryBridgeIpc(); } catch (_) { ready = false; }
+      if (ready) {
+        stopMemoryBridgeIpcRetry();
+        try { await persistHayakuRetraceCompatibilityBeacon(true); } catch (_) {}
+        return;
+      }
+      memoryBridgeIpcRetryAttempt = attempt + 1;
+      scheduleMemoryBridgeIpcRetry(attempt + 1);
+    }, Math.min(4000, 300 + attempt * 180));
+    try { memoryBridgeIpcRetryTimer?.unref?.(); } catch (_) {}
+    return true;
+  };
   const removeMemoryBridgeIpc = async () => {
+    stopMemoryBridgeIpcRetry();
     let registry = null;
     try { registry = globalThis[MEMORY_BRIDGE_IPC_RUNTIME_KEY] || null; } catch (_) {}
     const api = registry?.api || memoryBridgeIpcApi;
@@ -34575,9 +34809,13 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
             if (!scope?.confident || !scope?.key) {
               result = { available: false, reason: scope?.reason || 'scope_unavailable' };
             } else {
-              const bridgeSync = await syncBridgeAnalysisCapsules();
               const includeRecords = request.payload?.includeRecords !== false;
-              const ledger = await loadStorageLedger(scope, { hydrateArchive: includeRecords });
+              const bridgeSync = includeRecords
+                ? await syncBridgeAnalysisCapsules()
+                : { ok: true, skipped: true, reason: 'summary_read_only' };
+              const ledger = includeRecords
+                ? await loadStorageLedger(scope, { hydrateArchive: true })
+                : await loadStorageLedgerSummary(scope);
               const logicalRecordCount = includeRecords
                 ? storageRecordsEligibleForHandoff(ledger, { includeSelectedUnbound: false }).length
                 : Math.max(0, Number(ledger.logicalRecordCount || 0) || 0);
@@ -34598,6 +34836,7 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
                 recordsIncluded: includeRecords,
                 archiveRef: normalizeHayakuArchiveRef(ledger.archiveRef),
                 archiveVerified: ledger.archiveVerified !== false,
+                archiveVerificationDeferred: ledger.archiveVerificationDeferred === true,
                 slotHeads: includeRecords ? ensureArray(ledger.slotHeads) : [],
                 tombstones: includeRecords ? ensureArray(ledger.tombstones) : [],
                 packetAuthoring: buildHayakuPacketAuthoringProfile(Memory.settings),
@@ -34668,6 +34907,7 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
       memoryBridgeIpcHandler = handler;
       memoryBridgeIpcRegistration = registry.registration;
       memoryBridgeIpcRegistered = true;
+      stopMemoryBridgeIpcRetry();
       return true;
     }
     registry = {
@@ -34719,6 +34959,7 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
     memoryBridgeIpcHandler = handler;
     memoryBridgeIpcRegistration = registry.registration;
     memoryBridgeIpcRegistered = true;
+    stopMemoryBridgeIpcRetry();
     return true;
   };
   const expectedCapturePacketTypes = pending => (
@@ -37545,7 +37786,9 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
     if (!scope?.confident || !scope?.key || scope.chatMessagesAvailable !== true) {
       return { ok: false, repaired: 0, reason: scope?.reason || 'authoritative_chat_unavailable' };
     }
-    const ledger = await loadStorageLedger(scope);
+    // Startup identity repair only touches current local unbound records. The
+    // immutable predecessor archive is irrelevant and must not be hydrated.
+    const ledger = await loadStorageLedger(scope, { hydrateArchive: false });
     if (ledger.enabled !== true) {
       return { ok: false, repaired: 0, reason: ledger.reason || 'storage_unavailable' };
     }
@@ -39516,11 +39759,15 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
           }, {});
         },
         inspect: async (options = {}) => {
-          const bridgeSync = await syncBridgeAnalysisCapsules();
           const scope = await RisuCompat.currentChatScope();
           if (!scope?.confident) return { available: false, reason: scope?.reason || 'scope_unavailable' };
           const includeRecords = options?.includeRecords !== false;
-          const ledger = await loadStorageLedger(scope, { hydrateArchive: includeRecords });
+          const bridgeSync = includeRecords
+            ? await syncBridgeAnalysisCapsules()
+            : { ok: true, skipped: true, reason: 'summary_read_only' };
+          const ledger = includeRecords
+            ? await loadStorageLedger(scope, { hydrateArchive: true })
+            : await loadStorageLedgerSummary(scope);
           const logicalRecordCount = includeRecords
             ? storageRecordsEligibleForHandoff(ledger, { includeSelectedUnbound: false }).length
             : Math.max(0, Number(ledger.logicalRecordCount || 0) || 0);
@@ -39541,6 +39788,7 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
             recordsIncluded: includeRecords,
             archiveRef: normalizeHayakuArchiveRef(ledger.archiveRef),
             archiveVerified: ledger.archiveVerified !== false,
+            archiveVerificationDeferred: ledger.archiveVerificationDeferred === true,
             slotHeads: includeRecords ? ensureArray(ledger.slotHeads) : [],
             tombstones: includeRecords ? ensureArray(ledger.tombstones) : [],
             packetAuthoring: buildHayakuPacketAuthoringProfile(Memory.settings),
@@ -39999,6 +40247,7 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
       } catch (_) {
         earlyBridgeIpc = false;
       }
+      if (!earlyBridgeIpc) scheduleMemoryBridgeIpcRetry();
       await RisuCompat.refreshInfo();
       await loadSettings(true);
       const legacyStorage = await RisuCompat.purgeLegacyHayakuStorage();
@@ -40008,6 +40257,7 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
       exposeApi();
       try {
         const bridgeIpc = earlyBridgeIpc === true ? true : await registerMemoryBridgeIpc();
+        if (!bridgeIpc) scheduleMemoryBridgeIpcRetry();
         const beacon = await persistHayakuRetraceCompatibilityBeacon(bridgeIpc === true);
         debugLog('install:bridge_ipc', {
           registered: bridgeIpc === true,
