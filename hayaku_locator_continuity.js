@@ -1,6 +1,6 @@
 //@name hayaku_locator_continuity
-//@display-name HAYAKU · Locator Continuity v3.0.127
-//@version 3.0.127
+//@display-name HAYAKU · Locator Continuity v3.0.129
+//@version 3.0.129
 /* Target-only handoff storage preparation v1. Authenticated owner handlers only. */
 async function prepareMemorySuiteHandoffTargetStorage(api, storage, owner, payload) {
   const readTarget = async () => {
@@ -788,7 +788,7 @@ const MemorySuiteExecutionContract = (() => {
   };
 
   const PLUGIN_NAME = 'HAYAKU';
-  const PLUGIN_VERSION = '3.0.127';
+  const PLUGIN_VERSION = '3.0.129';
   const HAYAKU_SPARSE_RRF_COMPUTE_OPERATION = 'hayaku.sparse-rrf-fusion.v1';
   const HAYAKU_SPARSE_RRF_COMPUTE_FINGERPRINT = '7f32e8b10fdd34e8356af70e40ad90d3c48e6fda132080046a807db0ea3ec58f';
   const HAYAKU_SPARSE_RRF_INPUT_SCHEMA = 'hayaku.sparse-rrf-fusion.input.v1';
@@ -998,6 +998,15 @@ const MemorySuiteExecutionContract = (() => {
   const CACHE_STATIC_PROFILE_FULL = 'p4-full';
   const CACHE_STATIC_PROFILE_COMPACT = 'p4-compact';
   const CACHE_STATIC_PROFILE_CRITICAL = 'p4-critical';
+  // Single source of supported static-cache profiles. The envelope writer
+  // (packetCacheStaticContract) and the envelope validator
+  // (attestPromptCacheStaticContract) MUST both derive from this list so a
+  // profile rename can never leave the validator accepting a stale generation.
+  const CACHE_STATIC_PROFILES = Object.freeze([
+    CACHE_STATIC_PROFILE_FULL,
+    CACHE_STATIC_PROFILE_COMPACT,
+    CACHE_STATIC_PROFILE_CRITICAL
+  ]);
   const PACKET_START = 'HAYAKU_STATE_PACKET_START';
   const PACKET_END = 'HAYAKU_STATE_PACKET_END';
   const RUNTIME_PACKET_SHAPE_START = '[HAYAKU RUNTIME PACKET SHAPE]';
@@ -1252,6 +1261,22 @@ const MemorySuiteExecutionContract = (() => {
     if (/^(?:zh|zh-cn|zh-tw|chinese|中文|중국어)$/.test(raw)) return 'zh';
     if (/^(?:source|original|auto|원문)$/.test(raw)) return 'source';
     return 'source';
+  };
+  // Built lazily from CACHE_STATIC_PROFILES + HAYAKU_MEMORY_LANGUAGES so the
+  // validator's accepted set is generated from the same definitions the writer
+  // uses. Tokens are escaped rather than trusted: an unsafe token must fail to
+  // match, never widen the pattern.
+  let cacheStaticStartMarkerRe = null;
+  const cacheStaticStartMarkerPattern = () => {
+    if (!cacheStaticStartMarkerRe) {
+      const profiles = CACHE_STATIC_PROFILES.map(escapeRegExp).join('|');
+      const languages = HAYAKU_MEMORY_LANGUAGES.map(escapeRegExp).join('|');
+      const version = escapeRegExp(CACHE_STATIC_ENVELOPE_VERSION);
+      cacheStaticStartMarkerRe = new RegExp(
+        `^\\[HAYAKU_CACHE_STATIC_START ${version} profile=(${profiles}) schema=(\\d+) lang=(${languages}) contract=(h64[a-z0-9]+)\\]$`
+      );
+    }
+    return cacheStaticStartMarkerRe;
   };
   const DEFAULT_SETTINGS = Object.freeze({
     enabled: true,
@@ -2779,7 +2804,7 @@ function createMemorySuiteHostLineage() {
 /* END LIBRARIAN HOST LINEAGE SDK */
 const MemorySuiteHostLineage = createMemorySuiteHostLineage();
 
-/* LIBRARIAN SYSTEM STORAGE SDK v1.8.19
+/* LIBRARIAN SYSTEM STORAGE SDK v1.8.21
  * Scope-routed durable storage client shared by Flashback, HAYAKU, LIBRA, LIA and RE:TRACE.
  * The server stores opaque values. Each plugin keeps ownership of its own data schema.
  */
@@ -2940,6 +2965,60 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
     try { if (typeof TextEncoder === 'function') return new TextEncoder().encode(String(serialized)).byteLength; } catch (_) {}
     return String(serialized).length * 2;
   };
+
+
+  const createScopedSyncMetrics = () => ({
+    localReadCount: 0, localReadBytes: 0, localWriteCount: 0, localWriteBytes: 0,
+    localRemoveCount: 0, remoteReadCount: 0, remoteReadBytes: 0,
+    remoteListCount: 0, remoteListBytes: 0, remoteWriteCount: 0, remoteWriteBytes: 0,
+    byOperation: {}
+  });
+  const cloneScopedSyncMetrics = metrics => {
+    const value = metrics && typeof metrics === 'object' ? metrics : createScopedSyncMetrics();
+    try { return JSON.parse(JSON.stringify(value)); } catch (_) { return createScopedSyncMetrics(); }
+  };
+  const recordScopedSyncMetric = (metrics, operation, values = {}) => {
+    if (!metrics || typeof metrics !== 'object') return;
+    const op = String(operation || 'unknown');
+    const row = metrics.byOperation[op] || { count: 0, localBytes: 0, remoteBytes: 0 };
+    row.count += Math.max(1, Number(values.count || 1) || 1);
+    row.localBytes += Math.max(0, Number(values.localBytes || 0) || 0);
+    row.remoteBytes += Math.max(0, Number(values.remoteBytes || 0) || 0);
+    metrics.byOperation[op] = row;
+    for (const field of ['localReadCount','localReadBytes','localWriteCount','localWriteBytes','localRemoveCount','remoteReadCount','remoteReadBytes','remoteListCount','remoteListBytes','remoteWriteCount','remoteWriteBytes']) {
+      if (Object.prototype.hasOwnProperty.call(values, field)) metrics[field] += Math.max(0, Number(values[field] || 0) || 0);
+    }
+  };
+  const mergeScopedSyncMetrics = (target, source) => {
+    if (!target || !source || typeof source !== 'object') return target;
+    for (const field of ['localReadCount','localReadBytes','localWriteCount','localWriteBytes','localRemoveCount','remoteReadCount','remoteReadBytes','remoteListCount','remoteListBytes','remoteWriteCount','remoteWriteBytes']) {
+      target[field] = Math.max(0, Number(target[field] || 0) || 0) + Math.max(0, Number(source[field] || 0) || 0);
+    }
+    for (const [operation, row] of Object.entries(source.byOperation || {})) {
+      const current = target.byOperation[operation] || { count: 0, localBytes: 0, remoteBytes: 0 };
+      current.count += Math.max(0, Number(row?.count || 0) || 0);
+      current.localBytes += Math.max(0, Number(row?.localBytes || 0) || 0);
+      current.remoteBytes += Math.max(0, Number(row?.remoteBytes || 0) || 0);
+      target.byOperation[operation] = current;
+    }
+    return target;
+  };
+  const scopedSyncRemoteValueBytes = remote => remote?.exists === true
+    ? Math.max(0, Number(remote?.valueBytes || 0) || storageValueBytes(remote?.value)) : 0;
+  const scopedSyncFailure = ({ key = '', stage = 'unknown', operation = 'unknown', error, localBytes = 0, remoteBytes = 0 } = {}) => {
+    const message = compact(error?.message || error || 'memory_suite_scope_sync_failed', 700);
+    const errorCode = String(error?.code || 'MEMORY_SUITE_SCOPE_SYNC_FAILED');
+    const retryable = typeof error?.retryable === 'boolean' ? error.retryable : retryableSyncError(error);
+    return {
+      key: String(key || ''), stage: String(stage || 'unknown'), errorCode, message,
+      operation: String(operation || 'unknown'),
+      localBytes: Math.max(0, Number(localBytes || 0) || 0),
+      remoteBytes: Math.max(0, Number(remoteBytes || 0) || 0), retryable,
+      error: message
+    };
+  };
+
+  // MEMORY_SUITE_SCOPE_SYNC_DIAGNOSTICS_V1
 
   // Batch-read values may legally use keys such as "__proto__".  Assigning
   // those keys with Object.assign or bracket notation can invoke inherited
@@ -4492,6 +4571,7 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
 
   const createBackgroundJob = async (kind, target = {}) => {
     const currentConfig = await readConfig(true);
+    const requestedMode = target.requestedMode ? normalizeMode(target.requestedMode) : (target.mode ? normalizeMode(target.mode) : currentConfig.mode);
     const existing = state.syncJob.current;
     if (existing && !syncJobTerminal(existing.status)) {
       const sameTarget = existing.kind === kind
@@ -4517,7 +4597,8 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
       phase: 'queued',
       sourceMode: currentConfig.mode,
       sourceUrl: currentConfig.url,
-      targetMode: target.mode ? normalizeMode(target.mode) : currentConfig.mode,
+      requestedMode, effectiveMode: currentConfig.mode,
+      targetMode: requestedMode,
       targetUrl: target.url ? normalizeServerUrl(target.url) : currentConfig.url,
       totalItems: 0,
       processedItems: 0,
@@ -4552,6 +4633,8 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
 
   const completeBackgroundJob = async (result = null) => {
     updateSyncJob({
+      requestedMode: result?.requestedMode || state.syncJob.current?.requestedMode || state.syncJob.current?.targetMode || '',
+      effectiveMode: result?.effectiveMode || state.syncJob.current?.sourceMode || '',
       status: 'completed', phase: 'completed', currentAction: '완료', currentKey: '',
       message: '작업이 안전하게 완료되었습니다.', result: result ? cloneSyncJob(result) : null,
       error: '', nextRetryAt: 0, finishedAt: Date.now()
@@ -4561,6 +4644,8 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
 
   const failBackgroundJob = async error => {
     updateSyncJob({
+      requestedMode: error?.requestedMode || state.syncJob.current?.requestedMode || state.syncJob.current?.targetMode || '',
+      effectiveMode: error?.effectiveMode || state.syncJob.current?.sourceMode || '',
       status: 'failed', phase: 'failed', currentAction: '작업 중단', currentKey: '',
       message: '작업을 완료하지 못했습니다.', error: compact(error?.message || error, 700),
       nextRetryAt: 0, finishedAt: Date.now()
@@ -4578,7 +4663,7 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
       try {
         let result;
         if (job.kind === 'connection_config') {
-          result = await configureConnection({ mode: job.targetMode, url: job.targetUrl }, { onProgress: applySyncProgressToJob });
+          result = await configureConnection({ mode: job.requestedMode || job.targetMode, url: job.targetUrl }, { onProgress: applySyncProgressToJob });
         } else if (job.kind === 'manual_sync') {
           result = await synchronizeAllLegacy({ allowOverwrite: true, restoreMissingLocal: true, onProgress: applySyncProgressToJob });
           if (!result.ok) throw new Error(`sync_failures:${result.failures.length}`);
@@ -6191,10 +6276,40 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
       Object.assign(progress, patch || {}, { phase: String(phase || progress.phase), lastActivityAt: Date.now() });
       try { onProgress?.({ ...progress }); } catch (_) {}
     };
+    const metrics = createScopedSyncMetrics();
+    const readLocal = async (key, operation = 'local_read') => {
+      const value = await legacyRead(legacy, key);
+      const bytes = isNullishStorageValue(value) ? 0 : storageValueBytes(value);
+      recordScopedSyncMetric(metrics, operation, { localReadCount: 1, localReadBytes: bytes, localBytes: bytes });
+      return value;
+    };
+    const writeLocal = async (key, value, operation = 'local_write') => {
+      const bytes = isNullishStorageValue(value) ? 0 : storageValueBytes(value);
+      recordScopedSyncMetric(metrics, operation, { localWriteCount: 1, localWriteBytes: bytes, localBytes: bytes });
+      return await legacyWriteVerified(legacy, key, value);
+    };
+    const removeLocal = async (key, operation = 'local_remove') => {
+      recordScopedSyncMetric(metrics, operation, { localRemoveCount: 1 });
+      return await legacyRemoveVerified(legacy, key);
+    };
+    const readRemote = async (remoteKey, operation = 'remote_read') => {
+      const remote = await remoteGet(space, remoteKey, { allowPluginOnly: true });
+      const bytes = scopedSyncRemoteValueBytes(remote);
+      recordScopedSyncMetric(metrics, operation, { remoteReadCount: 1, remoteReadBytes: bytes, remoteBytes: bytes });
+      return remote;
+    };
+    const writeRemote = async (...args) => {
+      const value = args[3];
+      const bytes = args[0] === 'set' ? storageValueBytes(value) : 0;
+      recordScopedSyncMetric(metrics, 'remote_write', { remoteWriteCount: 1, remoteWriteBytes: bytes, remoteBytes: bytes });
+      return await remoteMutate(...args);
+    };
     const integrityBefore = await remoteIntegrity({ allowPluginOnly: true });
+    recordScopedSyncMetric(metrics, 'integrity_before', { remoteReadCount: 1, remoteReadBytes: storageValueBytes(integrityBefore), remoteBytes: storageValueBytes(integrityBefore) });
     report('inventory', { message: `${scope.label || scope.scopeId} 데이터 목록을 조사하고 있습니다.` });
     const localRows = await collectScopedLegacyRows(legacy, space, scope);
     const listing = await remoteKeys(space, '', { allowPluginOnly: true });
+    recordScopedSyncMetric(metrics, 'remote_keys', { remoteReadCount: 1, remoteReadBytes: storageValueBytes(listing), remoteListCount: 1, remoteListBytes: storageValueBytes(listing), remoteBytes: storageValueBytes(listing) });
     const remoteRecords = new Map((Array.isArray(listing.records) ? listing.records : []).map(row => [String(row?.key || ''), row]));
     const remoteKeysForScope = new Set();
     for (const remoteKey of Array.isArray(listing.keys) ? listing.keys : []) {
@@ -6215,19 +6330,25 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
       schema: 'memory-suite.scope-sync.v1', namespace, space, scope, startedAt: progress.startedAt,
       totalItems: progress.totalItems, processedItems: 0, processedBytes: 0, transferredBytes: 0,
       uploaded: 0, restored: 0, matched: 0, removedByTombstone: 0,
-      plannedUploaded: 0, plannedRestored: 0, dryRun, conflicts: [], failures: [],
+      plannedUploaded: 0, plannedRestored: 0, dryRun, conflicts: [], failures: [], failureDetails: [],
+      metrics, requestedMode: syncOptions.requestedMode || '', effectiveMode: syncOptions.effectiveMode || '',
       integrityBefore, integrityAfter: null
     };
     for (const row of localRows) {
-      let bytes = 0, action = '비교';
+      let bytes = 0, localBytes = 0, remoteBytes = 0, stage = 'local_read', operation = 'local_compare', action = '비교';
       try {
         report('sync_local', { currentKey: row.key, currentAction: 'pluginStorage → 서버 비교' });
-        const local = await legacyRead(legacy, row.key);
+        stage = 'local_read'; operation = 'local_compare';
+        const local = await readLocal(row.key, operation);
+        localBytes = isNullishStorageValue(local) ? 0 : storageValueBytes(local);
         const projected = isNullishStorageValue(local) ? null : await routeProjectValue(row.route, local);
         bytes = isNullishStorageValue(projected) ? 0 : storageValueBytes(projected);
+        localBytes = bytes;
         if (isNullishStorageValue(projected)) action = '빈 값 건너뜀';
         else {
-          const remote = await remoteGet(space, row.route.remoteKey, { allowPluginOnly: true });
+          stage = 'remote_read'; operation = 'remote_compare';
+          const remote = await readRemote(row.route.remoteKey, operation);
+          remoteBytes = scopedSyncRemoteValueBytes(remote);
           if (remote.exists === true && jsonComparable(remote.value) === jsonComparable(projected)) { result.matched += 1; action = '일치 확인'; }
           else if (flashbackWriterAlias(row.route.remoteKey) && remote.exists === true) {
             result.conflicts.push({ key:row.key, remoteKey:row.route.remoteKey, reason:'flashback_server_canonical_mismatch', localPreserved:true, serverPreserved:true });
@@ -6237,9 +6358,9 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
             if (!dryRun && syncOptions.allowOverwrite !== false && syncOptions.restoreMissingLocal === true) {
               const removed = await routeRemoveLocal(
                 row.route,
-                async()=>legacyRead(legacy,row.key),
-                async next=>legacyWriteVerified(legacy,row.key,next),
-                async()=>legacyRemoveVerified(legacy,row.key)
+                async()=>readLocal(row.key,'tombstone_local_read'),
+                async next=>writeLocal(row.key,next,'tombstone_local_write'),
+                async()=>removeLocal(row.key,'tombstone_local_remove')
               );
               if (!removed) throw new Error('pluginstorage_tombstone_apply_failed');
               result.removedByTombstone += 1;
@@ -6256,43 +6377,53 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
             result.plannedUploaded += 1;
             action = remote.exists === true ? '서버 덮어쓰기 예정' : '서버 업로드 예정';
           } else {
-            await remoteMutate('set', space, row.route.remoteKey, projected, { allowPluginOnly: true,
+            stage = 'remote_write'; operation = 'remote_write';
+            await writeRemote('set', space, row.route.remoteKey, projected, { allowPluginOnly: true,
               ...(flashbackWriterAlias(row.route.remoteKey) ? { expectedRevision:remote.revision || 0 } : {}) });
             result.uploaded += 1; result.transferredBytes += bytes; action = '서버 저장·검증 완료';
           }
         }
-      } catch (error) { result.failures.push({ key: row.key, error: compact(error?.message || error, 240) }); action = '실패'; }
+      } catch (error) { const detail = scopedSyncFailure({ key: row.key, stage, operation, error, localBytes, remoteBytes }); result.failures.push(detail); result.failureDetails.push(detail); action = '실패'; }
       finally {
         result.processedItems += 1; result.processedBytes += bytes;
-        Object.assign(progress, { processedItems: result.processedItems, processedBytes: result.processedBytes, transferredBytes: result.transferredBytes, uploaded: result.uploaded, restored: result.restored, matched: result.matched, removedByTombstone: result.removedByTombstone, failureCount: result.failures.length, conflictCount: result.conflicts.length });
+        Object.assign(progress, { processedItems: result.processedItems, processedBytes: result.processedBytes, transferredBytes: result.transferredBytes, uploaded: result.uploaded, restored: result.restored, matched: result.matched, removedByTombstone: result.removedByTombstone, failureCount: result.failures.length, conflictCount: result.conflicts.length, metrics: cloneScopedSyncMetrics(metrics) });
         report('sync_local', { currentKey: row.key, currentAction: action });
       }
     }
     for (const remoteKey of missingRemoteRows) {
-      let bytes = Math.max(0, Number(remoteRecords.get(remoteKey)?.valueBytes || 0) || 0), action = '서버 → pluginStorage 복구';
+      let bytes = Math.max(0, Number(remoteRecords.get(remoteKey)?.valueBytes || 0) || 0), localBytes = 0, remoteBytes = bytes, stage = 'remote_read', operation = 'restore_remote_read', action = '서버 → pluginStorage 복구';
       try {
         const decoded = scopedRemoteKeyInfo(remoteKey);
         const route = await resolveScopedRoute(space, decoded.logicalKey, { scope, noCache: true });
-        const remote = await remoteGet(space, remoteKey, { allowPluginOnly: true });
+        stage = 'remote_read'; operation = 'restore_remote_read';
+        const remote = await readRemote(remoteKey, operation);
+        remoteBytes = scopedSyncRemoteValueBytes(remote) || bytes;
         if (remote.exists === true) {
-          const current = await legacyRead(legacy, decoded.logicalKey);
+          stage = 'local_read'; operation = 'restore_local_read';
+          const current = await readLocal(decoded.logicalKey, operation);
+          localBytes = isNullishStorageValue(current) ? 0 : storageValueBytes(current);
           const merged = await routeMergeValue(route, remote.value, current);
           if (dryRun) {
             result.plannedRestored += 1; action = '복구 가능 확인';
           } else {
-            if (!await legacyWriteVerified(legacy, decoded.logicalKey, merged)) throw new Error('pluginstorage_restore_failed');
+            stage = 'local_write'; operation = 'restore_local_write';
+            if (!await writeLocal(decoded.logicalKey, merged, operation)) throw new Error('pluginstorage_restore_failed');
             result.restored += 1; result.transferredBytes += bytes; action = '복구·readback 완료';
           }
         }
-      } catch (error) { result.failures.push({ key: remoteKey, error: compact(error?.message || error, 240) }); action = '복구 실패'; }
+      } catch (error) { const detail = scopedSyncFailure({ key: remoteKey, stage, operation, error, localBytes, remoteBytes }); result.failures.push(detail); result.failureDetails.push(detail); action = '복구 실패'; }
       finally {
         result.processedItems += 1; result.processedBytes += bytes;
-        Object.assign(progress, { processedItems: result.processedItems, processedBytes: result.processedBytes, transferredBytes: result.transferredBytes, uploaded: result.uploaded, restored: result.restored, matched: result.matched, removedByTombstone: result.removedByTombstone, failureCount: result.failures.length, conflictCount: result.conflicts.length });
+        Object.assign(progress, { processedItems: result.processedItems, processedBytes: result.processedBytes, transferredBytes: result.transferredBytes, uploaded: result.uploaded, restored: result.restored, matched: result.matched, removedByTombstone: result.removedByTombstone, failureCount: result.failures.length, conflictCount: result.conflicts.length, metrics: cloneScopedSyncMetrics(metrics) });
         report('sync_remote', { currentKey: remoteKey, currentAction: action });
       }
     }
     report('integrity_after', { currentKey: '', currentAction: dryRun ? '사전검사 완료' : '최종 무결성 확인', message: dryRun ? '쓰기 없는 모드 전환 사전검사를 완료했습니다.' : '현재 스코프 동기화 후 서버 DATA 무결성을 확인하고 있습니다.' });
     result.integrityAfter = dryRun ? integrityBefore : await remoteIntegrity({ allowPluginOnly: true });
+    if (!dryRun) recordScopedSyncMetric(metrics, 'integrity_after', { remoteReadCount: 1, remoteReadBytes: storageValueBytes(result.integrityAfter), remoteBytes: storageValueBytes(result.integrityAfter) });
+    result.metrics = cloneScopedSyncMetrics(metrics);
+    result.failureDetails = result.failures.slice();
+    result.diagnostics = { schema: 'memory-suite.scope-sync-diagnostics.v1', metrics: result.metrics, failures: result.failureDetails.slice() };
     result.ok = result.failures.length === 0 && result.conflicts.length === 0;
     report(result.ok ? 'scope_complete' : 'scope_incomplete', { currentKey: '', currentAction: result.ok ? '스코프 동기화 완료' : '확인 필요', message: result.ok ? `${scope.label || scope.scopeId} 동기화를 완료했습니다.` : `실패 ${result.failures.length} · 충돌 ${result.conflicts.length}` });
     if (!result.ok) {
@@ -6305,17 +6436,51 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
   const scopedSynchronizeAll = async (syncOptions = {}) => {
     const scope = normalizeScopeDescriptor(syncOptions.scope || await resolveCurrentScope(true));
     if (syncOptions.allowRecoveryRequired !== true) await assertRecoveryActionAllowed(scope, 'synchronize');
-    const result = { schema: 'memory-suite.scope-sync-all.v1', namespace, scope, plugin: null, local: null, uploaded: 0, restored: 0, matched: 0, removedByTombstone:0, plannedUploaded:0, plannedRestored:0, failures: [], totalItems: 0, processedItems: 0, processedBytes: 0, transferredBytes: 0 };
+    const modeState = await readScopeMode(scope, true);
+    const requestedMode = normalizeMode(syncOptions.requestedMode || syncOptions.mode || modeState.mode);
+    const result = {
+      schema: 'memory-suite.scope-sync-all.v1', namespace, scope, plugin: null, local: null,
+      requestedMode, effectiveMode: modeState.mode,
+      uploaded: 0, restored: 0, matched: 0, removedByTombstone: 0,
+      plannedUploaded: 0, plannedRestored: 0, failures: [], failureDetails: [], conflicts: [],
+      totalItems: 0, processedItems: 0, processedBytes: 0, transferredBytes: 0,
+      metrics: createScopedSyncMetrics()
+    };
     const forward = progress => { try { syncOptions.onProgress?.(progress); } catch (_) {} };
-    if (state.legacy.plugin) {
-      result.plugin = await scopedSynchronizeSpace(state.legacy.plugin, 'plugin', { ...syncOptions, scope, onProgress: forward });
-      for (const field of ['uploaded','restored','matched','removedByTombstone','plannedUploaded','plannedRestored','totalItems','processedItems','processedBytes','transferredBytes']) result[field] += Number(result.plugin?.[field] || 0);
+    const addPart = (space, part) => {
+      result[space] = part;
+      for (const field of ['uploaded','restored','matched','removedByTombstone','plannedUploaded','plannedRestored','totalItems','processedItems','processedBytes','transferredBytes']) result[field] += Number(part?.[field] || 0);
+      mergeScopedSyncMetrics(result.metrics, part?.metrics);
+      for (const failure of Array.isArray(part?.failures) ? part.failures : []) {
+        const detail = { ...failure, space: String(space) };
+        result.failures.push(detail); result.failureDetails.push(detail);
+      }
+      for (const conflict of Array.isArray(part?.conflicts) ? part.conflicts : []) result.conflicts.push({ ...conflict, space: String(space) });
+    };
+    const runPart = async (legacy, space) => {
+      if (!legacy || (space === 'local' && typeof legacy.keys !== 'function')) return;
+      try {
+        const part = await scopedSynchronizeSpace(legacy, space, { ...syncOptions, scope, requestedMode, effectiveMode: modeState.mode, onProgress: forward });
+        addPart(space, part);
+      } catch (error) {
+        const part = error?.result && typeof error.result === 'object' ? error.result : null;
+        if (part) addPart(space, part);
+        else {
+          const detail = scopedSyncFailure({ key: '', stage: 'scope', operation: space + '_scope_sync', error });
+          result.failures.push({ ...detail, space }); result.failureDetails.push({ ...detail, space });
+        }
+      }
+    };
+    await runPart(state.legacy.plugin, 'plugin');
+    await runPart(state.legacy.local, 'local');
+    result.metrics = cloneScopedSyncMetrics(result.metrics);
+    result.diagnostics = { schema: 'memory-suite.scope-sync-diagnostics.v1', metrics: result.metrics, failures: result.failureDetails.slice(), conflicts: result.conflicts.slice() };
+    result.ok = result.failures.length === 0 && result.conflicts.length === 0;
+    if (!result.ok) {
+      const error = new Error('memory_suite_scope_sync_incomplete:' + scope.scopeId + ':failures=' + result.failures.length + ',conflicts=' + result.conflicts.length);
+      error.code = 'MEMORY_SUITE_SCOPE_SYNC_INCOMPLETE'; error.result = result;
+      throw error;
     }
-    if (state.legacy.local && typeof state.legacy.local?.keys === 'function') {
-      result.local = await scopedSynchronizeSpace(state.legacy.local, 'local', { ...syncOptions, scope, onProgress: forward });
-      for (const field of ['uploaded','restored','matched','removedByTombstone','plannedUploaded','plannedRestored','totalItems','processedItems','processedBytes','transferredBytes']) result[field] += Number(result.local?.[field] || 0);
-    }
-    result.ok = true;
     return result;
   };
 
@@ -6721,28 +6886,30 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
     const recoveryLock = await recoveryLockForScope(scope);
     if (recoveryLock && target !== MODE_SERVER_ONLY) throw recoveryRequiredError(scope, recoveryLock, `set_mode_${target}`);
     const current = await readScopeMode(scope, true);
-    if (target === current.mode) return { changed:false, from:current.mode, to:target, scope, modeLabel:modeLabel(target) };
+    if (target === current.mode) return { changed:false, requestedMode:target, effectiveMode:current.mode, from:current.mode, to:target, scope, modeLabel:modeLabel(target) };
     if (!state.legacy.plugin) throw new Error('memory_suite_pluginstorage_unavailable');
     const onProgress = typeof operationOptions.onProgress === 'function' ? operationOptions.onProgress : null;
     try {
       if (current.mode === MODE_PLUGIN_ONLY && target !== MODE_PLUGIN_ONLY) {
         // Discover every deterministic conflict before the first server or local write.
         // This prevents a late key conflict from leaving an earlier key partially seeded.
-        const preflight = await scopedSynchronizeAll({ scope, dryRun:true, allowOverwrite:false, restoreMissingLocal:false, onProgress });
-        const seeded = await scopedSynchronizeAll({ scope, allowOverwrite:false, restoreMissingLocal:false, onProgress });
+        const preflight = await scopedSynchronizeAll({ scope, requestedMode:target, effectiveMode:current.mode, dryRun:true, allowOverwrite:false, restoreMissingLocal:false, onProgress });
+        const seeded = await scopedSynchronizeAll({ scope, requestedMode:target, effectiveMode:current.mode, allowOverwrite:false, restoreMissingLocal:false, onProgress });
         const settled = seeded;
         if (!preflight.ok || !seeded.ok || !settled.ok) throw new Error('memory_suite_scope_mode_seed_failed');
         await remoteIntegrity({ allowPluginOnly:true });
       } else if (current.mode === MODE_MIRROR && target === MODE_SERVER_ONLY) {
-        await scopedSynchronizeAll({ scope, allowOverwrite:true, restoreMissingLocal:true, onProgress });
+        await scopedSynchronizeAll({ scope, requestedMode:target, effectiveMode:current.mode, allowOverwrite:true, restoreMissingLocal:true, onProgress });
         await remoteIntegrity({ allowPluginOnly:true });
       } else if (current.mode === MODE_SERVER_ONLY && target !== MODE_SERVER_ONLY) {
         await scopedRestoreAll({ scope, onProgress });
       }
       const saved = await persistScopedMode(target, scope, { source:'safe_scope_mode_transition' });
-      return { changed:true, from:current.mode, to:target, scope, modeLabel:modeLabel(target), config:saved };
+      return { changed:true, requestedMode:target, effectiveMode:target, from:current.mode, to:target, scope, modeLabel:modeLabel(target), config:saved };
     } catch (error) {
       state.scopeRouting.transientModes.delete(scope.scopeId);
+      error.requestedMode = target; error.effectiveMode = current.mode;
+      error.modeTransition = { requestedMode: target, effectiveMode: current.mode, from: current.mode, to: target, scope };
       throw error;
     }
   };
@@ -6787,10 +6954,13 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
         urlChanged = true;
       }
       const modeResult = await scopedSetModeSafely(targetMode, { ...operationOptions, scope });
-      const from = { mode:currentMode, modeLabel:modeLabel(currentMode), url:currentUrl, scope };
-      const to = { mode:targetMode, modeLabel:modeLabel(targetMode), url:targetUrl, scope };
-      return { ok:true, scope, url:targetUrl, mode:targetMode, modeLabel:modeLabel(targetMode), from, to, transition:modeResult, modeResult, connectionTest };
+      const effectiveMode = normalizeMode(modeResult?.effectiveMode || targetMode);
+      const from = { mode:currentMode, modeLabel:modeLabel(currentMode), requestedMode:currentMode, effectiveMode:currentMode, url:currentUrl, scope };
+      const to = { mode:effectiveMode, modeLabel:modeLabel(effectiveMode), requestedMode:targetMode, effectiveMode, url:targetUrl, scope };
+      return { ok:true, scope, url:targetUrl, mode:effectiveMode, modeLabel:modeLabel(effectiveMode), requestedMode:targetMode, effectiveMode, from, to, transition:modeResult, modeResult, connectionTest };
     } catch (error) {
+      error.requestedMode = targetMode; error.effectiveMode = currentMode;
+      error.modeTransition = { requestedMode: targetMode, effectiveMode: currentMode, from: currentMode, to: targetMode, scope };
       if (urlChanged) {
         try { await persistServerUrl(currentUrl); resetBootstrapCache(); }
         catch (rollbackError) { error.urlRollbackError = compact(rollbackError?.message || rollbackError, 300); }
@@ -6837,13 +7007,14 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
     if (!random) random = `${now.toString(36)}_${Math.random().toString(36).slice(2,10)}`;
     const jobId = `${namespace}_${kind}_${scope.scopeId}_${random}`.replace(/[^A-Za-z0-9._:-]/g, '_').slice(0, 240);
     const currentMode = (await readScopeMode(scope, true)).mode;
+    const requestedMode = target.requestedMode ? normalizeMode(target.requestedMode) : (target.mode ? normalizeMode(target.mode) : currentMode);
     const currentUrl = normalizeServerUrl(await getArgumentValue(urlArguments, defaultUrl));
     state.syncJob.current = {
       schema: SYNC_JOB_SCHEMA, namespace, pluginId, pluginVersion,
       jobId, id: jobId, kind: String(kind || 'manual_sync'),
       scopeId: scope.scopeId, scopeKey: scope.scopeKey, scopeLabel: scope.label,
-      sourceMode: currentMode, sourceUrl: currentUrl,
-      targetMode: target.mode ? normalizeMode(target.mode) : currentMode,
+      sourceMode: currentMode, sourceUrl: currentUrl, requestedMode, effectiveMode: currentMode,
+      targetMode: requestedMode,
       targetUrl: target.url ? normalizeServerUrl(target.url) : currentUrl,
       status: 'queued', phase: 'queued', message: '작업을 준비하고 있습니다.',
       startedAt: now, updatedAt: now, lastActivityAt: now, finishedAt: 0,
@@ -6875,7 +7046,7 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
       try {
         let result;
         if (job.kind === 'connection_config') {
-          result = await scopedConfigureConnection({ mode: job.targetMode, url: job.targetUrl }, { scope, onProgress: applySyncProgressToJob });
+          result = await scopedConfigureConnection({ mode: job.requestedMode || job.targetMode, url: job.targetUrl }, { scope, onProgress: applySyncProgressToJob });
         } else if (job.kind === 'manual_sync') {
           await assertRecoveryActionAllowed(scope, 'manual_sync');
           const mode = (await readScopeMode(scope, true)).mode;
@@ -6889,6 +7060,8 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
           throw new Error(`memory_suite_unknown_background_job:${job.kind}`);
         }
         updateSyncJob({
+          requestedMode: result?.requestedMode || state.syncJob.current?.requestedMode || state.syncJob.current?.targetMode || '',
+          effectiveMode: result?.effectiveMode || state.syncJob.current?.sourceMode || '',
           status: 'completed', phase: 'completed', currentAction: '완료', currentKey: '',
           message: '작업이 안전하게 완료되었습니다.', result: cloneSyncJob(result), error: '',
           nextRetryAt: 0, finishedAt: Date.now()
@@ -6911,6 +7084,8 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
           return null;
         }
         updateSyncJob({
+          requestedMode: error?.requestedMode || state.syncJob.current?.requestedMode || state.syncJob.current?.targetMode || '',
+          effectiveMode: error?.effectiveMode || state.syncJob.current?.sourceMode || '',
           status: 'failed', phase: 'failed', currentAction: '작업 중단', currentKey: '',
           message: '작업을 완료하지 못했습니다.', error: compact(error?.message || error, 700),
           result:compactRestoreEvidence(error?.result || null),
@@ -7129,21 +7304,24 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
       card.classList.add('show'); const total=Math.max(0,Number(job.totalItems||0)), done=Math.max(0,Number(job.processedItems||0)); const percent=total?Math.min(100,Math.round(done/total*100)):0;
       card.classList.toggle('terminal',terminal); card.classList.toggle('failed',job.status==='failed');
       q('[data-job-title]').textContent = `${job.message || (terminal?'작업 결과':'작업 진행 중')}${total ? ` · ${terminal&&job.status==='completed'?100:percent}%` : ''}`; q('[data-job-bar]').style.width=`${terminal&&job.status==='completed'?100:percent}%`;
-      q('[data-job-phase]').textContent=`현재 단계: ${job.phase || '준비'}`; q('[data-job-count]').textContent=`진행: ${done.toLocaleString()} / ${total ? total.toLocaleString() : '조사 중'}`;
+      q('[data-job-phase]').textContent=`현재 단계: ${job.phase || '준비'}`; q('[data-job-count]').textContent=`진행: ${done.toLocaleString()} / ${total || terminal ? total.toLocaleString() : '조사 중'}${job.status==='completed' && total===0 ? ' · 이동할 데이터 없음' : ''}`;
       q('[data-job-bytes]').textContent=`처리: ${formatBytes(job.processedBytes)} · 전송: ${formatBytes(job.transferredBytes)}`; q('[data-job-time]').textContent=`경과: ${Math.max(0,Math.floor((Date.now()-Number(job.startedAt||Date.now()))/1000))}초`;
       q('[data-job-retry]').textContent=`재시도 ${Number(job.retryCount||0)} · 실패 ${Number(job.failures||0)}`; q('[data-job-key]').textContent=`현재: ${job.currentKey || job.currentAction || '-'}`;
       const terminalActions=q('[data-job-terminal-actions]'); terminalActions.style.display=terminal?'flex':'none';
       const result=job.result&&typeof job.result==='object'?job.result:{};
       q('[data-job-result]').textContent=terminal
-        ? [job.status==='completed'?'완료 결과':'실패 결과',integratesCompute?`저장 방식 ${modeLabel(job.targetMode || initial.mode)} · 연산 ${normalizeMode(job.targetMode || initial.mode) === MODE_PLUGIN_ONLY ? '로컬' : '서버 우선 · 실패 시 로컬'}`:'',`복원 ${Number(job.restored||result.restored||0)} · 업로드 ${Number(job.uploaded||result.uploaded||0)} · 일치 ${Number(job.matched||result.matched||0)}`,`삭제 표식 ${Number(job.removedByTombstone||result.removed||0)} · 검증 ${Number(result.verified||0)}`,job.recoveryRequired?'복구 필수 잠금: 활성 · 서버 단독 유지':'복구 필수 잠금: 없음',job.error?`오류: ${job.error}`:''].filter(Boolean).join('\n')
+        ? [job.status==='completed'?'완료 결과':'실패 결과',`요청 모드: ${modeLabel(job.requestedMode || job.targetMode || initial.mode)}`,`현재 적용 모드: ${modeLabel(job.effectiveMode || result.effectiveMode || job.sourceMode || initial.mode)}`,job.status==='failed'?'전환 미완료 · 현재 적용 모드를 확인하세요.':'',integratesCompute?`연산: ${normalizeMode(job.effectiveMode || result.effectiveMode || job.sourceMode || initial.mode) === MODE_PLUGIN_ONLY ? '로컬' : '서버 우선 · 실패 시 로컬'}`:'',`복원 ${Number(job.restored||result.restored||0)} · 업로드 ${Number(job.uploaded||result.uploaded||0)} · 일치 ${Number(job.matched||result.matched||0)}`,`삭제 표식 ${Number(job.removedByTombstone||result.removed||0)} · 검증 ${Number(result.verified||0)}`,job.recoveryRequired?'복구 필수 잠금: 활성 · 서버 단독 유지':'복구 필수 잠금: 없음',job.error?`오류: ${job.error}`:''].filter(Boolean).join('\n')
         : '';
+      const diagnosticText = terminal ? JSON.stringify({ schema:'memory-suite.scope-sync-diagnostics.v1', requestedMode:job.requestedMode || job.targetMode || '', effectiveMode:job.effectiveMode || job.sourceMode || '', failures:result.failures || [], metrics:result.metrics || {}, result }, null, 2) : '';
+      const diagnosticBox = q('[data-job-diagnostics]'); if (diagnosticBox) { diagnosticBox.value = diagnosticText; diagnosticBox.style.display = terminal && diagnosticText ? 'block' : 'none'; }
+      const copyButton = q('[data-job-copy]'); if (copyButton && !copyButton.dataset.bound) { copyButton.dataset.bound = '1'; copyButton.onclick = async () => { try { const value = q('[data-job-diagnostics]')?.value || ''; if (navigator?.clipboard?.writeText) await navigator.clipboard.writeText(value); else { q('[data-job-diagnostics]')?.select?.(); document.execCommand?.('copy'); } setMessage('Detailed diagnostics copied','good'); } catch (error) { setMessage('Detailed diagnostics copy failed\n' + (error?.message || error),'error'); } }; }
       if(terminal&&job.status==='completed'&&normalizeMode(job.targetMode)!==MODE_PLUGIN_ONLY&&computeProbeJobId!==job.jobId){computeProbeJobId=job.jobId;try{computeBridge?.scheduleProbe?.(0);}catch(_){}}
       if(terminal&&job.jobId!==terminalRefreshId){terminalRefreshId=job.jobId;scheduleLifecycleTimeout(()=>{void scopedGetConnectionSettings({scope:initial.scope,force:true}).then(settings=>applyRecoveryGuard(settings.recoveryRequired)).catch(()=>{});},0);}
     };
     for(const [selector,choice] of [['[data-reset-empty]','empty'],['[data-reset-upload]','upload']]){
       q(selector).onclick=async()=>{try{await acceptServerReset(choice);setMessage('선택을 저장했습니다. 기존 실행의 재업로드를 막기 위해 RisuAI를 새로고침한 뒤 사용하세요.','good');}catch(error){setMessage(error.message,'error');}};
     }
-    q('[data-test]').onclick = async()=>{ setMessage(integratesCompute?'Storage와 Compute 연결을 확인하고 있습니다…':'서버 연결을 확인하고 있습니다…'); const storageResult=await testConnection(q('[data-url]').value); let computeResult=null; if(integratesCompute&&storageResult.ok&&computeBridge?.probe){try{computeResult=await computeBridge.probe({force:true,reason:'integrated_connection_test'});}catch(error){computeResult={ok:false,error:compact(error?.message||error,300)};}} const storageLine=storageResult.ok?`${integratesCompute?'Storage: ':''}연결됨 · Librarian System ${storageResult.serverVersion} · 항목 ${storageResult.liveRecords}`:`${integratesCompute?'Storage: ':''}연결 실패 · ${storageResult.error}`; const computeLine=!integratesCompute?'':!storageResult.ok?'Compute: Storage 연결 실패로 확인하지 않음':computeResult?.ok?`Compute: 연결됨 · ${Number(computeResult.operations?.length||computeResult.operationCount||0)}개 연산`:`Compute: 연결 실패 · 연산 시 로컬 폴백 · ${computeResult?.error||computeResult?.reason||'unavailable'}`; setMessage([storageLine,computeLine].filter(Boolean).join('\n'),storageResult.ok&&(!integratesCompute||computeResult?.ok)?'good':storageResult.ok?'':'error'); };
+    q('[data-test]').onclick = async()=>{ setMessage(integratesCompute?'Storage와 Compute 연결을 확인하고 있습니다…':'서버 연결을 확인하고 있습니다…'); const storageResult=await testConnection(q('[data-url]').value); let computeResult=null; if(integratesCompute&&storageResult.ok&&computeBridge?.probe){try{computeResult=await computeBridge.probe({force:true,deep:true,reason:'integrated_connection_test'});}catch(error){computeResult={ok:false,error:compact(error?.message||error,300)};}} const storageLine=storageResult.ok?`${integratesCompute?'Storage: ':''}연결됨 · Librarian System ${storageResult.serverVersion} · 항목 ${storageResult.liveRecords}`:`${integratesCompute?'Storage: ':''}연결 실패 · ${storageResult.error}`; const computeLine=!integratesCompute?'':!storageResult.ok?'Compute: Storage 연결 실패로 확인하지 않음':computeResult?.ok?`Compute: 연결됨 · ${Number(computeResult.operations?.length||computeResult.operationCount||0)}개 연산`:`Compute: 연결 실패 · 연산 시 로컬 폴백 · ${computeResult?.error||computeResult?.reason||'unavailable'}`; setMessage([storageLine,computeLine].filter(Boolean).join('\n'),storageResult.ok&&(!integratesCompute||computeResult?.ok)?'good':storageResult.ok?'':'error'); };
     q('[data-apply]').onclick = async()=>{ const mode=root.querySelector(`input[name="${rootId}-mode"]:checked`)?.value||MODE_PLUGIN_ONLY; try{const job=await scopedStartConnectionConfigurationJob({mode,url:q('[data-url]').value,scope:initial.scope}); setMessage('설정 적용과 현재 스코프 초기 동기화를 시작했습니다.'); renderJob(job);}catch(error){setMessage(`설정 적용 시작 실패\n${error?.message||error}`,'error');} };
     q('[data-sync]').onclick = async()=>{ try{const job=await scopedStartSynchronizationJob({scope:initial.scope});setMessage('현재 스코프 동기화를 시작했습니다.');renderJob(job);}catch(error){setMessage(`동기화 시작 실패\n${error?.userMessage||error?.message||error}`,'error');} };
     q('[data-restore]').onclick = async()=>{ try{const job=await scopedStartRestoreJob({scope:initial.scope});setMessage('현재 스코프 복구를 시작했습니다.');renderJob(job);}catch(error){setMessage(`복구 시작 실패\n${error?.userMessage||error?.message||error}`,'error');} };
@@ -7729,6 +7907,13 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
     getCachedDiagnostics,
     decorateDebugExport,
     decorateDebugExportSync,
+    managerPortable: async (action, body = {}) => {
+      const allowed=['capabilities','export-start','upload-start','upload-chunk','upload-finish','download-chunk','status','cancel','restore-plan','restore-execute'];
+      if(!allowed.includes(action))throw new Error('portable_action_not_supported');
+      const connection=await managerConnection();
+      if(connection.capabilities?.['portable-transfer.v1']!==true)throw new Error('portable_transfer_server_upgrade_required');
+      return (await managerRequest('POST','/v1/manager/portable/'+action,body)).result;
+    },
     managerControl: async (action, body = {}) => {
       const allowed=['status','backups','history','backup-create','backup-check','restore-plan','restore-execute'];
       if(!allowed.includes(action))throw new Error('control_action_not_supported');
@@ -7902,7 +8087,7 @@ const createMemorySuiteSearchClient = function createMemorySuiteSearchClient(opt
   return {execute,vectors,status:bridge.status,dispose:async()=>{disposed=true;corpora.clear();retainedBytes=0;await bridge.dispose();}};
 };
 // END MEMORY SUITE SEARCH
-/* LIBRARIAN SYSTEM COMPUTE SDK v0.3.5
+/* LIBRARIAN SYSTEM COMPUTE SDK v0.3.6
  * Optional deterministic-compute client shared by Librarian System owner plugins.
  *
  * The plugin remains authoritative: local execution is always available, the
@@ -8068,51 +8253,54 @@ const createMemorySuiteComputeBridge = (rawOptions = {}) => {
     return () => state.listeners.delete(listener);
   };
 
-  const capturedApis = [];
-  const captureApi = value => {
-    if (value && (typeof value === 'object' || typeof value === 'function') && !capturedApis.includes(value)) capturedApis.push(value);
+  const collectApis = () => {
+    const apis = [];
+    const captureApi = value => {
+      if (value && (typeof value === 'object' || typeof value === 'function') && !apis.includes(value)) apis.push(value);
+    };
+    captureApi(options.api);
+    try { if (typeof risuai !== 'undefined') captureApi(risuai); } catch (_) {}
+    try { if (typeof risuApi !== 'undefined') captureApi(risuApi); } catch (_) {}
+    try { if (typeof risuAPI !== 'undefined') captureApi(risuAPI); } catch (_) {}
+    try { if (typeof Risuai !== 'undefined') captureApi(Risuai); } catch (_) {}
+    try { if (typeof RisuAI !== 'undefined') captureApi(RisuAI); } catch (_) {}
+    try {
+      if (typeof globalThis !== 'undefined') {
+        captureApi(globalThis.risuai);
+        captureApi(globalThis.risuApi);
+        captureApi(globalThis.risuAPI);
+        captureApi(globalThis.Risuai);
+        captureApi(globalThis.RisuAI);
+        captureApi(globalThis.__pluginApis__);
+      }
+    } catch (_) {}
+    return apis;
   };
-  captureApi(options.api);
-  try { if (typeof risuai !== 'undefined') captureApi(risuai); } catch (_) {}
-  try { if (typeof risuApi !== 'undefined') captureApi(risuApi); } catch (_) {}
-  try { if (typeof risuAPI !== 'undefined') captureApi(risuAPI); } catch (_) {}
-  try { if (typeof Risuai !== 'undefined') captureApi(Risuai); } catch (_) {}
-  try { if (typeof RisuAI !== 'undefined') captureApi(RisuAI); } catch (_) {}
-  try {
-    if (typeof globalThis !== 'undefined') {
-      captureApi(globalThis.risuai);
-      captureApi(globalThis.risuApi);
-      captureApi(globalThis.risuAPI);
-      captureApi(globalThis.Risuai);
-      captureApi(globalThis.RisuAI);
-      captureApi(globalThis.__pluginApis__);
+  const capturedFetch = (...args) => {
+    if (typeof options.fetch === 'function') return options.fetch(...args);
+    for (const api of collectApis()) {
+      if (typeof api?.nativeFetch === 'function') return api.nativeFetch(...args);
+      if (typeof api?.risuFetch === 'function') return api.risuFetch(...args);
     }
-  } catch (_) {}
-  const capturedFetch = (() => {
-    if (typeof options.fetch === 'function') return options.fetch;
-    for (const api of capturedApis) {
-      if (typeof api?.nativeFetch === 'function') return api.nativeFetch.bind(api);
-      if (typeof api?.risuFetch === 'function') return api.risuFetch.bind(api);
-    }
-    try { if (typeof fetch === 'function') return fetch.bind(globalThis); } catch (_) {}
+    if (typeof fetch === 'function') return fetch(...args);
     return null;
-  })();
-  const capturedGetArgument = (() => {
-    if (typeof options.getArgument === 'function') return options.getArgument;
-    for (const api of capturedApis) {
-      if (typeof api?.getArgument === 'function') return api.getArgument.bind(api);
-      if (typeof api?.getArg === 'function') return api.getArg.bind(api);
+  };
+  const capturedGetArgument = (...args) => {
+    if (typeof options.getArgument === 'function') return options.getArgument(...args);
+    for (const api of collectApis()) {
+      if (typeof api?.getArgument === 'function') return api.getArgument(...args);
+      if (typeof api?.getArg === 'function') return api.getArg(...args);
     }
     return null;
-  })();
-  const capturedSetArgument = (() => {
-    if (typeof options.setArgument === 'function') return options.setArgument;
-    for (const api of capturedApis) {
-      if (typeof api?.setArgument === 'function') return api.setArgument.bind(api);
-      if (typeof api?.setArg === 'function') return api.setArg.bind(api);
+  };
+  const capturedSetArgument = (...args) => {
+    if (typeof options.setArgument === 'function') return options.setArgument(...args);
+    for (const api of collectApis()) {
+      if (typeof api?.setArgument === 'function') return api.setArgument(...args);
+      if (typeof api?.setArg === 'function') return api.setArg(...args);
     }
     return null;
-  })();
+  };
 
   const readMode = async (force = false) => {
     assertActive();
@@ -8121,7 +8309,7 @@ const createMemorySuiteComputeBridge = (rawOptions = {}) => {
     let raw = defaultMode;
     try {
       if (typeof options.modeProvider === 'function') raw = await options.modeProvider({ namespace, pluginId });
-      else if (capturedGetArgument) raw = await capturedGetArgument(modeArgument);
+      else raw = await capturedGetArgument(modeArgument);
     } catch (_) { raw = state.mode.value || defaultMode; }
     const value = normalizeMode(raw || defaultMode);
     state.mode = { value, at: now(), transient: state.mode.transient };
@@ -8135,7 +8323,7 @@ const createMemorySuiteComputeBridge = (rawOptions = {}) => {
       if (typeof options.modeSetter === 'function') {
         const accepted = await options.modeSetter(value, { namespace, pluginId });
         if (accepted === false) throw new Error('compute_mode_write_rejected');
-      } else if (capturedSetArgument) {
+      } else if (typeof options.setArgument === 'function' || collectApis().some(a => typeof a?.setArgument === 'function' || typeof a?.setArg === 'function')) {
         const accepted = await capturedSetArgument(modeArgument, value);
         if (accepted === false) throw new Error('compute_mode_write_rejected');
       } else {
@@ -8398,7 +8586,7 @@ const createMemorySuiteComputeBridge = (rawOptions = {}) => {
   const resolveServerUrl = async () => {
     let value = defaultUrl;
     if (typeof options.urlProvider === 'function') value = await options.urlProvider({ namespace, pluginId });
-    else if (capturedGetArgument && urlArgument) value = await capturedGetArgument(urlArgument);
+    else if (urlArgument) value = await capturedGetArgument(urlArgument);
     return normalizeServerUrl(value || defaultUrl);
   };
   const validateComputeBootstrap = (payload, requestedUrl) => {
@@ -8424,7 +8612,8 @@ const createMemorySuiteComputeBridge = (rawOptions = {}) => {
     }
     return {
       requestedUrl: normalizeServerUrl(requestedUrl),
-      url: normalizeServerUrl(payload.url),
+      url: normalizeServerUrl(requestedUrl || payload.url),
+      advertisedUrl: normalizeServerUrl(payload.url),
       token: String(payload.token),
       version: String(payload.version || ''),
       capabilities: { ...(payload.capabilities || {}) },
@@ -8525,6 +8714,13 @@ const createMemorySuiteComputeBridge = (rawOptions = {}) => {
     emitStatus('probing', String(probeOptions.reason || ''));
     try {
       const connection = await ensureComputeConnectionRaw(force, Math.max(250, Number(probeOptions.timeoutMs || probeTimeoutMs) || probeTimeoutMs), epoch);
+      if (probeOptions.deep === true) {
+        const checked = await fetchJson(connection.url + '/v1/compute/capabilities', {
+          method: 'GET', headers: { Authorization: 'Bearer ' + connection.token,
+            'X-Memory-Suite-Plugin': pluginId, 'X-Memory-Suite-Plugin-Version': pluginVersion }
+        }, 'Librarian System compute capabilities', Math.max(250, Number(probeOptions.timeoutMs || probeTimeoutMs)), epoch);
+        if (checked?.ok !== true) throw Object.assign(new Error('compute_capabilities_probe_failed'), { code: 'MEMORY_SUITE_COMPUTE_PROBE_FAILED' });
+      }
       circuitSuccess(ticket);
       emitStatus('ready');
       return {
@@ -11190,7 +11386,7 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
       return { ok: false, reason: 'static_marker_order_invalid', inventory };
     }
     const startMarker = carrier.value.slice(startAt, startEndAt + 1);
-    const match = /^\[HAYAKU_CACHE_STATIC_START v2 profile=(p3-(?:full|compact|critical)) schema=(\d+) lang=(ko|en|ja|zh|source) contract=(h64[a-z0-9]+)\]$/.exec(startMarker);
+    const match = cacheStaticStartMarkerPattern().exec(startMarker);
     if (!match) return { ok: false, reason: 'static_envelope_metadata_invalid', inventory };
     const [, profile, schemaRevision, memoryLanguage, contractCoreHash] = match;
     const expected = packetCacheStaticContract({ memoryLanguage }, profile);
@@ -19741,9 +19937,38 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
   const recoveryEvidenceSidecarBase = (scopeKey, recordId, userHash, assistantHash) => stableHash64([
     compact(scopeKey || '', 196), compact(recordId || '', 196), compact(userHash || '', 96), compact(assistantHash || '', 96)
   ].join('\u0001'));
-  const writeRecoveryEvidenceJsonExact = async (key, value, failureReason) => {
+  // Recovery evidence is immutable, content-bound source material. A timeout
+  // is uncertainty, never proof that a key is absent or that a write failed.
+  const RECOVERY_EVIDENCE_IO_GRACE_MS = 10000;
+  const recoveryEvidencePendingWrites = new Map();
+  const recoveryEvidenceWriteQueues = new Map();
+  const settleRecoveryEvidenceOutcome = async (outcome, kind) => {
+    if (outcome?.state !== 'indeterminate' || !outcome.operation) return outcome;
+    let lateValue;
+    const settled = await waitForStorageOperationSettlement(
+      Promise.resolve(outcome.operation).then(value => { lateValue = value; return value; }),
+      RECOVERY_EVIDENCE_IO_GRACE_MS
+    );
+    if (settled.state !== 'fulfilled') return { ...outcome, ...settled, reason: settled.state === 'rejected' ? `storage_${kind}_rejected_after_timeout` : outcome.reason };
+    return { ...outcome, state: 'fulfilled', value: lateValue, saved: kind === 'write', reason: `storage_${kind}_eventually_completed` };
+  };
+  const readRecoveryEvidenceOutcome = async key => settleRecoveryEvidenceOutcome(await RisuCompat.getStorageItemOutcome(key), 'read');
+  const writeRecoveryEvidenceJsonExact = (key, value, failureReason) => {
+    if (!recoveryEvidenceWriteQueues.has(key) && recoveryEvidenceWriteQueues.size >= 128) {
+      return Promise.resolve({ok:false,durable:false,created:false,key,storageState:'indeterminate',reason:`${failureReason}:io_capacity_pending`});
+    }
+    const previous = recoveryEvidenceWriteQueues.get(key) || Promise.resolve();
+    const run = previous.catch(() => null).then(() => writeRecoveryEvidenceJsonExactDirect(key, value, failureReason));
+    recoveryEvidenceWriteQueues.set(key, run);
+    const clean = () => { if (recoveryEvidenceWriteQueues.get(key) === run) recoveryEvidenceWriteQueues.delete(key); };
+    run.then(clean, clean);
+    return run;
+  };
+  const writeRecoveryEvidenceJsonExactDirect = async (key, value, failureReason) => {
     const serialized = JSON.stringify(value);
-    const existing = await RisuCompat.getStorageItem(key, null);
+    const before = await readRecoveryEvidenceOutcome(key);
+    if (before.state !== 'fulfilled') return {ok:false,durable:false,created:false,key,storageState:before.state,reason:`${failureReason}:${before.reason || 'read_unconfirmed'}`};
+    const existing = before.value;
     const existingSerialized = existing == null ? null : (typeof existing === 'string' ? existing : JSON.stringify(existing));
     if (existingSerialized != null && stableHash64(existingSerialized) === stableHash64(serialized)) {
       return { ok: true, durable: true, created: false, reason: 'recovery_evidence_existing_verified', key };
@@ -19768,19 +19993,40 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
       if (sameChunk) return { ok: true, durable: true, created: false, reason: 'recovery_evidence_existing_verified', key };
     }
     if (existingSerialized != null) return { ok: false, durable: false, created: false, reason: `${failureReason}:key_collision`, key };
-    const saved = await RisuCompat.setStorageItem(key, serialized);
-    if (!saved) return { ok: false, durable: false, created: false, reason: failureReason, key };
-    const readback = await RisuCompat.getStorageItem(key, null);
-    const readSerialized = typeof readback === 'string' ? readback : JSON.stringify(readback || null);
-    const durable = stableHash64(readSerialized) === stableHash64(serialized);
-    return { ok: durable, durable, created: true, reason: durable ? 'recovery_evidence_readback_verified' : `${failureReason}:readback_mismatch`, key };
+    let pending = recoveryEvidencePendingWrites.get(key);
+    if (!pending) {
+      if (recoveryEvidencePendingWrites.size >= 128) return {ok:false,durable:false,created:false,key,storageState:'indeterminate',reason:`${failureReason}:io_capacity_pending`};
+      pending = { serialized, outcome: RisuCompat.setStorageItemOutcome(key, serialized) };
+      recoveryEvidencePendingWrites.set(key, pending);
+      // A late write may outlive this caller. Keep its promise until settlement;
+      // the next explicit retry joins it, rather than issuing a duplicate write.
+      pending.outcome.then(outcome => Promise.resolve(outcome.operation).then(() => {
+        if (recoveryEvidencePendingWrites.get(key) === pending) recoveryEvidencePendingWrites.delete(key);
+      }, () => {
+        if (recoveryEvidencePendingWrites.get(key) === pending) recoveryEvidencePendingWrites.delete(key);
+      }), () => { if (recoveryEvidencePendingWrites.get(key) === pending) recoveryEvidencePendingWrites.delete(key); });
+    }
+    const write = await settleRecoveryEvidenceOutcome(await pending.outcome, 'write');
+    if (write.state !== 'fulfilled') return {ok:false,durable:false,created:false,key,storageState:write.state,reason:`${failureReason}:${write.reason || 'write_unconfirmed'}`};
+    const readback = await readRecoveryEvidenceOutcome(key);
+    if (readback.state !== 'fulfilled') return {ok:false,durable:false,created:false,key,storageState:readback.state,reason:`${failureReason}:${readback.reason || 'readback_unconfirmed'}`};
+    const readSerialized = typeof readback.value === 'string' ? readback.value : JSON.stringify(readback.value ?? null);
+    // A joined attempt may have older createdAt/writer metadata. Verify its exact
+    // bytes first, then re-enter the semantic immutable-key compatibility check.
+    if (pending.serialized !== serialized) {
+      if (readSerialized !== pending.serialized) return {ok:false,durable:false,created:false,key,storageState:'rejected',reason:`${failureReason}:readback_mismatch`};
+      return await writeRecoveryEvidenceJsonExactDirect(key, value, failureReason);
+    }
+    const durable = readSerialized === serialized;
+    return { ok: durable, durable, created: true, storageState: durable ? 'fulfilled' : 'rejected', reason: durable ? 'recovery_evidence_readback_verified' : `${failureReason}:readback_mismatch`, key };
   };
   const rollbackRecoveryEvidenceKeys = async keys => {
     const failures = [];
     for (const key of ensureArray(keys).slice().reverse()) {
       try {
         await RisuCompat.removeStorageItem(key);
-        if (await RisuCompat.getStorageItem(key, null) != null) failures.push(key);
+        const readback = await readRecoveryEvidenceOutcome(key);
+        if (readback.state !== 'fulfilled' || readback.value != null) failures.push(key);
       } catch (_) { failures.push(key); }
     }
     return { ok: failures.length === 0, failures };
@@ -19824,7 +20070,7 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
           };
           const write = await writeRecoveryEvidenceJsonExact(key, chunk, 'recovery_evidence_chunk_write_failed');
           if (write.created === true) createdKeys.push(key);
-          if (write.durable !== true) throw Object.assign(new Error(`${write.reason}:${role}:${ordinal}`), { code: 'HAYAKU_RECOVERY_EVIDENCE_CHUNK_WRITE_FAILED' });
+          if (write.durable !== true) throw Object.assign(new Error(`${write.reason}:${role}:${ordinal}`), { code: 'HAYAKU_RECOVERY_EVIDENCE_CHUNK_WRITE_FAILED', storageState: write.storageState });
           chunks.push({ key, ordinal, chars: body.length, bytes: recoveryEvidenceUtf8Length(body), hash: stableHash64(body) });
         }
         roles[role] = {
@@ -19854,12 +20100,12 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
       manifest = { ...manifest, manifestHash: recoveryEvidenceManifestHash(manifest) };
       const writeManifest = await writeRecoveryEvidenceJsonExact(manifestKey, manifest, 'recovery_evidence_manifest_write_failed');
       if (writeManifest.created === true) createdKeys.push(manifestKey);
-      if (writeManifest.durable !== true) throw Object.assign(new Error(writeManifest.reason), { code: 'HAYAKU_RECOVERY_EVIDENCE_MANIFEST_WRITE_FAILED' });
+      if (writeManifest.durable !== true) throw Object.assign(new Error(writeManifest.reason), { code: 'HAYAKU_RECOVERY_EVIDENCE_MANIFEST_WRITE_FAILED', storageState: writeManifest.storageState });
       // Reuse the stored reference, including its legacy hash and writer metadata.
       // Physical manifest/chunk readback below must still succeed before adoption.
       if (writeManifest.manifest) manifest = writeManifest.manifest;
       const verified = await readRecoveryEvidenceSidecar({ manifestKey, manifestHash: manifest.manifestHash }, { scopeKey, recordId });
-      if (verified.ok !== true) throw Object.assign(new Error(verified.reason || 'recovery_evidence_sidecar_readback_failed'), { code: 'HAYAKU_RECOVERY_EVIDENCE_READBACK_FAILED' });
+      if (verified.ok !== true) throw Object.assign(new Error(verified.reason || 'recovery_evidence_sidecar_readback_failed'), { code: 'HAYAKU_RECOVERY_EVIDENCE_READBACK_FAILED', storageState: verified.storageState });
       return {
         ok: true,
         durable: true,
@@ -19874,10 +20120,15 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
         }
       };
     } catch (error) {
-      const rollback = await rollbackRecoveryEvidenceKeys(createdKeys);
+      // Do not delete dependencies while an evidence/manifest write may still
+      // settle. No packet/model adoption is permitted until explicit revalidation.
+      const indeterminate = error?.storageState === 'indeterminate';
+      const rollback = indeterminate ? {ok:true,failures:[],deferred:true} : await rollbackRecoveryEvidenceKeys(createdKeys);
       return {
         ok: false,
         durable: false,
+        storageState: error?.storageState || 'rejected',
+        preservedForRetry: indeterminate,
         reason: rollback.ok ? compact(error?.message || error, 320) : 'HAYAKU_RECOVERY_EVIDENCE_ROLLBACK_INCOMPLETE',
         code: rollback.ok ? compact(error?.code || 'HAYAKU_RECOVERY_EVIDENCE_WRITE_FAILED', 96) : 'HAYAKU_RECOVERY_EVIDENCE_ROLLBACK_INCOMPLETE',
         rollback
@@ -19887,7 +20138,9 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
   async function readRecoveryEvidenceSidecar(refInput, expected = {}) {
     const ref = normalizeRecoveryEvidenceManifestRef(refInput);
     if (!ref) return { ok: false, durable: false, reason: 'recovery_evidence_manifest_ref_invalid' };
-    const raw = await RisuCompat.getStorageItem(ref.manifestKey, null);
+    const read = await readRecoveryEvidenceOutcome(ref.manifestKey);
+    if (read.state !== 'fulfilled') return {ok:false,durable:false,storageState:read.state,reason:`recovery_evidence_manifest_${read.reason || 'read_unconfirmed'}`};
+    const raw = read.value;
     const manifest = typeof raw === 'string' ? safeJsonParse(raw, null) : raw;
     if (!objectish(manifest) || manifest.schema !== RECOVERY_EVIDENCE_MANIFEST_SCHEMA
       || recoveryEvidenceManifestHash(manifest) !== compact(manifest.manifestHash || '', 96)
@@ -19907,7 +20160,9 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
       const bodies = [];
       for (let ordinal = 0; ordinal < roleManifest.chunks.length; ordinal += 1) {
         const descriptor = roleManifest.chunks[ordinal] || {};
-        const chunkRaw = await RisuCompat.getStorageItem(descriptor.key, null);
+        const chunkRead = await readRecoveryEvidenceOutcome(descriptor.key);
+        if (chunkRead.state !== 'fulfilled') return {ok:false,durable:false,storageState:chunkRead.state,reason:`recovery_evidence_chunk_${chunkRead.reason || 'read_unconfirmed'}:${role}:${ordinal}`};
+        const chunkRaw = chunkRead.value;
         const chunk = typeof chunkRaw === 'string' ? safeJsonParse(chunkRaw, null) : chunkRaw;
         const body = text(chunk?.body ?? '');
         if (!objectish(chunk) || chunk.schema !== RECOVERY_EVIDENCE_CHUNK_SCHEMA || chunk.role !== role
@@ -20155,6 +20410,10 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
     ]));
     const nowAt = now();
     let changed = false;
+    // Records debts that the OLD loose fallback would have discharged and that
+    // are now deliberately withheld. Surfacing this makes the previously silent
+    // "materialized then immediately gone" transition diagnosable.
+    const recoveryDebtDischargeAudit = [];
     const records = ensureArray(vault.records).map(raw => {
       const record = normalizeRecoveryVaultRecord(raw, scopeKey);
       if (!record || record.inheritedSessionHistory === true || record.permanentSessionHistory === true) return record;
@@ -20166,8 +20425,29 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
         && (!record.assistantHash || !pair?.assistantVisibleHash || record.assistantHash === pair.assistantVisibleHash)
         && (!record.assistantMessageIdHash || !pair?.assistantMessageIdHash || record.assistantMessageIdHash === pair.assistantMessageIdHash)
       )) || null;
-      const usablePacket = exactPair ? (options.coverage ? options.coverage.coveredTurns.includes(Number(exactPair.pairIndex)) : recoveryVaultPairHasUsablePacket(exactPair)) : false;
-      if (ownerStatus === 'active' && usablePacket) { changed = true; return null; }
+      // Discharging a debt means "this turn is genuinely covered again", and only
+      // exact coverage can establish that. Loose packet-hash presence is NOT
+      // discharge authority: a turn can hold an invalid, stale or unbound packet
+      // hash while exact coverage still reports it missing. A reconcile that was
+      // given no coverage therefore leaves the record alone instead of deleting
+      // a debt that a coverage-bearing scan just materialized.
+      const coverageProvided = !!(options.coverage && Array.isArray(options.coverage.coveredTurns));
+      const exactlyCovered = coverageProvided && exactPair
+        ? options.coverage.coveredTurns.includes(Number(exactPair.pairIndex))
+        : false;
+      // Retained for diagnostics only (see recoveryDebtDischargeAudit below):
+      // this is what the old fallback would have concluded.
+      const loosePacketPresence = exactPair ? recoveryVaultPairHasUsablePacket(exactPair) : false;
+      if (ownerStatus === 'active' && exactlyCovered) { changed = true; return null; }
+      if (ownerStatus === 'active' && !coverageProvided && loosePacketPresence) {
+        recoveryDebtDischargeAudit.push({
+          scopeKey,
+          pairIndex: Number(record.pairIndex || 0),
+          recordId: compact(record.recordId || '', 196),
+          reason: compact(options.reason || '', 64),
+          withheld: 'coverage_absent_loose_packet_presence'
+        });
+      }
       let repairLease = normalizeRecoveryDebtLease(record.repairLease);
       if (repairLease && repairLease.expiresAt <= nowAt) {
         repairLease = null;
@@ -20215,6 +20495,7 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
       reason: write.reason || (changed ? 'worldline_reconciled' : 'unchanged'),
       vault: finalVault,
       activeRecords,
+      dischargeAudit: recoveryDebtDischargeAudit,
       leasedPairIndices: activeRecords.filter(recoveryDebtLeaseIsActive).map(record => Number(record.pairIndex || 0)).filter(Boolean),
       suspendedRecords: ensureArray(finalVault.records).filter(record => record.status === 'suspended').length,
       terminalRecords: ensureArray(finalVault.records).filter(record => RECOVERY_DEBT_TERMINAL_STATUSES.has(record.status)).length
@@ -20554,12 +20835,33 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
       return { ok: false, acquired: false, reason: 'recovery_debt_scope_mismatch', requestedScopeKey, activeScopeKey: scope.key };
     }
     const snapshot = authoritativeChatSnapshot(scope.chatMessages, scope);
-    const ledger = await loadStorageLedger(scope, { hydrateArchive: false });
+    let ledger = await loadStorageLedger(scope, { hydrateArchive: false, authoritativeSnapshot: snapshot });
     const worldline = reconcileTurnWorldline(ledger.worldline, snapshot, scope);
-    const lifecycle = await reconcileRecoveryVaultWorldlineLifecycleDirect(scope, snapshot, worldline, { force: true, reason: 'hayaku_native_lease_reconcile' });
+    // Same authority as inspectRecoveryDebtsForNativeRepair(): bind the ledger to
+    // this snapshot and reconcile with EXACT coverage, so the lease step cannot
+    // discharge a debt that the inspect step just judged missing.
+    ledger = bindStorageLedgerToSnapshot({ ...ledger, worldline }, snapshot, worldline).ledger;
+    const exactCoverage = exactHayakuTurnCoverage(snapshot, ledger, scope.key);
+    const lifecycle = await reconcileRecoveryVaultWorldlineLifecycleDirect(scope, snapshot, worldline, { force: true, reason: 'hayaku_native_lease_reconcile', coverage: exactCoverage });
     const record = ensureArray(lifecycle.vault.records).find(item => item.recordId === debtId) || null;
     if (!record || record.worldlineStatus !== 'active' || !RECOVERY_DEBT_ACTIVE_STATUSES.has(record.status)) {
-      return { ok: false, acquired: false, reason: 'recovery_debt_not_active' };
+      // Say WHY: a missing record, a non-active worldline owner and a
+      // non-repairable status are three different situations, and the previous
+      // single reason string made the "debt vanished" case indistinguishable.
+      return {
+        ok: false,
+        acquired: false,
+        reason: 'recovery_debt_not_active',
+        diagnosis: {
+          recordPresent: !!record,
+          worldlineStatus: record ? compact(record.worldlineStatus || '', 32) : '',
+          status: record ? compact(record.status || '', 32) : '',
+          coverageApplied: true,
+          exactMissingTurns: ensureArray(exactCoverage?.missingTurns).length,
+          exactCoveredTurns: ensureArray(exactCoverage?.coveredTurns).length,
+          withheldDischarges: ensureArray(lifecycle?.dischargeAudit).length
+        }
+      };
     }
     if (inBandRecoveryPendingForDebt(record)) return { ok: false, acquired: false, reason: 'hayaku_inband_recovery_pending' };
     if (payload.explicitRetry !== true && Number(record.nextRepairAt || 0) > now()) return { ok: false, acquired: false, reason: 'recovery_debt_backoff_active', nextRepairAt: record.nextRepairAt };
@@ -31546,7 +31848,7 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
     buildPacketRegularStaticContract(settings, {compact:options.critical !== true, critical:options.critical === true});
 
   const packetCacheStaticContract = (settings = Memory.settings || DEFAULT_SETTINGS, profile = CACHE_STATIC_PROFILE_FULL) => {
-    const normalizedProfile = [CACHE_STATIC_PROFILE_FULL, CACHE_STATIC_PROFILE_COMPACT, CACHE_STATIC_PROFILE_CRITICAL].includes(profile)
+    const normalizedProfile = CACHE_STATIC_PROFILES.includes(profile)
       ? profile
       : CACHE_STATIC_PROFILE_FULL;
     const stableSettings = packetCacheStableSettings(settings);
@@ -38820,11 +39122,14 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
   const saveFailedAnalysisArtifactDirect = async input => {
     const scopeKey = compact(input?.scopeKey || input?.context?.scopeKey || '', 196);
     const createdAt = Math.max(1, Number(input?.createdAt || now()) || now());
-    const loadedCases = await readFailedAnalysisIndex(scopeKey);
+    let diagnosticReadFailure = null;
+    let loadedCases;
+    try { loadedCases = await readFailedAnalysisIndex(scopeKey); }
+    catch (error) { diagnosticReadFailure = error; loadedCases = { index: emptyFailedAnalysisIndex(scopeKey), available: false }; }
     const parentId=compact(input?.parentFailureId||'',160);
     let parent=ensureArray(loadedCases.index.entries).find(e=>e.failureId===parentId);
-    if(parentId && !parent?.incidentKey) {
-      const raw=await readFailedAnalysisStored(failedAnalysisManifestKey(scopeKey,parentId));
+    if(!diagnosticReadFailure && parentId && !parent?.incidentKey) {
+      let raw; try { raw=await readFailedAnalysisStored(failedAnalysisManifestKey(scopeKey,parentId)); } catch(error) { diagnosticReadFailure=error; }
       const manifest=typeof raw==='string'?safeJsonParse(raw,null):raw;
       if(manifest?.scopeKey===scopeKey)parent=manifest;
     }
@@ -38922,6 +39227,7 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
     Memory.failedAnalysisVolatile.set(`${scopeKey}::${failureId}`, { manifest, payload });
     Memory.failedAnalysisStats.volatile = Memory.failedAnalysisVolatile.size;
     try {
+      if (diagnosticReadFailure) throw diagnosticReadFailure;
       const initialManifest = await writeFailedAnalysisJsonExact(manifestKey, manifest, 'failed_analysis_manifest_write_failed');
       if (initialManifest.durable !== true) throw new Error(initialManifest.reason);
       const initialIndex = await writeFailedAnalysisIndexEntry(scopeKey, manifest);
@@ -38964,8 +39270,10 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
       Memory.failedAnalysisStats.failures += 1;
       Memory.failedAnalysisStats.lastError = reason;
       Memory.failedAnalysisStats.volatile = Memory.failedAnalysisVolatile.size;
-      await writeFailedAnalysisJsonExact(manifestKey, manifest, 'failed_analysis_manifest_incomplete_write_failed').catch(() => null);
-      await writeFailedAnalysisIndexEntry(scopeKey, manifest).catch(() => null);
+      if (!diagnosticReadFailure) {
+        await writeFailedAnalysisJsonExact(manifestKey, manifest, 'failed_analysis_manifest_incomplete_write_failed').catch(() => null);
+        await writeFailedAnalysisIndexEntry(scopeKey, manifest).catch(() => null);
+      }
       return { ok: false, durable: false, volatile: true, reason, failureId, manifestKey, manifest, payloadHash };
     }
   };
@@ -47731,7 +48039,11 @@ async function showMemorySuiteSourceReview(config) {
   const overlay=doc.createElement('div');overlay.id='memorySuiteSourceReview';overlay.dataset.owner=owner;
   const theme=['libra','hayaku','flashback'].includes(owner)?owner:'libra';overlay.dataset.theme=theme;
   const ownerLabel={libra:'LIBRA',hayaku:'HAYAKU',flashback:'FLASHBACK MEMORY'}[theme];
-  overlay.dataset.minimized='true';
+  // Manual requests open directly; only automatic detection uses a dock.
+  const reviewOrigin=(config.origin==='manual'||config.manual===true)?'manual':'automatic';
+  const manualOrigin=reviewOrigin==='manual';
+  overlay.dataset.origin=reviewOrigin;
+  overlay.dataset.minimized=manualOrigin?'false':'true';
   const style=doc.createElement('style');style.textContent=`
 #memorySuiteSourceReview{--sr-paper:#f8efe1;--sr-ink:#35281d;--sr-muted:#645344;--sr-line:#b9a17e;--sr-soft:#efe0ca;--sr-button:#87561f;--sr-on:#fff;--sr-old:#f5dadd;--sr-old-ink:#6e202c;--sr-new:#d6eddd;--sr-new-ink:#194b2d;position:fixed;inset:0;z-index:${{libra:41,hayaku:42,flashback:43}[theme]};display:flex;align-items:center;justify-content:center;padding:16px;background:#10151b99;color:var(--sr-ink);font:15px/1.65 system-ui,-apple-system,'Malgun Gothic',sans-serif}
 #memorySuiteSourceReview[data-theme=hayaku]{--sr-paper:#fff;--sr-ink:#192139;--sr-muted:#506080;--sr-line:#bbc7de;--sr-soft:#f1f4fc;--sr-button:#4a4ed3;color-scheme:light}
@@ -47745,7 +48057,7 @@ async function showMemorySuiteSourceReview(config) {
 #memorySuiteSourceReview .sr-header,#memorySuiteSourceReview .sr-footer{padding:16px 20px;background:var(--sr-soft);flex:none}#memorySuiteSourceReview .sr-header{display:flex;align-items:flex-start;gap:14px;justify-content:space-between}#memorySuiteSourceReview h2{color:var(--sr-ink);font-size:20px;margin:0;line-height:1.45;word-break:keep-all;overflow-wrap:anywhere}#memorySuiteSourceReview p{margin:7px 0;color:var(--sr-muted);word-break:keep-all;overflow-wrap:anywhere}#memorySuiteSourceReview .sr-body{flex:1;overflow:auto;min-height:0;padding:16px 20px;overscroll-behavior:contain}#memorySuiteSourceReview .sr-controls,#memorySuiteSourceReview .sr-footer{display:flex;gap:9px;align-items:center;flex-wrap:wrap}#memorySuiteSourceReview .sr-footer{justify-content:flex-end;border-top:1px solid var(--sr-line)}
 #memorySuiteSourceReview button{font:inherit;font-size:14px;font-weight:650;min-height:42px;padding:8px 13px;border-radius:9px;border:1px solid var(--sr-line);color:var(--sr-ink);background:var(--sr-paper);cursor:pointer;white-space:normal;word-break:keep-all;overflow-wrap:anywhere}#memorySuiteSourceReview button.sr-primary{background:var(--sr-button);color:var(--sr-on);border-color:var(--sr-button)}#memorySuiteSourceReview button:disabled{opacity:.55;cursor:not-allowed}#memorySuiteSourceReview :focus-visible{outline:3px solid var(--sr-button);outline-offset:2px}
 #memorySuiteSourceReview .sr-close{flex:none;white-space:nowrap}#memorySuiteSourceReview article{margin:14px 0;padding:14px;border:1px solid var(--sr-line);border-radius:10px}#memorySuiteSourceReview label{display:flex;align-items:flex-start;gap:9px;cursor:pointer;color:var(--sr-ink);overflow-wrap:anywhere}#memorySuiteSourceReview input[type=checkbox]{flex:none;width:19px;height:19px;margin:4px 0;accent-color:var(--sr-button)}#memorySuiteSourceReview .sr-sides{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px}#memorySuiteSourceReview .sr-sides strong{display:block;margin:9px 0 4px}#memorySuiteSourceReview pre{white-space:pre-wrap;overflow-wrap:anywhere;word-break:normal;max-height:44vh;overflow:auto;background:var(--sr-soft);border:1px solid var(--sr-line);border-radius:8px;padding:12px;font:14px/1.75 system-ui,sans-serif;margin:0 0 10px;color:var(--sr-ink)}#memorySuiteSourceReview .sr-removed{background:var(--sr-old);color:var(--sr-old-ink)}#memorySuiteSourceReview .sr-added{background:var(--sr-new);color:var(--sr-new-ink)}#memorySuiteSourceReview summary{cursor:pointer;padding:9px 0;color:var(--sr-ink)}#memorySuiteSourceReview .sr-warning{padding:9px 12px;border-left:4px solid var(--sr-old-ink);background:var(--sr-old);color:var(--sr-old-ink)}#memorySuiteSourceReview .sr-count{color:var(--sr-muted);font-variant-numeric:tabular-nums}
-@media(max-width:650px){#memorySuiteSourceReview{padding:5px;font-size:14px}#memorySuiteSourceReview .sr-panel{max-height:98vh;max-height:98dvh}#memorySuiteSourceReview .sr-header,#memorySuiteSourceReview .sr-footer{padding:11px}#memorySuiteSourceReview .sr-body{padding:10px}#memorySuiteSourceReview .sr-sides{grid-template-columns:minmax(0,1fr)}#memorySuiteSourceReview article{padding:10px}#memorySuiteSourceReview h2{font-size:17px}#memorySuiteSourceReview pre{max-height:32vh}#memorySuiteSourceReview .sr-footer button{flex:1}}
+@media(max-width:650px){#memorySuiteSourceReview{padding:5px;font-size:14px}#memorySuiteSourceReview .sr-panel{max-height:98vh;max-height:98dvh}#memorySuiteSourceReview .sr-header,#memorySuiteSourceReview .sr-footer{padding:11px}#memorySuiteSourceReview .sr-body{padding:10px}#memorySuiteSourceReview .sr-sides{grid-template-columns:minmax(0,1fr)}#memorySuiteSourceReview article{padding:10px}#memorySuiteSourceReview h2{font-size:17px}#memorySuiteSourceReview pre{max-height:32vh}#memorySuiteSourceReview .sr-footer{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px}#memorySuiteSourceReview .sr-footer>label{grid-column:1/-1;display:flex;flex-wrap:wrap;align-items:center;gap:8px;justify-content:space-between}#memorySuiteSourceReview .sr-footer>p{grid-column:1/-1;margin:0}#memorySuiteSourceReview .sr-footer>p:empty{display:none}#memorySuiteSourceReview .sr-footer select{max-width:100%;min-width:0}#memorySuiteSourceReview .sr-footer button{min-width:0;width:100%;min-height:48px;white-space:normal;word-break:keep-all;overflow-wrap:anywhere;line-height:1.4;padding:10px 8px}}
 `;
   const el=(tag,cls,body)=>{const n=doc.createElement(tag);if(cls)n.className=cls;if(body!==undefined)n.textContent=body;return n;};
   const button=(text,cls,attr)=>{const n=el('button',cls,text);n.type='button';if(attr)n.setAttribute(attr,'');return n;};
@@ -47815,8 +48127,10 @@ async function showMemorySuiteSourceReview(config) {
       if(!wasVisible&&await config.show?.()===false){expanded=false;overlay.dataset.minimized='true';await dock?.show();return;}
       if(done){if(!wasVisible)await config.hide?.();return;}cancel.focus();
     }catch(_){expanded=false;overlay.dataset.minimized='true';await dock?.show();}finally{transition=false;}};
+    const ensureDock=async()=>{if(dock||done)return dock;try{dock=await makeDock();}catch(_){dock=null;}return dock;};
     const collapse=async()=>{if(done||!expanded||transition)return;transition=true;try{
       overlay.dataset.minimized='true';expanded=false;
+      await ensureDock();
       if(!wasVisible)await config.hide?.();
       await dock?.show();
     }finally{transition=false;}};
@@ -47824,7 +48138,9 @@ async function showMemorySuiteSourceReview(config) {
       const nodes=[...overlay.querySelectorAll('button:not(:disabled),input:not(:disabled),select:not(:disabled),summary')].filter(n=>n.getClientRects().length);
       const first=nodes[0],last=nodes.at(-1);if(e.shiftKey&&(doc.activeElement===first||!overlay.contains(doc.activeElement))){e.preventDefault();last?.focus();}else if(!e.shiftKey&&(doc.activeElement===last||!overlay.contains(doc.activeElement))){e.preventDefault();first?.focus();}
     }};
-    config.onOpen?.(()=>finish('cancel'));doc.addEventListener('keydown',keyed,true);
+    // Two DISTINCT capabilities: cancelling the review, and merely minimizing
+    // it to a dock. A host that only closes its window must use minimize.
+    config.onOpen?.(()=>finish('cancel'),{minimize:async()=>{await ensureDock();await collapse();return true;},origin:reviewOrigin});doc.addEventListener('keydown',keyed,true);
     minimize.onclick=()=>void collapse();cancel.onclick=()=>finish('cancel');close.onclick=()=>finish('cancel');
     approve.onclick=()=>{if(expanded&&selected().length)finish('approve');};overlay.onclick=e=>{if(expanded&&e.target===overlay)void collapse();};
     // Host-root SafeElement notification: no fullscreen iframe until clicked.
@@ -47859,7 +48175,13 @@ async function showMemorySuiteSourceReview(config) {
     };
     const tick=async()=>{if(done)return;try{if(!overlay.isConnected||await config.isCurrent?.()===false){finish('cancel');return;}}catch(_){finish('cancel');return;}if(!done){timer=setTimeout(tick,2000);timer?.unref?.();}};
     timer=setTimeout(tick,2000);timer?.unref?.();
-    makeDock().then(value=>{dock=value;if(done)return dock.dispose();}).catch(()=>finish('defer'));
+    if(manualOrigin){
+      // No dock is created for a manual review, so the plugin's fullscreen
+      // overlay cannot end up covering an unclickable host-document card.
+      expand().catch(()=>finish('defer'));
+    } else {
+      makeDock().then(value=>{dock=value;if(done)return dock.dispose();}).catch(()=>finish('defer'));
+    }
   });
 }
 /* LIBRARIAN SYSTEM SOURCE REVIEW v1.0.0 END */
@@ -48381,9 +48703,9 @@ function createMemorySuiteSourceEditConsent(config) {
     reviewTimer?.unref?.();
   }
   const deferPrompt = () => ({ decision: 'defer' });
-  async function ask(tasks, reviewSet = null) {
+  async function ask(tasks, reviewSet = null, origin = 'automatic') {
     if (typeof config.prompt === 'function') {
-      const answer = await config.prompt({ question: QUESTION, owner: config.owner, scopeKey: currentScope, tasks: clone(tasks), review: reviewSet, tracking:boundary?{mode:mode(),setMode}:null });
+      const answer = await config.prompt({ origin, manual: origin === 'manual', question: QUESTION, owner: config.owner, scopeKey: currentScope, tasks: clone(tasks), review: reviewSet, tracking:boundary?{mode:mode(),setMode}:null });
       if (answer) return answer;
     }
     const api = config.api?.();
@@ -48463,7 +48785,7 @@ function createMemorySuiteSourceEditConsent(config) {
         if(reviewSet.scopeKey!==key || !Array.isArray(reviewSet.rows) || reviewSet.rows.length!==candidates.length
           || candidates.some(t=>reviewSet.rows.filter(r=>r.key===t.key).length!==1))throw new Error('SOURCE_REVIEW_SET_INVALID');
       }
-      const answer=await ask(candidates,reviewSet);
+      const answer=await ask(candidates,reviewSet,manual===true?'manual':'automatic');
       if(boundary&&reviewGeneration!==generation)return {ok:false,reason:'tracking_mode_changed'};
       if(requestChanged())return {ok:false,reason:'source_edit_request_changed'};
       if(disposed || answer?.decision==='defer') return {ok:false,reason:'confirmation_deferred'};
@@ -48587,7 +48909,7 @@ function createMemorySuiteSourceEditConsent(config) {
   };
   const promptHayakuSourceEditReview = async request => {
     if(typeof document==='undefined'||!document.body)return null;
-    return await showMemorySuiteSourceReview({owner:'hayaku',document,rootDocument:()=>RisuCompat.api()?.getRootDocument?.(),review:request.review,question:request.question,tracking:request.tracking,
+    return await showMemorySuiteSourceReview({owner:'hayaku',origin:request.origin,manual:request.manual===true,document,rootDocument:()=>RisuCompat.api()?.getRootDocument?.(),review:request.review,question:request.question,tracking:request.tracking,
       description:'변경 전·후 전체 본문을 확인하고 처리할 턴을 선택하세요. 새 패킷 검증·저장까지 이전 패킷을 유지합니다.',
       isContainerVisible:()=>Memory.ledgerViewer?.visible===true,
       show:()=>RisuCompat.api()?.showContainer?.('fullscreen'),
